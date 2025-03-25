@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent提示词可视化</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background-color: #f8f9fa;
+            padding-top: 20px;
+        }
+        
+        .prompt-card {
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            background-color: white;
+            position: relative;
+        }
+        
+        .prompt-icon {
+            position: absolute;
+            left: -15px;
+            top: -15px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        .prompt-icon.code-analysis {
+            background-color: #0d6efd;
+        }
+        
+        .prompt-icon.service-packaging {
+            background-color: #6f42c1;
+        }
+        
+        .prompt-icon.remote-deploy {
+            background-color: #198754;
+        }
+        
+        .section-title {
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .section-title.code-analysis {
+            color: #0d6efd;
+        }
+        
+        .section-title.service-packaging {
+            color: #6f42c1;
+        }
+        
+        .section-title.remote-deploy {
+            color: #198754;
+        }
+        
+        .section-title i {
+            margin-right: 8px;
+        }
+        
+        .prompt-content {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            color: #343a40;
+            border-left: 4px solid #dee2e6;
+        }
+        
+        .prompt-content.code-analysis {
+            border-left-color: #0d6efd;
+            background-color: #f0f7ff;
+        }
+        
+        .prompt-content.service-packaging {
+            border-left-color: #6f42c1;
+            background-color: #f3f0ff;
+        }
+        
+        .prompt-content.remote-deploy {
+            border-left-color: #198754;
+            background-color: #f0fff4;
+        }
+        
+        .header {
+            margin-bottom: 30px;
+        }
+        
+        .navigation {
+            position: sticky;
+            top: 20px;
+            background-color: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-item {
+            cursor: pointer;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-bottom: 5px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+        }
+        
+        .nav-item:hover {
+            background-color: #f0f7ff;
+        }
+        
+        .nav-item.code-analysis {
+            border-left: 3px solid #0d6efd;
+        }
+        
+        .nav-item.service-packaging {
+            border-left: 3px solid #6f42c1;
+        }
+        
+        .nav-item.remote-deploy {
+            border-left: 3px solid #198754;
+        }
+        
+        .nav-item.active {
+            background-color: #f0f7ff;
+            font-weight: bold;
+        }
+        
+        .nav-item i {
+            margin-right: 10px;
+        }
+
+        code {
+            background-color: rgba(0, 0, 0, 0.05);
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .code-block {
+            background-color: #2b2b2b;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+
+        .highlight-path {
+            color: #ff79c6;
+            font-weight: bold;
+        }
+
+        .highlight-function {
+            color: #50fa7b;
+            font-weight: bold;
+        }
+
+        .highlight-file {
+            color: #8be9fd;
+            font-weight: normal;
+        }
+
+        .prompt-description {
+            margin-bottom: 15px;
+            color: #6c757d;
+        }
+
+        /* 顶部切换标签 */
+        .prompt-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            overflow-x: auto;
+            padding-bottom: 5px;
+        }
+
+        .prompt-tab {
+            padding: 10px 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+        }
+
+        .prompt-tab i {
+            margin-right: 8px;
+        }
+
+        .prompt-tab.active.code-analysis {
+            background-color: #0d6efd;
+            color: white;
+        }
+        
+        .prompt-tab.active.service-packaging {
+            background-color: #6f42c1;
+            color: white;
+        }
+        
+        .prompt-tab.active.remote-deploy {
+            background-color: #198754;
+            color: white;
+        }
+
+        /* 折叠/展开功能 */
+        .toggle-button {
+            background: none;
+            border: none;
+            color: #0d6efd;
+            cursor: pointer;
+            font-size: 20px;
+            position: absolute;
+            right: 20px;
+            top: 20px;
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            .navigation {
+                position: relative;
+                margin-bottom: 20px;
+            }
+            
+            .prompt-icon {
+                left: 50%;
+                transform: translateX(-50%);
+                top: -15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header text-center">
+            <h1 class="display-4">Agent提示词可视化</h1>
+            <p class="lead">展示Micro-Agent框架中各个智能体的提示词模板</p>
+        </div>
+
+        <!-- 顶部标签导航 -->
+        <div class="prompt-tabs">
+            <div class="prompt-tab code-analysis active" data-target="code-analysis">
+                <i class="bi bi-code-square"></i> 代码分析
+            </div>
+            <div class="prompt-tab service-packaging" data-target="service-packaging">
+                <i class="bi bi-box-seam"></i> 服务封装
+            </div>
+            <div class="prompt-tab remote-deploy" data-target="remote-deploy">
+                <i class="bi bi-cloud-upload"></i> 远程部署
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-3 mb-4">
+                <div class="navigation">
+                    <h5 class="mb-3">提示词导航</h5>
+                    <div id="nav-items">
+                        <div class="nav-item code-analysis active" data-target="code-analysis">
+                            <i class="bi bi-code-square"></i> 代码分析提示词
+                        </div>
+                        <div class="nav-item service-packaging" data-target="service-packaging">
+                            <i class="bi bi-box-seam"></i> 服务封装提示词
+                        </div>
+                        <div class="nav-item remote-deploy" data-target="remote-deploy">
+                            <i class="bi bi-cloud-upload"></i> 远程部署提示词
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-9">
+                <!-- 代码分析提示词 -->
+                <div id="code-analysis" class="prompt-card p-4">
+                    <div class="prompt-icon code-analysis"><i class="bi bi-code-square"></i></div>
+                    
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h3 class="section-title code-analysis">
+                            <i class="bi bi-code-square"></i> 代码分析提示词
+                        </h3>
+                        <button class="toggle-button" title="折叠/展开">
+                            <i class="bi bi-chevron-up"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="prompt-description">
+                        此提示词用于指导智能体分析代码结构和依赖关系，生成依赖可视化所需的JSON数据。
+                    </div>
+                    
+                    <div class="prompt-content code-analysis">
+`{WORKSPACE}`路径下有一个`{INPUT_DIR}`文件夹，内有`{MAIN_CODE}`和`requirements.txt`两个文件。`{MAIN_CODE}`当中包含待封装为REST API的功能函数，`requirements.txt`则是对应的依赖环境。请你分析`{MAIN_CODE}`当中的代码逻辑，解析其中功能函数的相关信息和依赖关系，并在`{TEMP_DIR}`文件夹下创建一个`{FUNCTION_INFO_PATH}`文件。该文件的格式类似以下示例：
+
+```json
+{
+    nodes: [
+        { id: '9001', x: 0, y: 150, label: 'datasets', size: 50, input: 'rawData', output: 'processedData', environment: '', process: '', apiType: 0, methodType: 0, inputType: 2, outputType: 2 },
+        { id: '9002', x: 150, y: 150, label: 'preprocess', size: 50, input: 'processedData', output: 'cleanedData', environment: '', process: '', apiType: 0, methodType: 1, inputType: 2, outputType: 2 },
+        { id: '9003', x: 300, y: 150, label: 'train', size: 50, input: 'cleanedData', output: 'trainedModel', environment: '', process: '', apiType: 2, methodType: 1, inputType: 2, outputType: 2 },
+        { id: '9004', x: 450, y: 50, label: 'predict', size: 50, input: 'trainedModel', output: 'predictionResult', environment: '', process: '', apiType: 0, methodType: 0, inputType: 2, outputType: 1 },
+        { id: '9005', x: 450, y: 150, label: 'evaluate', size: 50, input: 'trainedModel', output: 'evaluationMetrics', environment: '', process: '', apiType: 0, methodType: 1, inputType: 2, outputType: 1 },
+        { id: '9006', x: 450, y: 250, label: 'visualize', size: 50, input: 'trainedModel', output: 'visualization', environment: '', process: '', apiType: 0, methodType: 1, inputType: 2, outputType: 3 },
+        { id: '9007', x: 300, y: 250, label: 'models', size: 50, input: 'trainedModel', output: 'modelMetadata', environment: '', process: '', apiType: 0, methodType: 1, inputType: 2, outputType: 1 }
+    ],
+    edges: [
+        { sourceID: '9001', targetID: '9002' }, // datasets → preprocess
+        { sourceID: '9002', targetID: '9003' }, // preprocess → train
+        { sourceID: '9003', targetID: '9004' }, // train → predict
+        { sourceID: '9003', targetID: '9005' }, // train → evaluate
+        { sourceID: '9003', targetID: '9006' }, // train → visualize
+        { sourceID: '9003', targetID: '9007' }, // train → models
+        { sourceID: '9007', targetID: '9004' }, // models → predict
+        { sourceID: '9007', targetID: '9005' }, // models → evaluate
+        { sourceID: '9007', targetID: '9006' } // models → visualize
+    ]
+}
+```</div>
+                </div>
+
+                <!-- 服务封装提示词 -->
+                <div id="service-packaging" class="prompt-card p-4" style="display: none;">
+                    <div class="prompt-icon service-packaging"><i class="bi bi-box-seam"></i></div>
+                    
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h3 class="section-title service-packaging">
+                            <i class="bi bi-box-seam"></i> 服务封装提示词
+                        </h3>
+                        <button class="toggle-button" title="折叠/展开">
+                            <i class="bi bi-chevron-up"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="prompt-description">
+                        此提示词用于指导智能体将分析后的代码封装为微服务，生成必要的Docker配置文件和依赖文件。
+                    </div>
+                    
+                    <div class="prompt-content service-packaging">
+`{WORKSPACE}`路径下有一个`{INPUT_DIR}`文件夹，内有`{MAIN_CODE}`和`requirements.txt`两个文件。`{MAIN_CODE}`当中包含待封装为REST API的功能函数，`requirements.txt`则是对应的依赖环境。
+
+请你在`{WORKSPACE}`下创建一个名为`{OUTPUT_DIR}`的文件夹，将两个原始输入文件复制到该文件夹下，并在其中创建`app.py`用Flask框架将`{MAIN_CODE}`中的`{SELECTED_FUNCTIONS}`封装为api，且使用flask-restx自动生成swagger文档。不要忘记配置跨域访问。在完成创建app.py之后，在`{OUTPUT_DIR}`下的`requirements.txt`中添加flask相关的依赖（如flask==3.1.0，flask-restx==1.3.0，flask_cors），然后再在`{OUTPUT_DIR}`内创建`Dockerfile`和`docker-compose.yml`两个文件，以方便我将封装好的服务基于docker进行部署。
+
+你刚才已经分析过`{MAIN_CODE}`当中的代码逻辑并解析了其中功能函数的相关信息和依赖关系。如果你忘记了，可以阅读`{TEMP_DIR}`下的`{FUNCTION_INFO_PATH}`文件。
+
+在生成Dockerfile时，需要对其中的python依赖安装进行换源。你可以使用清华源即`https://pypi.tuna.tsinghua.edu.cn/simple`。此外，我希望python的版本是3.10。</div>
+                </div>
+
+                <!-- 远程部署提示词 -->
+                <div id="remote-deploy" class="prompt-card p-4" style="display: none;">
+                    <div class="prompt-icon remote-deploy"><i class="bi bi-cloud-upload"></i></div>
+                    
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h3 class="section-title remote-deploy">
+                            <i class="bi bi-cloud-upload"></i> 远程部署提示词
+                        </h3>
+                        <button class="toggle-button" title="折叠/展开">
+                            <i class="bi bi-chevron-up"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="prompt-description">
+                        此提示词用于指导智能体将封装好的微服务部署到远程服务器，管理端口映射和容器启动。
+                    </div>
+                    
+                    <div class="prompt-content remote-deploy">
+将`{OUTPUT_DIR}`文件夹传输至远程服务器./路径下（保持同名），并使用Docker-compose进行部署。在传输之前，你需要修改`{OUTPUT_DIR}`文件夹下的`docker-compose.yml`文件中映射的宿主机端口。该端口应该在25100-25200之间，你需要先查看远程服务器已有的容器占用了哪些端口，然后选择一个范围内的空闲端口使用。</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 处理导航项点击
+            const navItems = document.querySelectorAll('.nav-item');
+            const promptTabs = document.querySelectorAll('.prompt-tab');
+            const promptCards = document.querySelectorAll('.prompt-card');
+            
+            // 导航点击
+            function showPrompt(targetId) {
+                // 隐藏所有提示卡片
+                promptCards.forEach(card => {
+                    card.style.display = 'none';
+                });
+                
+                // 显示目标提示卡片
+                document.getElementById(targetId).style.display = 'block';
+                
+                // 更新导航项激活状态
+                navItems.forEach(item => {
+                    if (item.getAttribute('data-target') === targetId) {
+                        item.classList.add('active');
+                    } else {
+                        item.classList.remove('active');
+                    }
+                });
+                
+                // 更新标签激活状态
+                promptTabs.forEach(tab => {
+                    if (tab.getAttribute('data-target') === targetId) {
+                        tab.classList.add('active');
+                    } else {
+                        tab.classList.remove('active');
+                    }
+                });
+            }
+            
+            // 设置导航点击事件
+            navItems.forEach(item => {
+                item.addEventListener('click', function() {
+                    const targetId = this.getAttribute('data-target');
+                    showPrompt(targetId);
+                });
+            });
+            
+            // 设置标签点击事件
+            promptTabs.forEach(tab => {
+                tab.addEventListener('click', function() {
+                    const targetId = this.getAttribute('data-target');
+                    showPrompt(targetId);
+                });
+            });
+            
+            // 添加折叠/展开功能
+            const toggleButtons = document.querySelectorAll('.toggle-button');
+            
+            toggleButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const card = this.closest('.prompt-card');
+                    const content = card.querySelector('.prompt-content');
+                    
+                    if (content.style.display === 'none') {
+                        content.style.display = 'block';
+                        this.querySelector('i').classList.remove('bi-chevron-down');
+                        this.querySelector('i').classList.add('bi-chevron-up');
+                    } else {
+                        content.style.display = 'none';
+                        this.querySelector('i').classList.remove('bi-chevron-up');
+                        this.querySelector('i').classList.add('bi-chevron-down');
+                    }
+                });
+            });
+        });
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
