@@ -1,0 +1,15 @@
+# Global LLM configuration
+[llm]
+model = "gpt-4o"
+base_url = "https://api.gptsapi.net/v1"
+api_key = "sk-wne65d1d82c86219013913f928b0a54f6657f48fd35hNvpz"
+max_tokens = 4096
+temperature = 0.0
+
+# Optional configuration for specific LLM models
+[llm.vision]
+model = "gpt-4o"
+# base_url = "https://api.openai.com/v1"
+# api_key = "sk-u1e_niZpcDlCKmqaS7qIjurKkzfKqmfS7djQYM7MgCT3BlbkFJKguFuqH0JSiCPp3WymmS55TNj4PCL93OmekOhPzh4A"
+base_url = "https://api.gptsapi.net/v1"
+api_key = "sk-wne65d1d82c86219013913f928b0a54f6657f48fd35hNvpz"

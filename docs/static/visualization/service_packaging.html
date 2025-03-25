@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Service packaging Agent执行过程可视化</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background-color: #f8f9fa;
+            padding-top: 20px;
+        }
+        
+        .step-card {
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            background-color: white;
+            position: relative;
+        }
+        
+        .step-number {
+            position: absolute;
+            left: -15px;
+            top: -15px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: #0d6efd;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 18px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        .section-title {
+            font-weight: 600;
+            color: #0d6efd;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .section-title i {
+            margin-right: 8px;
+        }
+        
+        .thought-section {
+            background-color: #f0f7ff;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+        }
+        
+        .action-section {
+            background-color: #fff5e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .result-section {
+            background-color: #f0fff0;
+            border-radius: 8px;
+            padding: 15px;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .token-usage {
+            font-size: 14px;
+            color: #6c757d;
+            text-align: right;
+            margin-top: 10px;
+        }
+        
+        .navigation {
+            position: sticky;
+            top: 20px;
+            background-color: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-item {
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 5px;
+        }
+        
+        .nav-item:hover {
+            background-color: #f0f7ff;
+        }
+        
+        .nav-item.active {
+            background-color: #0d6efd;
+            color: white;
+        }
+        
+        .header {
+            margin-bottom: 30px;
+        }
+        
+        .progress-container {
+            margin-bottom: 30px;
+        }
+        
+        .step-heading {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        code {
+            background-color: #f8f9fa;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+
+        pre {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+
+        .json-viewer {
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+
+        /* 高亮不同类型的内容 */
+        .highlight-command {
+            color: #0066cc;
+            font-weight: bold;
+        }
+
+        .highlight-result {
+            color: #28a745;
+        }
+
+        .highlight-error {
+            color: #dc3545;
+        }
+
+        /* 顶部进度指示器 */
+        .progress-indicator {
+            height: 6px;
+            background-color: #e9ecef;
+            border-radius: 3px;
+            margin-bottom: 20px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background-color: #0d6efd;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        /* 页面顶部统计面板 */
+        .stats-panel {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            flex: 1;
+            min-width: 200px;
+            background-color: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #0d6efd;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #6c757d;
+        }
+
+        /* 步骤卡片的折叠/展开功能 */
+        .step-content {
+            max-height: 800px;
+            overflow: hidden;
+            transition: max-height 0.5s ease;
+        }
+
+        .step-content.collapsed {
+            max-height: 0;
+        }
+
+        .toggle-button {
+            background: none;
+            border: none;
+            color: #0d6efd;
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            .navigation {
+                position: relative;
+                margin-bottom: 20px;
+            }
+            
+            .step-number {
+                left: 50%;
+                transform: translateX(-50%);
+                top: -15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header text-center">
+            <h1 class="display-4">Service packaging Agent执行过程可视化</h1>
+            <p class="lead">记录智能体执行的思考过程、行动和结果</p>
+        </div>
+
+        <div class="stats-panel" id="stats-panel">
+            <!-- 统计数据将在这里动态生成 -->
+        </div>
+
+        <div class="progress-indicator">
+            <div class="progress-bar" id="progress-bar"></div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-3 mb-4">
+                <div class="navigation" id="step-navigation">
+                    <h5 class="mb-3">步骤导航</h5>
+                    <div id="nav-items">
+                        <!-- 导航项将在这里动态生成 -->
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-9">
+                <div id="steps-container">
+                    <!-- 步骤卡片将在这里动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', async function() {
+            try {
+                // 获取执行记录数据
+                const response = await fetch('service_packaging_record.json');
+                if (!response.ok) {
+                    throw new Error('无法加载记录数据');
+                }
+                const recordData = await response.json();
+                
+                // 渲染统计面板
+                renderStatistics(recordData);
+                
+                // 渲染步骤导航
+                renderNavigation(recordData);
+                
+                // 渲染所有步骤
+                renderSteps(recordData);
+                
+                // 设置进度条宽度
+                updateProgressBar(100);
+                
+                // 添加导航点击事件
+                setupNavigation();
+
+            } catch (error) {
+                console.error('加载数据时出错:', error);
+                document.getElementById('steps-container').innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle"></i> 
+                        加载数据失败: ${error.message}
+                    </div>`;
+            }
+        });
+
+        function renderStatistics(data) {
+            const statsPanel = document.getElementById('stats-panel');
+            
+            // 计算总步骤数
+            const totalSteps = data.length;
+            
+            // 计算总 Token 使用量
+            let totalInputTokens = 0;
+            let totalOutputTokens = 0;
+            
+            data.forEach(step => {
+                if (step.token_usage) {
+                    totalInputTokens += step.token_usage.input_tokens || 0;
+                    totalOutputTokens += step.token_usage.output_tokens || 0;
+                }
+            });
+            
+            // 创建统计卡片
+            statsPanel.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${totalSteps}</div>
+                    <div class="stat-label">执行步骤</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${totalInputTokens}</div>
+                    <div class="stat-label">输入 Token</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${totalOutputTokens}</div>
+                    <div class="stat-label">输出 Token</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${totalInputTokens + totalOutputTokens}</div>
+                    <div class="stat-label">总 Token</div>
+                </div>
+            `;
+        }
+
+        function renderNavigation(data) {
+            const navItems = document.getElementById('nav-items');
+            navItems.innerHTML = '';
+            
+            data.forEach((step, index) => {
+                const navItem = document.createElement('div');
+                navItem.className = 'nav-item';
+                navItem.setAttribute('data-step', step.step);
+                navItem.textContent = `步骤 ${step.step}`;
+                navItems.appendChild(navItem);
+                
+                // 默认第一个为激活状态
+                if (index === 0) {
+                    navItem.classList.add('active');
+                }
+            });
+        }
+
+        function setupNavigation() {
+            const navItems = document.querySelectorAll('.nav-item');
+            navItems.forEach(item => {
+                item.addEventListener('click', function() {
+                    const stepNumber = this.getAttribute('data-step');
+                    
+                    // 移除所有激活状态
+                    navItems.forEach(nav => nav.classList.remove('active'));
+                    
+                    // 添加当前激活状态
+                    this.classList.add('active');
+                    
+                    // 滚动到对应步骤
+                    const targetStep = document.getElementById(`step-${stepNumber}`);
+                    if (targetStep) {
+                        targetStep.scrollIntoView({ behavior: 'smooth' });
+                    }
+                });
+            });
+        }
+
+        function renderSteps(data) {
+            const stepsContainer = document.getElementById('steps-container');
+            stepsContainer.innerHTML = '';
+            
+            data.forEach(step => {
+                // 创建步骤卡片
+                const stepCard = document.createElement('div');
+                stepCard.className = 'step-card p-4';
+                stepCard.id = `step-${step.step}`;
+                
+                // 思考内容格式化
+                const thought = formatThought(step.thought);
+                
+                // 行动内容格式化
+                const action = formatAction(step.action);
+                
+                // 结果内容格式化
+                const result = formatResult(step.action_result);
+                
+                // 计算Token使用情况
+                const tokenUsage = step.token_usage ? 
+                    `输入Tokens: ${step.token_usage.input_tokens || 0} | 输出Tokens: ${step.token_usage.output_tokens || 0}` : 
+                    '无Token使用数据';
+                
+                // 构建步骤卡片内容
+                stepCard.innerHTML = `
+                    <div class="step-number">${step.step}</div>
+                    
+                    <div class="step-heading mb-3">
+                        <h4>步骤 ${step.step}</h4>
+                        <button class="toggle-button" title="折叠/展开">
+                            <i class="bi bi-chevron-up"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="step-content">
+                        <div class="mb-4">
+                            <div class="section-title">
+                                <i class="bi bi-lightbulb"></i> 思考过程
+                            </div>
+                            <div class="thought-section">${thought}</div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <div class="section-title">
+                                <i class="bi bi-gear"></i> 执行行动
+                            </div>
+                            <div class="action-section">${action}</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <div class="section-title">
+                                <i class="bi bi-check-circle"></i> 执行结果
+                            </div>
+                            <div class="result-section">${result}</div>
+                        </div>
+                        
+                        <div class="token-usage">
+                            <i class="bi bi-reception-4"></i> ${tokenUsage}
+                        </div>
+                    </div>
+                `;
+                
+                stepsContainer.appendChild(stepCard);
+                
+                // 添加折叠/展开功能
+                const toggleButton = stepCard.querySelector('.toggle-button');
+                const stepContent = stepCard.querySelector('.step-content');
+                
+                toggleButton.addEventListener('click', function() {
+                    stepContent.classList.toggle('collapsed');
+                    this.querySelector('i').classList.toggle('bi-chevron-up');
+                    this.querySelector('i').classList.toggle('bi-chevron-down');
+                });
+            });
+        }
+
+        // 格式化思考内容
+        function formatThought(thought) {
+            if (!thought) return '<em>无思考数据</em>';
+            
+            // 转义HTML特殊字符
+            thought = escapeHtml(thought);
+            
+            // 处理换行符
+            thought = thought.replace(/\n/g, '<br>');
+            
+            return thought;
+        }
+
+        // 格式化行动内容
+        function formatAction(action) {
+            if (!action) return '<em>无行动数据</em>';
+            
+            // 转义HTML特殊字符
+            action = escapeHtml(action);
+            
+            // 高亮工具调用
+            action = action.replace(/调用工具:/g, '<span class="highlight-command">调用工具:</span>');
+            
+            // 处理换行符
+            action = action.replace(/\n/g, '<br>');
+            
+            return action;
+        }
+
+        // 格式化结果内容
+        function formatResult(result) {
+            if (!result) return '<em>无结果数据</em>';
+            
+            // 转义HTML特殊字符
+            result = escapeHtml(result);
+            
+            // 高亮命令输出部分
+            result = result.replace(/Observed output of cmd `([^`]+)` executed:/g, 
+                                   'Observed output of cmd <span class="highlight-command">`$1`</span> executed:');
+            
+            // 高亮错误消息
+            result = result.replace(/Error:/g, '<span class="highlight-error">Error:</span>');
+            
+            // 处理换行符
+            result = result.replace(/\n/g, '<br>');
+            
+            return result;
+        }
+
+        // 更新进度条
+        function updateProgressBar(percentage) {
+            document.getElementById('progress-bar').style.width = `${percentage}%`;
+        }
+
+        // HTML转义函数
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

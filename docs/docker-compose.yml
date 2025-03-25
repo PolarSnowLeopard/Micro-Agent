@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  # Flask应用服务
+  static:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8000:8000"
+
+    networks:
+      - ioeb-backend_app-network  # 加入现有网络
+
+networks:
+  ioeb-backend_app-network:
+    external: true  # 使用外部网络

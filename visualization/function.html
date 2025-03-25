@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>函数依赖关系图</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        #chart-container {
+            width: 100%;
+            height: 600px;
+            margin: 0 auto;
+        }
+        body {
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>函数依赖关系图</h1>
+    <div id="chart-container"></div>
+
+    <script>
+        // 初始化 ECharts 实例
+        const chartDom = document.getElementById('chart-container');
+        const myChart = echarts.init(chartDom);
+        
+        // 加载数据
+        fetch('function.json')
+            .then(response => response.json())
+            .then(data => {
+                // 处理节点数据
+                const nodes = data.nodes.map(node => ({
+                    id: node.id,
+                    name: node.label,
+                    symbolSize: node.size || 50,
+                    x: node.x,
+                    y: node.y,
+                    value: node.label,
+                    category: 0,
+                    itemStyle: {
+                        color: '#4169E1'  // 蓝色节点
+                    },
+                    label: {
+                        show: true,
+                        position: 'inside',
+                        fontSize: 12,
+                        color: '#fff'
+                    }
+                }));
+                
+                // 处理边数据
+                const edges = data.edges.map(edge => ({
+                    source: edge.sourceID,
+                    target: edge.targetID,
+                    lineStyle: {
+                        width: 1,
+                        color: '#ccc',
+                        curveness: 0.1  // 添加一点弯曲度
+                    },
+                    symbol: ['none', 'arrow'],
+                    symbolSize: [5, 10]
+                }));
+                
+                // 配置选项
+                const option = {
+                    tooltip: {
+                        trigger: 'item',
+                        formatter: '{b}'
+                    },
+                    animationDurationUpdate: 1500,
+                    animationEasingUpdate: 'quinticInOut',
+                    series: [{
+                        type: 'graph',
+                        layout: 'none',  // 使用节点提供的坐标
+                        data: nodes,
+                        links: edges,
+                        roam: true,      // 允许缩放和平移
+                        focusNodeAdjacency: true,  // 鼠标悬停时突出相关节点和边
+                        lineStyle: {
+                            width: 1,
+                            opacity: 0.6,
+                            curveness: 0.1
+                        },
+                        emphasis: {
+                            lineStyle: {
+                                width: 3
+                            }
+                        },
+                        label: {
+                            show: true
+                        }
+                    }]
+                };
+                
+                // 应用配置
+                myChart.setOption(option);
+            })
+            .catch(error => console.error('加载数据时出错:', error));
+            
+        // 响应窗口大小变化
+        window.addEventListener('resize', function() {
+            myChart.resize();
+        });
+    </script>
+</body>
+</html>

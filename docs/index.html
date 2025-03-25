@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文档中心</title>
+    <!-- 添加mermaid.js支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 280px;
+            background-color: #f5f5f5;
+            padding: 20px;
+            border-right: 1px solid #ddd;
+            height: 100vh;
+            position: fixed;
+            overflow-y: auto;
+        }
+        .sidebar h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .sidebar ul {
+            list-style-type: none;
+        }
+        .sidebar li {
+            margin-bottom: 10px;
+        }
+        .sidebar a {
+            display: block;
+            padding: 8px 10px;
+            color: #333;
+            text-decoration: none;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .sidebar a:hover, .sidebar a.active {
+            background-color: #e0e0e0;
+        }
+        .content {
+            flex: 1;
+            padding: 20px;
+            margin-left: 250px;
+            width: calc(100% - 250px);
+        }
+        .welcome {
+            text-align: center;
+            margin-top: 100px;
+        }
+        iframe {
+            width: 100%;
+            height: calc(100vh - 40px);
+            border: none;
+        }
+        /* 可展开菜单的样式 */
+        .submenu {
+            display: none;
+            list-style-type: none;
+            margin-left: 15px;
+            margin-top: 5px;
+        }
+        .submenu li {
+            margin-bottom: 5px;
+        }
+        .has-submenu > a {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .toggle-icon {
+            transition: transform 0.3s;
+        }
+        .menu-open .toggle-icon {
+            transform: rotate(90deg);
+        }
+        .menu-open .submenu {
+            display: block;
+        }
+    </style>
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose',
+            flowchart: { useMaxWidth: false, htmlLabels: true }
+        });
+    </script>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>文档导航</h2>
+        <ul>
+            <li><a href="#" class="doc-link" data-doc="micro_agent.html">Micro-Agent 文档</a></li>
+            <li><a href="#" class="doc-link" data-doc="tool_docs.html">Micro-Agent 工具开发指南</a></li>
+            <li><a href="#" class="doc-link" data-doc="mcp_agent.html">Micro-Agent MCP 文档</a></li>
+            <li class="has-submenu">
+                <a href="#" class="menu-toggle">可视化文档 <span class="toggle-icon">▶</span></a>
+                <ul class="submenu">
+                    <li><a href="#" class="doc-link" data-doc="visualization/code_analysis.html">1. 代码分析 Agent</a></li>
+                    <li><a href="#" class="doc-link" data-doc="visualization/service_packaging.html">2. 服务封装 Agent</a></li>
+                    <li><a href="#" class="doc-link" data-doc="visualization/remote_deploy.html">3.远程部署 Agent</a></li>
+                    <li><a href="#" class="doc-link" data-doc="visualization/function.html">4. 函数依赖可视化</a></li>
+                    <li><a href="#" class="doc-link" data-doc="visualization/code_analysis_retry.html">5. 代码分析 Agent 重试</a></li>
+                </ul>
+            </li>
+        </ul>
+    </div>
+    
+    <div class="content">
+        <div class="welcome" id="welcome-section">
+            <h1>欢迎使用文档中心</h1>
+            <p>请从左侧选择一个文档开始阅读</p>
+        </div>
+        <iframe id="doc-frame" style="display: none;"></iframe>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const docLinks = document.querySelectorAll('.doc-link');
+            const welcomeSection = document.getElementById('welcome-section');
+            const docFrame = document.getElementById('doc-frame');
+            const menuToggles = document.querySelectorAll('.menu-toggle');
+            
+            // 处理可展开菜单
+            menuToggles.forEach(toggle => {
+                toggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const menuItem = this.parentElement;
+                    menuItem.classList.toggle('menu-open');
+                });
+            });
+            
+            docLinks.forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    
+                    // 移除所有活动链接的类
+                    docLinks.forEach(el => el.classList.remove('active'));
+                    
+                    // 添加活动类到当前链接
+                    this.classList.add('active');
+                    
+                    // 获取文档路径
+                    const docPath = 'static/' + this.getAttribute('data-doc');
+                    
+                    // 隐藏欢迎部分，显示iframe
+                    welcomeSection.style.display = 'none';
+                    docFrame.style.display = 'block';
+                    
+                    // 设置iframe源
+                    docFrame.src = docPath;
+                    
+                    // 在iframe加载完成后初始化Mermaid图表
+                    docFrame.onload = function() {
+                        try {
+                            // 尝试访问iframe内的mermaid对象
+                            if (docFrame.contentWindow.mermaid) {
+                                // 如果iframe中已有mermaid，重新初始化其中的图表
+                                docFrame.contentWindow.mermaid.init(
+                                    undefined, 
+                                    docFrame.contentDocument.querySelectorAll('.mermaid')
+                                );
+                            } else {
+                                // 如果iframe中没有mermaid，将主页面的mermaid注入到iframe
+                                const script = docFrame.contentDocument.createElement('script');
+                                script.src = 'https://cdn.jsdelivr.net/npm/mermaid@9.3.0/dist/mermaid.min.js';
+                                script.onload = function() {
+                                    docFrame.contentWindow.mermaid.initialize({
+                                        startOnLoad: true,
+                                        theme: 'default',
+                                        securityLevel: 'loose',
+                                        flowchart: { useMaxWidth: false, htmlLabels: true }
+                                    });
+                                    docFrame.contentWindow.mermaid.init(
+                                        undefined,
+                                        docFrame.contentDocument.querySelectorAll('.mermaid')
+                                    );
+                                };
+                                docFrame.contentDocument.head.appendChild(script);
+                            }
+                        } catch (e) {
+                            console.error('初始化Mermaid图表时出错：', e);
+                        }
+                    };
+                });
+            });
+        });
+    </script>
+</body>
+</html>

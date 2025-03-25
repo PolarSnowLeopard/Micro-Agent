@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micro-Agent工具开发流程</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@9.3.0/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+
+        h1,
+        h2,
+        h3 {
+            color: #2c3e50;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3498db;
+        }
+
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+
+        .flow-chart {
+            width: 100%;
+            margin: 30px 0;
+            text-align: center;
+        }
+
+        .step {
+            margin-bottom: 40px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        .step-number {
+            position: absolute;
+            top: -15px;
+            left: -15px;
+            width: 40px;
+            height: 40px;
+            background-color: #3498db;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        pre.code-block {
+            background-color: #272822;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-family: 'Courier New', Courier, monospace;
+            line-height: 1.4;
+            white-space: pre;
+        }
+
+        .diagram {
+            max-width: 100%;
+            height: auto;
+            margin: 20px 0;
+            border: 1px solid #ddd;
+        }
+
+        .alert {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            border-left: 5px solid #dc3545;
+        }
+
+        .tip {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            border-left: 5px solid #28a745;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        th,
+        td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        .mermaid {
+            margin: 30px 0;
+            text-align: center;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 50px;
+            padding: 20px;
+            color: #777;
+            font-size: 14px;
+            border-top: 1px solid #eee;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Micro-Agent 工具开发流程可视化指南</h1>
+
+    <div class="container">
+        <h2>1. 工具系统架构</h2>
+        <p>Micro-Agent工具系统是一个可扩展的框架，允许智能体通过定义良好的接口来执行各种操作。以下是系统的核心架构：</p>
+
+        <pre class="mermaid">
+graph TD
+    Agent[智能体 Agent] -->|使用| ToolColl[工具集合 ToolCollection]
+    ToolColl -->|包含| Tool1[工具1]
+    ToolColl -->|包含| Tool2[工具2]
+    ToolColl -->|包含| Tool3[工具3]
+    ToolColl -->|包含| Tool4[工具...]
+    Tool1 -->|继承| BaseTool[BaseTool]
+    Tool2 -->|继承| BaseTool
+    Tool3 -->|继承| BaseTool
+    Tool4 -->|继承| BaseTool
+    BaseTool -->|返回| ToolRes[ToolResult]
+    ToolRes -->|处理| Agent
+        </pre>
+    </div>
+
+    <div class="container">
+        <h2>2. 工具添加流程</h2>
+
+        <pre class="mermaid">
+graph TB
+    A[创建工具类文件] --> B[定义工具类]
+    B --> C[实现execute方法]
+    C --> D[注册工具到__init__.py]
+    D --> E[将工具添加到智能体的工具集合]
+    E --> F[测试工具功能]
+        </pre>
+
+        <div class="step">
+            <div class="step-number">1</div>
+            <h3>创建工具类文件</h3>
+            <p>在<code>app/tool/</code>目录下创建一个新的Python文件，文件名应该反映工具的功能。</p>
+            <pre class="code-block"># 例如：app/tool/my_new_tool.py
+from app.tool.base import BaseTool, ToolResult
+
+# 导入其他必要的模块</pre>
+        </div>
+
+        <div class="step">
+            <div class="step-number">2</div>
+            <h3>定义工具类</h3>
+            <p>创建一个继承自<code>BaseTool</code>的类，并定义必要的属性。</p>
+            <pre class="code-block">class MyNewTool(BaseTool):
+    # 工具的唯一名称
+    name: str = "my_new_tool"
+
+    # 工具的描述，用于智能体理解工具的用途
+    description: str = "描述这个工具的功能和使用场景"
+
+    # 工具的参数定义，使用JSON Schema格式
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "param_name": {
+                "type": "string",
+                "description": "参数描述",
+            },
+            # 更多参数...
+        },
+        "required": ["param_name"],  # 必需的参数列表
+    }</pre>
+        </div>
+
+        <div class="step">
+            <div class="step-number">3</div>
+            <h3>实现execute方法</h3>
+            <p>实现工具的核心功能逻辑，包括参数处理、操作执行和结果返回。</p>
+            <pre class="code-block">async def execute(self, param_name: str, **kwargs) -> ToolResult:
+    try:
+        # 实现工具的功能逻辑
+        result = await self._perform_operation(param_name)
+        return ToolResult(output=result)
+    except Exception as e:
+        return ToolResult(error=f"执行过程中发生错误: {str(e)}")</pre>
+            <div class="tip">
+                <strong>提示：</strong>对于长时间运行的操作，考虑实现超时机制或使用多进程/多线程来避免阻塞。
+            </div>
+        </div>
+
+        <div class="step">
+            <div class="step-number">4</div>
+            <h3>注册工具到__init__.py</h3>
+            <p>将新工具添加到<code>app/tool/__init__.py</code>文件中，使其在整个项目中可导入。</p>
+            <pre class="code-block"># 在app/tool/__init__.py中添加
+from app.tool.my_new_tool import MyNewTool
+
+__all__ = [
+    # 现有工具...
+    "MyNewTool",
+]</pre>
+        </div>
+
+        <div class="step">
+            <div class="step-number">5</div>
+            <h3>将工具添加到智能体的工具集合</h3>
+            <p>修改相关智能体的初始化代码，将新工具的实例添加到其<code>available_tools</code>集合中。</p>
+            <pre class="code-block"># 例如在app/agent/mcp.py中
+from app.tool import MyNewTool
+
+# 修改available_tools定义
+available_tools: ToolCollection = Field(
+    default_factory=lambda: ToolCollection(
+        PythonExecute(), GoogleSearch(), BrowserUseTool(),
+        MyNewTool(),  # 添加新工具
+        FileSaver(), Terminate()
+    )
+)</pre>
+        </div>
+
+        <div class="step">
+            <div class="step-number">6</div>
+            <h3>测试工具功能</h3>
+            <p>运行Micro-Agent，测试新工具的功能是否正常工作，特别是与智能体的交互。</p>
+            <pre class="code-block">python main.py
+
+# 输入提示来测试新工具
+> 使用my_new_tool工具进行[具体操作]</pre>
+            <div class="alert">
+                <strong>注意：</strong>确保处理边界情况和错误情况，以保证工具的鲁棒性。
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>3. 工具参数定义规范</h2>
+
+        <table>
+            <tr>
+                <th>参数类型</th>
+                <th>JSON Schema定义</th>
+                <th>示例</th>
+            </tr>
+            <tr>
+                <td>字符串</td>
+                <td><code>"type": "string"</code></td>
+                <td>用户名、URL、文本内容</td>
+            </tr>
+            <tr>
+                <td>整数</td>
+                <td><code>"type": "integer"</code></td>
+                <td>数量、ID、索引</td>
+            </tr>
+            <tr>
+                <td>浮点数</td>
+                <td><code>"type": "number"</code></td>
+                <td>金额、坐标、比例</td>
+            </tr>
+            <tr>
+                <td>布尔值</td>
+                <td><code>"type": "boolean"</code></td>
+                <td>开关、标志、条件</td>
+            </tr>
+            <tr>
+                <td>数组</td>
+                <td><code>"type": "array"</code></td>
+                <td>列表、集合、多选项</td>
+            </tr>
+            <tr>
+                <td>对象</td>
+                <td><code>"type": "object"</code></td>
+                <td>复杂数据结构、嵌套参数</td>
+            </tr>
+        </table>
+
+        <div class="tip">
+            <strong>最佳实践：</strong>
+            <ul>
+                <li>为每个参数提供详细的描述</li>
+                <li>使用<code>required</code>明确标记必需参数</li>
+                <li>为可选参数设置合理的默认值</li>
+                <li>使用<code>minimum</code>/<code>maximum</code>等限制参数范围</li>
+                <li>使用<code>enum</code>限制参数可选值</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>4. 工具继承关系</h2>
+
+        <pre class="mermaid">
+classDiagram
+    class BaseTool {
+        +str name
+        +str description
+        +dict parameters
+        +execute() ToolResult
+        +to_param() Dict
+    }
+
+    class ToolResult {
+        +Any output
+        +str error
+        +str base64_image
+        +str system
+    }
+
+    class ToolCollection {
+        +tuple tools
+        +dict tool_map
+        +execute(name, tool_input) ToolResult
+        +add_tool(tool) void
+    }
+
+    class MyNewTool {
+        +str name
+        +str description
+        +dict parameters
+        +execute() ToolResult
+    }
+
+    BaseTool <|-- MyNewTool
+    BaseTool ..> ToolResult
+    ToolCollection o-- BaseTool
+        </pre>
+    </div>
+
+    <div class="container">
+        <h2>5. 工具执行流程</h2>
+
+        <pre class="mermaid">
+sequenceDiagram
+    participant User as 用户
+    participant Agent as 智能体
+    participant TC as 工具集合
+    participant Tool as 具体工具
+
+    User->>Agent: 输入提示
+    Agent->>Agent: 分析提示
+    Agent->>TC: 选择合适的工具
+    TC->>Tool: 执行工具
+    Tool-->>TC: 返回结果
+    TC-->>Agent: 处理结果
+    Agent-->>User: 呈现最终结果
+        </pre>
+    </div>
+
+    <div class="container">
+        <h2>6. 实例分析：终止工具</h2>
+
+        <p>以下是<code>Terminate</code>工具的完整实现，它是一个简单工具的典型示例：</p>
+
+        <pre class="code-block">class Terminate(BaseTool):
+    name: str = "terminate"
+    description: str = "终止交互当请求完成或无法继续时"
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "description": "交互的完成状态",
+                "enum": ["success", "failure"],
+            }
+        },
+        "required": ["status"],
+    }
+
+    async def execute(self, status: str) -> str:
+        return f"交互已完成，状态为: {status}"</pre>
+
+        <p>这个工具很简单，只需要接收一个状态参数，并返回一个简单的字符串结果。它不执行复杂操作，但在工作流程中起着关键作用，表示交互的结束。</p>
+    </div>
+
+    <div class="container">
+        <h2>7. 常见问题与调试技巧</h2>
+
+        <pre class="mermaid">
+graph TD
+    A[发现问题] --> B{错误类型?}
+    B -->|工具不可见| C[检查__init__.py导入]
+    B -->|参数错误| D[检查参数定义]
+    B -->|执行超时| E[实现超时机制]
+    B -->|返回格式错误| F[使用ToolResult格式化]
+    C --> G[确认工具已添加到工具集]
+    D --> H[确保参数一致]
+    E --> I[使用多进程]
+    F --> J[检查返回类型]
+    G --> K[问题解决?]
+    H --> K
+    I --> K
+    J --> K
+    K -->|是| L[继续开发]
+    K -->|否| A
+        </pre>
+
+        <div class="alert">
+            <strong>调试技巧:</strong>
+            <ul>
+                <li>使用日志记录工具执行过程中的关键信息</li>
+                <li>单独测试工具功能，然后再集成到智能体中</li>
+                <li>检查参数类型和名称是否与定义一致</li>
+                <li>验证返回结果的格式是否正确</li>
+            </ul>
+        </div>
+    </div>
+
+    <footer>
+        <p>© Micro-Agent 项目团队 - 工具开发指南可视化</p>
+    </footer>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose'
+        });
+    </script>
+</body>
+
+</html>

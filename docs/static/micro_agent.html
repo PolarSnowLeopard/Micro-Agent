@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micro-Agent项目架构</title>
+    <!-- 添加mermaid.js支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        // 将初始化脚本移至头部，确保在DOM加载前就准备好
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose',
+            flowchart: { useMaxWidth: false, htmlLabels: true },
+            gantt: {
+                titleTopMargin: 25,
+                barHeight: 20,
+                barGap: 4,
+                topPadding: 50,
+                sidePadding: 50
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+
+        header {
+            background-color: white;
+            color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        header p{
+            color: #1a73e8;
+        }
+
+        section {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        h1,
+        h2,
+        h3 {
+            color: #1a73e8;
+        }
+
+        .mermaid {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+
+        .code-block {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', Courier, monospace;
+            overflow-x: auto;
+        }
+
+        .card {
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: #fff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #e0e0e0;
+        }
+
+        th,
+        td {
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f2f7ff;
+        }
+
+        .highlight {
+            background-color: #e8f0fe;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+
+        .diagram-section {
+            margin: 30px 0;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>Micro-Agent 项目架构文档</h1>
+        <p>开源智能代理系统架构可视化</p>
+    </header>
+
+    <section>
+        <h2>1. 项目概述</h2>
+        <p>Micro-Agent智能代理系统，旨在提供一个灵活、可扩展的框架，为上层应用提供智能代理能力。项目名称"Micro-Agent"中的"Micro"意为"微"，与微服务中的"微"同义。
+        </p>
+
+        <div class="card">
+            <h3>核心功能：</h3>
+            <ul>
+                <li>基于大型语言模型的推理能力</li>
+                <li>多种工具的集成（Python执行、命令行工具、文件操作等）</li>
+                <li>灵活的智能体架构</li>
+                <li>可扩展的工具系统</li>
+            </ul>
+        </div>
+    </section>
+
+    <section>
+        <h2>2. 系统架构</h2>
+
+        <div class="diagram-section">
+            <h3>系统整体架构</h3>
+            <div class="mermaid">
+graph TB
+    User[用户] <--> Main[主程序 main.py]
+    Main --> Agent[智能体系统]
+    Main --> Config[配置系统]
+    Agent --> Tool[工具系统]
+    Agent --> Prompt[提示系统]
+    Agent --> LLM[语言模型接口]
+    Tool --> Sandbox[沙箱环境]
+    Tool --> MCP[MCP协议]
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h3>目录结构</h3>
+            <style>
+                .directory-tree {
+                    font-family: 'Courier New', monospace;
+                    line-height: 1.5;
+                    white-space: pre;
+                    background-color: #f7f7f7;
+                    padding: 20px;
+                    border-radius: 5px;
+                    overflow-x: auto;
+                    color: #333;
+                }
+                .directory-tree .dir {
+                    color: #2e7d32;
+                    font-weight: bold;
+                }
+                .directory-tree .file {
+                    color: #1565c0;
+                }
+                .directory-tree .root {
+                    color: #c2185b;
+                    font-weight: bold;
+                }
+            </style>
+            <div class="directory-tree">
+<span class="root">MicroAgent</span>
+├── <span class="file">run_mcp.py</span>
+├── <span class="dir">app/</span>
+│   ├── <span class="dir">agent/</span>
+│   ├── <span class="dir">mcp/</span>
+│   ├── <span class="dir">prompt/</span>
+│   ├── <span class="dir">sandbox/</span>
+│   ├── <span class="dir">tool/</span>
+│   ├── <span class="dir">utils/</span>
+│   ├── <span class="file">bedrock.py</span>
+│   ├── <span class="file">config.py</span>
+│   ├── <span class="file">exceptions.py</span>
+│   ├── <span class="file">llm.py</span>
+│   ├── <span class="file">logger.py</span>
+│   └── <span class="file">schema.py</span>
+├── <span class="dir">config/</span>
+├── <span class="dir">docs/</span>
+├── <span class="dir">assets/</span>
+└── <span class="file">requirements.txt</span>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>3. 智能体系统架构</h2>
+
+        <div class="diagram-section">
+            <h3>智能体继承体系</h3>
+            <div class="mermaid">
+classDiagram
+    BaseAgent <|-- ReActAgent
+    ReActAgent <|-- ToolCallAgent
+    ToolCallAgent <|-- MCPAgent
+
+    class BaseAgent {
+        +name: str
+        +description: str
+        +system_prompt: str
+        +llm: LLM
+        +memory: Memory
+        +state: AgentState
+        +max_steps: int
+        +step() str
+    }
+
+    class ReActAgent {
+        +think() bool
+        +act() str
+        +step() str
+    }
+
+    class ToolCallAgent {
+        +available_tools: ToolCollection
+        +tool_choices: str
+        +execute_tool() str
+    }
+
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h3>智能体执行流程</h3>
+            <div class="mermaid">
+sequenceDiagram
+    participant User as 用户
+    participant Main as 主程序
+    participant Agent as 智能体
+    participant LLM as 语言模型
+    participant Tool as 工具系统
+
+    User->>Main: 发送请求
+    Main->>Agent: 创建智能体实例
+    Main->>Agent: 提供用户输入
+    loop 执行循环
+        Agent->>LLM: 发送上下文和提示
+        LLM-->>Agent: 返回思考结果
+        Agent->>Agent: 分析并决定行动
+        opt 需要使用工具
+            Agent->>Tool: 调用工具
+            Tool-->>Agent: 返回执行结果
+        end
+        Agent->>Agent: 更新状态和内存
+        Agent->>Main: 检查是否需要继续
+    end
+    Agent-->>Main: 返回最终结果
+    Main-->>User: 展示结果
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>4. 工具系统架构</h2>
+
+        <div class="diagram-section">
+            <h3>工具类继承体系</h3>
+            <div class="mermaid">
+classDiagram
+    class BaseTool {
+        +name: str
+        +description: str
+        +parameters: dict
+        +execute() Any
+    }
+
+    BaseTool <|-- PythonExecute
+    BaseTool <|-- Terminate
+    BaseTool <|-- BashTool
+    BaseTool <|-- CMDTool
+    BaseTool <|-- FileSaverTool
+    BaseTool <|-- RemoteSSHTool
+    BaseTool <|-- RemoteDockerManager
+    BaseTool <|-- FileTransfer
+
+    class ToolResult {
+        +output: Any
+        +error: str
+        +base64_image: str
+        +system: str
+    }
+
+    class ToolCollection {
+        +tools: tuple
+        +tool_map: dict
+        +execute() ToolResult
+        +add_tool(tool) void
+    }
+
+    ToolCollection o-- BaseTool
+    BaseTool ..> ToolResult
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h3>工具调用流程</h3>
+            <div class="mermaid">
+sequenceDiagram
+    participant Agent as 智能体
+    participant LLM as 语言模型
+    participant TC as 工具集合
+    participant Tool as 具体工具
+
+    Agent->>LLM: 发送消息和工具定义
+    LLM-->>Agent: 返回工具调用决策
+    Agent->>TC: 调用工具(name, parameters)
+    TC->>Tool: 查找并执行工具
+    Tool-->>TC: 返回ToolResult
+    TC-->>Agent: 转发执行结果
+    Agent->>Agent: 更新上下文和内存
+    Agent->>LLM: 提供工具执行结果
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>5. 数据流程</h2>
+
+        <div class="diagram-section">
+            <h3>消息和内存系统</h3>
+            <div class="mermaid">
+classDiagram
+    class Memory {
+        +messages: List[Message]
+        +add_message(message) void
+        +get_recent_messages(n) List[Message]
+        +clear() void
+    }
+
+    class Message {
+        +role: str
+        +content: str
+        +name: str
+        +tool_calls: List[ToolCall]
+        +tool_call_id: str
+    }
+
+    class ToolCall {
+        +id: str
+        +type: str
+        +function: Function
+    }
+
+    class Function {
+        +name: str
+        +arguments: str
+    }
+
+    Memory o-- Message : contains
+    Message o-- ToolCall : may contain
+    ToolCall o-- Function : contains
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h3>配置系统</h3>
+            <div class="mermaid">
+graph TD
+    ConfigToml["config.toml"] --> ConfigPy["config.py"]
+    ConfigPy --> LLMConfig["LLM配置"]
+    ConfigPy --> ToolConfig["工具配置"]
+    ConfigPy --> AgentConfig["智能体配置"]
+    ConfigPy --> LoggingConfig["日志配置"]
+
+    LLMConfig --> LLM["LLM接口"]
+    ToolConfig --> Tool["工具系统"]
+    AgentConfig --> Agent["智能体系统"]
+    LoggingConfig --> Logger["日志系统"]
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>6. 关键流程示例</h2>
+
+        <div class="card">
+            <h3>创建自定义智能体</h3>
+            <div class="code-block">
+                <pre>
+# 在app/agent/custom_agent.py中
+from app.agent.toolcall import ToolCallAgent
+from app.tool import ToolCollection
+from app.tool.python_execute import PythonExecute
+from app.tool.terminate import Terminate
+
+class CustomAgent(ToolCallAgent):
+    name = "CustomAgent"
+    description = "一个自定义智能体示例"
+    system_prompt = "你是一个专门执行Python代码的助手。"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 配置可用工具
+        self.available_tools = ToolCollection(
+            PythonExecute(),
+            Terminate()
+        )
+</pre>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>创建自定义工具</h3>
+            <div class="code-block">
+                <pre>
+# 在app/tool/custom_tool.py中
+from app.tool.base import BaseTool, ToolResult
+
+class CustomTool(BaseTool):
+    name = "custom_tool"
+    description = "一个示例自定义工具"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "input": {
+                "type": "string",
+                "description": "工具的输入参数"
+            }
+        },
+        "required": ["input"]
+    }
+
+    async def execute(self, input: str) -> ToolResult:
+        result = f"处理输入: {input}"
+        return ToolResult(output=result)
+</pre>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>7. 主要组件交互</h2>
+
+        <div class="diagram-section">
+            <h3>智能体执行示例</h3>
+            <div class="mermaid">
+sequenceDiagram
+    participant U as 用户
+    participant M as main.py
+    participant MA as MicroAgent智能体
+    participant LM as 语言模型
+    participant TC as 工具集合
+    participant PE as PythonExecute
+
+    U->>M: 提供任务: "计算1到100的和"
+    M->>MA: 创建MicroAgent实例
+    M->>MA: 提供用户输入
+    MA->>LM: 发送系统提示和用户输入
+    LM-->>MA: 决定使用Python工具
+    MA->>TC: 执行工具调用(PythonExecute)
+    TC->>PE: 执行Python代码
+    Note over PE: 执行: sum(range(1, 101))
+    PE-->>TC: 返回结果: 5050
+    TC-->>MA: 工具结果
+    MA->>LM: 更新上下文，提供工具结果
+    LM-->>MA: 生成最终回答
+    MA-->>M: 返回执行结果
+    M-->>U: 显示结果: "1到100的和是5050"
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>8. 开发指南</h2>
+
+        <div class="diagram-section">
+            <h3>新工具开发流程</h3>
+            <div class="mermaid">
+graph TB
+    Start[开始开发新工具] --> Define[定义工具需求]
+    Define --> CreateFile[创建工具类文件]
+    CreateFile --> Implement[实现工具类]
+    Implement --> Parameters[定义参数结构]
+    Parameters --> Execute[实现execute方法]
+    Execute --> Register[在__init__.py中注册]
+    Register --> AddToAgent[添加到智能体工具集]
+    AddToAgent --> Test[测试工具功能]
+    Test --> Document[编写文档]
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>常见错误和解决方案</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>错误类型</th>
+                        <th>可能原因</th>
+                        <th>解决方案</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>工具执行失败</td>
+                        <td>参数类型不匹配或缺少必需参数</td>
+                        <td>检查参数定义和输入值是否一致</td>
+                    </tr>
+                    <tr>
+                        <td>智能体没有响应</td>
+                        <td>LLM API密钥无效或网络问题</td>
+                        <td>验证API密钥和网络连接</td>
+                    </tr>
+                    <tr>
+                        <td>执行超时</td>
+                        <td>工具执行时间过长</td>
+                        <td>添加超时处理，优化工具执行效率</td>
+                    </tr>
+                    <tr>
+                        <td>内存泄漏</td>
+                        <td>长时间运行时资源未释放</td>
+                        <td>实现适当的资源清理机制</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</body>
+
+</html>

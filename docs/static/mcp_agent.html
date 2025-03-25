@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP智能体工作流程与逻辑</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2, h3 {
+            color: #1a73e8;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+        .section {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            background-color: #fff;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .workflow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 30px 0;
+        }
+        .workflow-item {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            background-color: #f9f9f9;
+            width: 80%;
+            position: relative;
+            text-align: center;
+        }
+        .workflow-item::after {
+            content: '↓';
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            font-size: 24px;
+            color: #666;
+        }
+        .workflow-item:last-child::after {
+            content: '';
+        }
+        .code {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre;
+            margin: 15px 0;
+        }
+        .important {
+            background-color: #e8f0fe;
+            padding: 15px;
+            border-left: 5px solid #1a73e8;
+            margin: 15px 0;
+        }
+        .diagram {
+            margin: 20px 0;
+            text-align: center;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f5f7fa;
+        }
+        .steps {
+            list-style-type: decimal;
+            padding-left: 20px;
+        }
+        .flow-chart {
+            display: flex;
+            justify-content: center;
+            overflow-x: auto;
+            margin: 20px 0;
+        }
+        .flow-chart img {
+            max-width: 100%;
+            height: auto;
+        }
+        .mermaid {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            overflow: auto;
+        }
+        
+        /* 添加导航目录样式 */
+        .toc {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 4px solid #1a73e8;
+        }
+        
+        .toc ul {
+            list-style-type: none;
+            padding-left: 10px;
+        }
+        
+        .toc li {
+            margin: 8px 0;
+        }
+        
+        .toc a {
+            text-decoration: none;
+            color: #1a73e8;
+        }
+        
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        
+        /* 打印样式 */
+        @media print {
+            .section {
+                page-break-inside: avoid;
+            }
+            
+            h2 {
+                page-break-before: always;
+            }
+            
+            .mermaid {
+                max-width: 100%;
+                page-break-inside: avoid;
+            }
+        }
+        
+        /* 响应式样式优化 */
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+            
+            .workflow-item {
+                width: 95%;
+            }
+            
+            .mermaid {
+                font-size: 85%;
+            }
+        }
+        
+        /* 暗色模式支持 */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #1e1e1e;
+                color: #e0e0e0;
+            }
+            
+            .section {
+                background-color: #252525;
+                border-color: #333;
+            }
+            
+            h1, h2, h3 {
+                color: #4db6ac;
+            }
+            
+            .workflow-item {
+                background-color: #333;
+                border-color: #444;
+            }
+            
+            .code, .mermaid {
+                background-color: #2d2d2d;
+            }
+            
+            .important {
+                background-color: #253342;
+                border-left-color: #4db6ac;
+            }
+            
+            a {
+                color: #64b5f6;
+            }
+            
+            .toc {
+                background-color: #252525;
+                border-left-color: #4db6ac;
+            }
+            
+            .toc a {
+                color: #64b5f6;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+        }
+    </style>
+    <!-- 添加mermaid.js支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: 'default',
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true,
+                    curve: 'basis'
+                },
+                securityLevel: 'loose'
+            });
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- 添加导航目录 -->
+        <div class="toc">
+            <h3>目录</h3>
+            <ul>
+                <li><a href="#section1">1. MCP架构概述</a></li>
+                <li><a href="#section2">2. 工作流程详解</a></li>
+                <li><a href="#section3">3. 普通工具如何封装为MCP服务器</a></li>
+                <li><a href="#section4">4. MCP Agent如何使用MCP服务器</a></li>
+                <li><a href="#section5">5. 如何添加新的MCP工具</a></li>
+                <li><a href="#section6">6. 最佳实践与注意事项</a></li>
+                <li><a href="#section7">7. 总结</a></li>
+            </ul>
+        </div>
+        
+        <h1>MCP智能体工作流程与工作逻辑</h1>
+        
+        <div id="section1" class="section">
+            <h2>1. MCP架构概述</h2>
+            <p>MCP（模型上下文协议）是一个允许AI模型与外部工具进行交互的架构框架。它采用客户端-服务器模式，解决了大语言模型与外部环境交互的问题，使AI能够通过调用工具来完成复杂的任务处理。</p>
+            
+            <div class="important">
+                <h3>MCP的核心价值</h3>
+                <ul>
+                    <li><strong>能力扩展</strong>：让AI模型突破文本交互的限制，获得执行实际操作的能力</li>
+                    <li><strong>工具抽象</strong>：将各种功能封装为统一的工具接口，便于AI模型理解和使用</li>
+                    <li><strong>安全隔离</strong>：在模型和系统之间建立安全边界，控制模型的操作权限</li>
+                    <li><strong>标准化通信</strong>：定义了AI与工具间的标准化通信协议，提高互操作性</li>
+                </ul>
+            </div>
+            
+            <p>整个架构主要由三个核心部分组成，各司其职又紧密协作：</p>
+            
+            <ul>
+                <li><strong>MCP Agent</strong>：智能体，负责与LLM交互并向MCP服务器发送工具调用请求，是AI模型与外部世界的桥梁</li>
+                <li><strong>MCP Server</strong>：服务器，负责注册和管理工具，处理来自Agent的工具调用请求，并返回执行结果</li>
+                <li><strong>工具（Tools）</strong>：执行具体功能的组件，如命令行执行、文件操作等，每个工具都实现特定的功能</li>
+            </ul>
+            
+            <h3>核心组件详解</h3>
+            <table>
+                <tr>
+                    <th>组件</th>
+                    <th>核心功能</th>
+                    <th>关键特性</th>
+                </tr>
+                <tr>
+                    <td><strong>MCP Agent</strong></td>
+                    <td>
+                        <ul>
+                            <li>维护与LLM的交互会话</li>
+                            <li>转换用户请求为LLM可理解的格式</li>
+                            <li>执行LLM生成的工具调用</li>
+                            <li>管理工具调用结果和上下文记忆</li>
+                        </ul>
+                    </td>
+                    <td>
+                        <ul>
+                            <li>支持多种连接方式（stdio/sse）</li>
+                            <li>实现上下文记忆管理</li>
+                            <li>处理工具调用的循环执行</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td><strong>MCP Server</strong></td>
+                    <td>
+                        <ul>
+                            <li>注册和管理可用工具</li>
+                            <li>接收工具调用请求</li>
+                            <li>执行工具调用并返回结果</li>
+                            <li>提供工具元数据和可发现性</li>
+                        </ul>
+                    </td>
+                    <td>
+                        <ul>
+                            <li>基于FastAPI实现</li>
+                            <li>提供工具注册和执行机制</li>
+                            <li>支持工具参数验证</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td><strong>工具层</strong></td>
+                    <td>
+                        <ul>
+                            <li>实现BaseTool接口</li>
+                            <li>执行具体的功能操作</li>
+                            <li>处理输入参数和返回结果</li>
+                        </ul>
+                    </td>
+                    <td>
+                        <ul>
+                            <li>标准化的工具接口</li>
+                            <li>支持异步执行模式</li>
+                            <li>灵活的参数定义和验证</li>
+                        </ul>
+                    </td>
+                </tr>
+            </table>
+            
+            <!-- 使用Mermaid替代ASCII线条图 -->
+            <h3>MCP架构核心组件图</h3>
+            <div class="mermaid">
+flowchart LR
+    subgraph Agent["MCP Agent"]
+        direction TB
+        AgentMemory["记忆管理"]
+        AgentLLM["LLM交互"]
+    end
+    
+    subgraph Server["MCP Server"]
+        direction TB
+        ServerTools["工具管理"]
+        ServerExec["工具执行"]
+    end
+    
+    subgraph Tools["工具注册层"]
+        direction TB
+        ToolBase["BaseTool抽象类"]
+        ToolImpl["具体工具实现"]
+    end
+    
+    LLMSend["向LLM发送\n工具调用结果"]
+    CallExec["调用执行"]
+    
+    Server ---> Agent
+    Tools ---> Server
+    
+    Agent --> LLMSend
+    Server --> CallExec
+    ToolImpl -.-> CallExec
+    
+    classDef agentBox fill:#d0e8ff,stroke:#3c7eb7,stroke-width:2px;
+    classDef serverBox fill:#ffe6cc,stroke:#d79b00,stroke-width:2px;
+    classDef toolsBox fill:#e1d5e7,stroke:#9673a6,stroke-width:2px;
+    classDef flowBox fill:#d5e8d4,stroke:#82b366,stroke-width:2px;
+    
+    class Agent agentBox;
+    class Server serverBox;
+    class Tools toolsBox;
+    class LLMSend,CallExec flowBox;
+            </div>
+            
+            <!-- 添加MCP架构流程图 -->
+            <h3>MCP架构组件关系图</h3>
+            <div class="mermaid">
+flowchart TB
+    subgraph "MCP Agent"
+        LLM["大型语言模型 (LLM)"]
+        MCPClient["MCPClient"]
+        Memory["记忆 (Memory)"]
+        AgentController["Agent控制器"]
+    end
+    
+    subgraph "MCP Server"
+        FastMCP["FastMCP 服务器"]
+        ToolRegistry["工具注册表"]
+        ToolValidator["参数验证器"]
+        ErrorHandler["错误处理"]
+    end
+    
+    subgraph "工具层"
+        BaseTool["BaseTool 抽象基类"]
+        Tool1["Bash工具"]
+        Tool2["Cmd工具"]
+        Tool3["Terminate工具"]
+        OtherTools["其他工具..."]
+    end
+    
+    subgraph "通信层"
+        StdioConn["标准输入输出连接"]
+        SSEConn["SSE事件流连接"]
+    end
+    
+    User["用户"] -->|"提供请求"| MCPClient
+    MCPClient -->|"保存用户请求"| Memory
+    MCPClient -->|"转发请求"| LLM
+    LLM -->|"分析并生成\n工具调用"| MCPClient
+    MCPClient -->|"发送工具调用请求"| AgentController
+    
+    AgentController --> StdioConn
+    AgentController --> SSEConn
+    StdioConn -->|"传输请求"| FastMCP
+    SSEConn -->|"传输请求"| FastMCP
+    
+    FastMCP -->|"查找工具"| ToolRegistry
+    ToolRegistry -->|"验证参数"| ToolValidator
+    ToolValidator -->|"验证通过"| BaseTool
+    ToolValidator -->|"验证失败"| ErrorHandler
+    
+    BaseTool --- Tool1
+    BaseTool --- Tool2
+    BaseTool --- Tool3
+    BaseTool --- OtherTools
+    
+    Tool1 & Tool2 & Tool3 & OtherTools -->|"执行结果"| FastMCP
+    ErrorHandler -->|"错误信息"| FastMCP
+    FastMCP -->|"返回结果"| StdioConn
+    FastMCP -->|"返回结果"| SSEConn
+    StdioConn -->|"传输结果"| MCPClient
+    SSEConn -->|"传输结果"| MCPClient
+    MCPClient -->|"保存结果"| Memory
+    MCPClient -->|"返回结果"| LLM
+    LLM -->|"生成新的回应\n或工具调用"| MCPClient
+    MCPClient -->|"最终回应"| User
+    
+    classDef agent fill:#d0e8ff,stroke:#3c7eb7,stroke-width:2px;
+    classDef server fill:#ffe6cc,stroke:#d79b00,stroke-width:2px;
+    classDef tools fill:#e1d5e7,stroke:#9673a6,stroke-width:2px;
+    classDef user fill:#d5e8d4,stroke:#82b366,stroke-width:2px;
+    classDef comm fill:#fff2cc,stroke:#d6b656,stroke-width:2px;
+    
+    class LLM,MCPClient,Memory,AgentController agent;
+    class FastMCP,ToolRegistry,ToolValidator,ErrorHandler server;
+    class BaseTool,Tool1,Tool2,Tool3,OtherTools tools;
+    class User user;
+    class StdioConn,SSEConn comm;
+            </div>
+            
+            <h3>MCP架构设计原则</h3>
+            <div class="important">
+                <ul>
+                    <li><strong>模块化设计</strong>：各组件职责明确，易于扩展和维护</li>
+                    <li><strong>标准化接口</strong>：定义统一的工具接口和通信协议</li>
+                    <li><strong>异步通信</strong>：支持非阻塞的异步工具调用</li>
+                    <li><strong>可扩展性</strong>：允许动态添加和注册新工具</li>
+                    <li><strong>安全控制</strong>：对工具执行进行适当的权限和资源控制</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>2. 工作流程详解</h2>
+            
+            <div class="workflow">
+                <div class="workflow-item">用户启动MCP Runner，提供请求</div>
+                <div class="workflow-item">MCPAgent初始化并连接到MCP服务器</div>
+                <div class="workflow-item">MCP服务器注册可用工具</div>
+                <div class="workflow-item">MCPAgent接收用户请求并转发给LLM</div>
+                <div class="workflow-item">LLM决定使用哪些工具并生成工具调用</div>
+                <div class="workflow-item">MCPAgent将工具调用转发给MCP服务器</div>
+                <div class="workflow-item">MCP服务器执行对应工具，返回结果</div>
+                <div class="workflow-item">MCPAgent将结果返回给LLM继续处理</div>
+                <div class="workflow-item">循环此过程直到任务完成或使用Terminate工具</div>
+                <div class="workflow-item">将最终结果返回给用户</div>
+            </div>
+            
+            <!-- 添加工作流程时序图 -->
+            <h3>MCP工作流程时序图</h3>
+            <div class="mermaid">
+sequenceDiagram
+    participant User as 用户
+    participant Runner as MCP Runner
+    participant Agent as MCP Agent
+    participant LLM as 大语言模型
+    participant Server as MCP Server
+    participant Tool as 工具实例
+
+    Note over User,Tool: 初始化阶段
+    User->>Runner: 启动并提供请求
+    Runner->>Agent: 创建MCPAgent实例
+    Agent->>Server: 连接服务器 (stdio/sse)
+    Server->>Server: 注册可用工具
+    Server->>Agent: 返回工具列表
+
+    Note over User,Tool: 执行阶段
+    User->>Agent: 提供用户请求
+    Agent->>Agent: 添加请求到记忆中
+    Agent->>LLM: 发送请求和上下文
+    LLM->>LLM: 分析请求
+    LLM->>Agent: 返回内容和工具调用
+    
+    loop 工具执行循环
+        Agent->>Server: 发送工具调用请求
+        Server->>Tool: 执行指定工具
+        Tool->>Server: 返回执行结果
+        Server->>Agent: 返回结果
+        Agent->>Agent: 添加结果到记忆中
+        Agent->>LLM: 发送更新后的上下文
+        LLM->>Agent: 生成新的内容或工具调用
+    end
+    
+    Note over User,Tool: 终止阶段
+    Agent->>Agent: 检测到终止条件
+    Agent->>User: 返回最终结果
+    
+    Note over Agent,Tool: 资源清理阶段
+    Agent->>Server: 断开连接
+    Server->>Tool: 清理工具资源
+</div>
+
+            <h3>启动与初始化流程</h3>
+            <ol class="steps">
+                <li>用户通过<code>run_mcp.py</code>脚本启动MCP Runner</li>
+                <li>MCPRunner创建一个MCPAgent实例</li>
+                <li>根据连接类型（stdio或sse）初始化与MCP服务器的连接</li>
+                <li>MCP服务器启动并注册所有可用工具</li>
+                <li>MCPAgent从服务器获取工具列表并存储</li>
+            </ol>
+            
+            <h3>处理用户请求的流程</h3>
+            <ol class="steps">
+                <li>用户提供请求（作为prompt或交互输入）</li>
+                <li>MCPAgent将请求添加到记忆中</li>
+                <li>MCPAgent调用LLM（通过think方法）分析请求</li>
+                <li>LLM返回内容和工具调用（tool_calls）</li>
+                <li>MCPAgent执行这些工具调用（通过act方法）</li>
+                <li>对每个工具调用，MCPAgent：
+                    <ul>
+                        <li>将请求转发给MCP服务器</li>
+                        <li>服务器执行对应工具</li>
+                        <li>服务器返回结果</li>
+                        <li>MCPAgent将结果添加到记忆中</li>
+                    </ul>
+                </li>
+                <li>结果返回给LLM进行下一轮思考</li>
+                <li>重复此过程，直到完成任务或达到最大步骤数</li>
+            </ol>
+        </div>
+
+        <div class="section">
+            <h2>3. 普通工具如何封装为MCP服务器</h2>
+            
+            <p>普通工具（继承自BaseTool的类）通过以下流程被封装到MCP服务器中：</p>
+            
+            <div class="important">
+                <h3>工具封装流程</h3>
+                <ol class="steps">
+                    <li>创建工具类，继承自BaseTool（如Bash、Cmd、Terminate等）</li>
+                    <li>在工具类中实现execute方法，处理实际功能</li>
+                    <li>在MCPServer.__init__中初始化工具实例</li>
+                    <li>通过register_tool方法将工具注册到服务器</li>
+                    <li>FastMCP装饰器将工具转换为符合MCP协议的接口</li>
+                </ol>
+            </div>
+            
+            <!-- 添加工具封装流程图 -->
+            <h3>工具封装与注册流程图</h3>
+            <div class="mermaid">
+flowchart TB
+    subgraph "1. 工具定义" 
+        CreateTool["创建工具类"]
+        Inherit["继承BaseTool基类"]
+        DefineParams["定义参数规范"]
+        ImplementExec["实现execute方法"]
+    end
+    
+    subgraph "2. 工具注册"
+        InitInstance["初始化工具实例"]
+        AddToToolsDict["添加到tools字典"]
+        CallRegister["调用register_tool方法"]
+    end
+    
+    subgraph "3. 工具封装"
+        ToParam["调用to_param方法"]
+        BuildDoc["构建文档字符串"]
+        BuildSignature["构建函数签名"]
+        WrapMethod["包装执行方法"]
+        DecorateMethod["FastMCP装饰器装饰"]
+    end
+    
+    subgraph "4. 运行时调用"
+        FindTool["服务器查找工具"]
+        ValidateInput["验证输入参数"]
+        ExecuteTool["执行工具方法"]
+        FormatResult["格式化返回结果"]
+    end
+    
+    CreateTool --> Inherit
+    Inherit --> DefineParams
+    DefineParams --> ImplementExec
+    
+    ImplementExec --> InitInstance
+    InitInstance --> AddToToolsDict
+    AddToToolsDict --> CallRegister
+    
+    CallRegister --> ToParam
+    ToParam --> BuildDoc
+    BuildDoc --> BuildSignature
+    BuildSignature --> WrapMethod
+    WrapMethod --> DecorateMethod
+    
+    DecorateMethod --> FindTool
+    FindTool --> ValidateInput
+    ValidateInput --> ExecuteTool
+    ExecuteTool --> FormatResult
+    
+    classDef definition fill:#d0e8ff,stroke:#3c7eb7,stroke-width:2px;
+    classDef registration fill:#ffe6cc,stroke:#d79b00,stroke-width:2px;
+    classDef wrapping fill:#e1d5e7,stroke:#9673a6,stroke-width:2px;
+    classDef execution fill:#d5e8d4,stroke:#82b366,stroke-width:2px;
+    
+    class CreateTool,Inherit,DefineParams,ImplementExec definition;
+    class InitInstance,AddToToolsDict,CallRegister registration;
+    class ToParam,BuildDoc,BuildSignature,WrapMethod,DecorateMethod wrapping;
+    class FindTool,ValidateInput,ExecuteTool,FormatResult execution;
+</div>
+            
+            <h3>工具封装关键代码分析</h3>
+            <pre class="code">
+# 1. 工具基类 (app/tool/base.py)
+class BaseTool(ABC, BaseModel):
+    name: str
+    description: str
+    parameters: Optional[dict] = None
+    
+    @abstractmethod
+    async def execute(self, **kwargs) -> Any:
+        """执行工具的核心方法"""
+        
+    def to_param(self) -> Dict:
+        """将工具转换为函数调用格式"""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+# 2. MCP服务器中的工具注册 (app/mcp/server.py)
+def register_tool(self, tool: BaseTool, method_name: Optional[str] = None) -> None:
+    """注册工具并添加参数验证和文档"""
+    tool_name = method_name or tool.name
+    tool_param = tool.to_param()
+    tool_function = tool_param["function"]
+
+    # 定义要注册的异步函数
+    async def tool_method(**kwargs):
+        result = await tool.execute(**kwargs)
+        # 处理结果...
+        return result
+
+    # 设置方法元数据
+    tool_method.__name__ = tool_name
+    tool_method.__doc__ = self._build_docstring(tool_function)
+    tool_method.__signature__ = self._build_signature(tool_function)
+
+    # 使用FastMCP装饰器注册工具
+    self.server.tool()(tool_method)
+</pre>
+            
+            <h3>MCP装饰器的作用</h3>
+            <p>FastMCP的tool()装饰器是工具转换的关键环节，它：</p>
+            <ul>
+                <li>将普通Python异步函数转换为符合MCP协议的工具接口</li>
+                <li>处理参数验证、类型转换和错误处理</li>
+                <li>处理结果格式化，确保符合MCP响应格式</li>
+                <li>管理工具元数据，使其可被列出和描述</li>
+            </ul>
+            
+            <!-- 添加MCP设计模式图 -->
+            <h3>MCP服务器设计模式图</h3>
+            <div class="mermaid">
+flowchart TB
+    subgraph "装饰器模式"
+        ToolDecorator["FastMCP Tool装饰器"]
+        BasicMethod["基本异步方法"]
+        DecoratedTool["经过装饰的工具方法"]
+        
+        BasicMethod -->|"装饰"| ToolDecorator
+        ToolDecorator -->|"生成"| DecoratedTool
+    end
+    
+    subgraph "适配器模式"
+        BaseTool["BaseTool接口"]
+        ToolConverter["register_tool方法"]
+        MCPInterface["MCP协议接口"]
+        
+        BaseTool -->|"适配"| ToolConverter
+        ToolConverter -->|"符合"| MCPInterface
+    end
+    
+    subgraph "工厂模式"
+        ToolRegistry["工具注册表"]
+        ToolFactory["工具创建逻辑"]
+        ConcreteTools["具体工具实例"]
+        
+        ToolRegistry -->|"存储"| ConcreteTools
+        ToolFactory -->|"创建"| ConcreteTools
+    end
+    
+    subgraph "命令模式"
+        ToolCaller["工具调用者"]
+        ToolCommand["工具命令"]
+        ToolReceiver["工具实现"]
+        
+        ToolCaller -->|"发出"| ToolCommand
+        ToolCommand -->|"执行"| ToolReceiver
+    end
+</div>
+        </div>
+
+        <div class="section">
+            <h2>4. MCP Agent如何使用MCP服务器</h2>
+            
+            <div class="important">
+                <h3>通信流程</h3>
+                <ol class="steps">
+                    <li>MCPAgent通过stdio或sse连接到MCP服务器</li>
+                    <li>Agent创建一个MCPClients实例管理连接</li>
+                    <li>Agent从服务器获取可用工具列表</li>
+                    <li>当需要执行工具时，Agent将调用请求发送到服务器</li>
+                    <li>服务器执行工具并返回结果</li>
+                    <li>Agent处理结果并将其提供给LLM</li>
+                </ol>
+            </div>
+            
+            <!-- 添加Agent-Server通信时序图 -->
+            <h3>MCP Agent与Server通信时序图</h3>
+            <div class="mermaid">
+sequenceDiagram
+    participant Agent as MCP Agent
+    participant Clients as MCP Clients
+    participant Session as Client Session
+    participant Server as MCP Server
+    participant Tools as 工具实例
+    
+    %% 连接建立阶段
+    Note over Agent,Tools: 连接建立阶段
+    Agent->>Clients: 创建MCPClients实例
+    
+    alt stdio连接
+        Agent->>Clients: connect_stdio(command, args)
+        Clients->>Clients: 创建退出栈
+        Clients->>Session: 使用stdio创建ClientSession
+        Session->>Server: 建立stdin/stdout流
+    else sse连接
+        Agent->>Clients: connect_sse(server_url)
+        Clients->>Clients: 创建退出栈
+        Clients->>Session: 使用sse创建ClientSession
+        Session->>Server: 建立SSE事件流连接
+    end
+    
+    %% 初始化阶段
+    Session->>Server: initialize()
+    Session->>Server: list_tools()
+    Server->>Session: 返回可用工具列表
+    Session->>Clients: 填充工具映射
+    Clients->>Agent: 返回可用工具信息
+    
+    %% 工具调用阶段
+    Note over Agent,Tools: 工具调用阶段
+    Agent->>Clients: 执行工具(name, kwargs)
+    Clients->>Session: call_tool(name, kwargs)
+    Session->>Server: 发送工具调用请求
+    Server->>Tools: 执行对应工具
+    Tools->>Server: 返回执行结果
+    Server->>Session: 返回工具执行结果
+    Session->>Clients: 解析并格式化结果
+    Clients->>Agent: 返回ToolResult
+    
+    %% 断开连接阶段
+    Note over Agent,Tools: 断开连接阶段
+    Agent->>Clients: disconnect()
+    Clients->>Session: 关闭会话
+    Clients->>Clients: 清理工具映射
+    Session->>Server: 断开连接
+</div>
+            
+            <h3>连接机制</h3>
+            <pre class="code">
+# app/agent/mcp.py中的初始化方法
+async def initialize(self, connection_type=None, server_url=None, command=None, args=None):
+    # 设置连接类型
+    if connection_type:
+        self.connection_type = connection_type
+
+    # 根据连接类型连接到MCP服务器
+    if self.connection_type == "sse":
+        if not server_url:
+            raise ValueError("SSE连接需要服务器URL")
+        await self.mcp_clients.connect_sse(server_url=server_url)
+    elif self.connection_type == "stdio":
+        if not command:
+            raise ValueError("stdio连接需要命令")
+        await self.mcp_clients.connect_stdio(command=command, args=args or [])
+</pre>
+            
+            <h3>工具执行机制</h3>
+            <pre class="code">
+# app/tool/mcp.py中的执行方法
+async def execute(self, **kwargs) -> ToolResult:
+    """通过向MCP服务器发起远程调用来执行工具。"""
+    if not self.session:
+        return ToolResult(error="未连接到MCP服务器")
+
+    try:
+        # 调用服务器上的工具
+        result = await self.session.call_tool(self.name, kwargs)
+        # 处理结果...
+        return ToolResult(output=content_str or "未返回输出。")
+    except Exception as e:
+        return ToolResult(error=f"执行工具时出错: {str(e)}")
+</pre>
+            
+            <p>在MCPAgent的工作流程中，每次LLM决定使用工具时：</p>
+            <ol class="steps">
+                <li>LLM生成工具调用请求，包含工具名称和参数</li>
+                <li>MCPAgent的act方法遍历这些工具调用</li>
+                <li>对每个调用，通过MCPClients发送请求到服务器</li>
+                <li>服务器查找对应工具并执行</li>
+                <li>执行结果通过连接返回给Agent</li>
+                <li>Agent将结果添加到对话历史中</li>
+            </ol>
+        </div>
+
+        <div class="section">
+            <h2>5. 如何添加新的MCP工具</h2>
+            
+            <!-- 添加工具类层次结构图 -->
+            <h3>工具类层次结构图</h3>
+            <div class="mermaid">
+---
+title: MCP工具类层次结构
+---
+classDiagram
+    direction TB
+    
+    class BaseModel
+    class ABC
+    class BaseTool
+    class ToolResult
+    class CLIResult
+    class ToolFailure
+    class Bash
+    class Cmd
+    class Terminate
+    class CustomTool
+    
+    BaseModel <|-- BaseTool : 继承
+    ABC <|-- BaseTool : 实现
+    BaseModel <|-- ToolResult : 继承
+    ToolResult <|-- CLIResult : 扩展
+    ToolResult <|-- ToolFailure : 扩展
+    BaseTool <|-- Bash : 实现
+    BaseTool <|-- Cmd : 实现
+    BaseTool <|-- Terminate : 实现
+    BaseTool <|-- CustomTool : 实现
+    
+    BaseTool : +name
+    BaseTool : +description
+    BaseTool : +parameters
+    BaseTool : +execute()
+    
+    ToolResult : +output
+    ToolResult : +error
+    ToolResult : +base64_image
+    
+    Bash : +execute()
+    Cmd : +execute()
+    Terminate : +execute()
+    CustomTool : +execute()
+</div>
+            
+            <div class="important">
+                <h3>添加新工具的两种方式</h3>
+                <table>
+                    <tr>
+                        <th>方式1：创建新的工具类</th>
+                        <th>方式2：直接添加到MCP服务器</th>
+                    </tr>
+                    <tr>
+                        <td>创建BaseTool子类，然后在服务器中注册</td>
+                        <td>直接向MCPServer添加已定义的工具</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <h3>方式1：创建新的工具类</h3>
+            <ol class="steps">
+                <li>创建继承自BaseTool的新类</li>
+                <li>实现必要的属性（name、description、parameters）</li>
+                <li>实现execute方法</li>
+                <li>在MCPServer.__init__中实例化并添加到tools字典</li>
+            </ol>
+            
+            <pre class="code">
+# 1. 创建新工具 (例如 app/tool/my_tool.py)
+from app.tool.base import BaseTool, ToolResult
+
+class MyTool(BaseTool):
+    name: str = "my_tool"
+    description: str = "这是我的自定义工具，用于..."
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "param1": {
+                "type": "string",
+                "description": "第一个参数的描述",
+            },
+            # 更多参数...
+        },
+        "required": ["param1"],
+    }
+
+    async def execute(self, param1: str, **kwargs) -> ToolResult:
+        # 实现工具功能...
+        return ToolResult(output=f"工具执行结果: {param1}")
+
+# 2. 在MCP服务器中注册 (修改 app/mcp/server.py)
+def __init__(self, name: str = "micro-agent"):
+    self.server = FastMCP(name)
+    self.tools: Dict[str, BaseTool] = {}
+
+    # 添加标准工具
+    self.tools["bash"] = Bash()
+    self.tools["cmd"] = Cmd()
+    # 添加新工具
+    self.tools["my_tool"] = MyTool()
+    self.tools["terminate"] = Terminate()
+</pre>
+            
+            <h3>方式2：直接添加到MCP服务器</h3>
+            <ol class="steps">
+                <li>创建MCPServer实例</li>
+                <li>使用现有的工具类实例</li>
+                <li>使用tools字典或register_tool方法添加工具</li>
+            </ol>
+            
+            <pre class="code">
+# 在应用代码中 (例如自定义启动脚本)
+from app.mcp.server import MCPServer
+from app.tool.my_tool import MyTool
+from app.tool.another_tool import AnotherTool
+
+# 创建服务器
+server = MCPServer()
+
+# 方法1：直接向tools字典添加
+server.tools["my_tool"] = MyTool()
+
+# 方法2：使用register_tool方法（会立即注册）
+server.register_tool(AnotherTool())
+
+# 启动服务器
+server.run()
+</pre>
+            
+            <h3>示例：创建并添加CMD工具</h3>
+            <p>以下是一个完整的示例，展示了如何创建并注册一个Windows CMD工具：</p>
+            
+            <pre class="code">
+# 1. 创建CMD工具类 (app/tool/cmd.py)
+import asyncio
+from typing import Optional
+from app.tool.base import BaseTool, CLIResult
+
+class Cmd(BaseTool):
+    """用于执行Windows cmd命令的工具"""
+    name: str = "cmd"
+    description: str = "在Windows终端中执行cmd命令。"
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "要执行的cmd命令。",
+            },
+        },
+        "required": ["command"],
+    }
+    
+    # 实现会话管理和命令执行...
+    
+    async def execute(self, command: str, **kwargs) -> CLIResult:
+        # 执行命令并返回结果...
+        return result
+
+# 2. 在MCP服务器中注册 (app/mcp/server.py)
+def __init__(self, name: str = "micro-agent"):
+    self.server = FastMCP(name)
+    self.tools: Dict[str, BaseTool] = {}
+
+    # 添加CMD工具
+    self.tools["cmd"] = Cmd()
+    self.tools["terminate"] = Terminate()
+</pre>
+        </div>
+
+        <div class="section">
+            <h2>6. 最佳实践与注意事项</h2>
+            
+            <h3>工具开发最佳实践</h3>
+            <ul>
+                <li>提供清晰的工具描述和参数文档</li>
+                <li>实现健壮的错误处理和资源清理</li>
+                <li>对于长时间运行的命令，实现适当的超时机制</li>
+                <li>设计统一的返回格式，便于LLM理解</li>
+                <li>为工具添加日志记录以便调试</li>
+            </ul>
+            
+            <h3>常见问题与解决方案</h3>
+            <table>
+                <tr>
+                    <th>问题</th>
+                    <th>解决方案</th>
+                </tr>
+                <tr>
+                    <td>工具执行超时</td>
+                    <td>实现适当的超时处理和重试机制</td>
+                </tr>
+                <tr>
+                    <td>工具参数格式错误</td>
+                    <td>在工具类中添加参数验证和类型转换</td>
+                </tr>
+                <tr>
+                    <td>工具连接断开</td>
+                    <td>实现自动重连或错误恢复机制</td>
+                </tr>
+                <tr>
+                    <td>工具调用失败</td>
+                    <td>提供详细的错误信息并记录日志</td>
+                </tr>
+            </table>
+            
+            <h3>性能优化建议</h3>
+            <ul>
+                <li>减少不必要的工具调用和数据传输</li>
+                <li>优化工具执行流程，避免阻塞操作</li>
+                <li>合理设置超时参数，避免长时间等待</li>
+                <li>考虑缓存工具执行结果，避免重复执行</li>
+            </ul>
+        </div>
+        
+        <div class="section">
+            <h2>7. 总结</h2>
+            <p>MCP（模型上下文协议）架构提供了一种灵活的方式，使AI模型能够与外部工具交互。其主要组件包括：</p>
+            <ul>
+                <li><strong>MCP Agent</strong>：负责与LLM交互并管理工具调用的智能体</li>
+                <li><strong>MCP Server</strong>：负责注册和执行工具的服务器</li>
+                <li><strong>工具（Tools）</strong>：执行特定功能的模块</li>
+            </ul>
+            
+            <p>工作流程概述：</p>
+            <ol class="steps">
+                <li>用户提供请求</li>
+                <li>MCPAgent将请求转发给LLM</li>
+                <li>LLM决定使用哪些工具</li>
+                <li>MCPAgent将工具调用转发到MCP服务器</li>
+                <li>服务器执行工具并返回结果</li>
+                <li>结果返回给LLM进行下一步处理</li>
+                <li>循环直到任务完成</li>
+            </ol>
+            
+            <p>添加新工具有两种方式：创建新的工具类并注册到服务器，或直接向现有服务器添加工具实例。无论哪种方式，都需要确保工具实现BaseTool接口，并提供必要的元数据和执行逻辑。</p>
+            
+            <!-- 添加MCP架构思维导图 -->
+            <h3>MCP架构思维导图</h3>
+            <div class="mermaid">
+mindmap
+  root((MCP架构))
+    (MCP Agent)
+      (工具调用代理)
+        (执行LLM推理)
+        (管理工具调用)
+        (处理工具结果)
+      (连接方式)
+        (stdio连接)
+        (sse连接)
+      (生命周期)
+        (初始化)
+        (运行)
+        (清理)
+    (MCP Server)
+      (工具注册)
+        (register_tool方法)
+        (FastMCP装饰器)
+      (工具管理)
+        (工具映射)
+        (参数验证)
+        (文档生成)
+      (传输层)
+        (stdio传输)
+        (SSE传输)
+    (工具层)
+      (BaseTool接口)
+        (必须实现execute方法)
+        (定义name/description)
+        (定义参数规范)
+      (工具类型)
+        (命令行工具)
+        (文件操作工具)
+        (Browser工具)
+        (终止工具)
+      (结果处理)
+        (ToolResult)
+        (CLIResult)
+        (错误处理)
+    (开发扩展)
+      (创建新工具)
+      (自定义服务器)
+      (自定义Agent)
+</div>
+        </div>
+    </div>
+</body>
+</html>

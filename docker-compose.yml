@@ -1,0 +1,13 @@
+version: '3'
+
+services:
+  ioeb_agent:
+    build: .
+    container_name: ioeb_agent
+    ports:
+      - "8010:5000"
+    volumes:
+      - .:/app
+    stdin_open: true  # 保持标准输入开启
+    tty: true  # 分配伪终端
+    restart: unless-stopped
