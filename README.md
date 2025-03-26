@@ -55,32 +55,40 @@ Micro-Agent框架的主要组件包括：
 - 提示系统
 - 语言模型接口
 - 配置系统
-- 沙箱环境
 
 ## 开发与使用
 
 ### 开发环境设置
 
+- 建议python版本为3.12.
+
 1. 克隆仓库：
    ```bash
-   git clone [仓库地址]
-   cd dev-mcp
+   git clone https://github.com/PolarSnowLeopard/Micro-Agent
+   cd Micro-Agent
    ```
 
-2. 创建并配置环境变量文件：
+2. 使用conda创建python环境（可选）：
+   ```bash
+   conda create -n micro-agent python=3.12
+   conda activate micro-agent
+   ```
+
+3. 创建并配置环境变量文件：
    ```bash
    cp .env.example .env
-   # 编辑.env文件，设置所需的API密钥和配置参数
+   cp config/config.example.toml config/config.toml
+   # 编辑.env和config/config.toml文件，设置所需的API密钥和配置参数
    ```
 
-3. 安装依赖：
+4. 安装依赖：
    ```bash
    pip install -r requirements.txt
    ```
 
 ### 文档中心
 
-项目提供了完整的文档中心，可通过以下方式访问：
+项目提供了完整的文档中心，可通过以下方式访问(或访问线上文档[fdueblab.cn/docs](https://fdueblab.cn/docs))：
 
 1. 启动文档服务器：
    ```bash
@@ -109,7 +117,6 @@ Micro-Agent框架使用两个主要的配置文件：
      - LLM模型配置（API密钥、模型名称、参数等）
      - 视觉模型配置
      - 代理配置（可选）
-     - 沙箱环境配置（可选）
 
 在使用系统前，请确保这两个配置文件都已正确设置。特别是需要添加您的LLM API密钥以及其他必要的连接信息。
 
