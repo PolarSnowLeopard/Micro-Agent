@@ -94,15 +94,25 @@ Micro-Agent框架的主要组件包括：
 
 ## 配置选项
 
-主要配置选项在`.env`文件中，包括：
+Micro-Agent框架使用两个主要的配置文件：
 
-- `OPENAI_API_KEY`: OpenAI API密钥
-- 其他配置参数...
+1. **`.env`文件**：用于存储环境变量和敏感信息
+   - 从`.env.example`复制得到：`cp .env.example .env`
+   - 包含的主要配置：
+     - `REMOTE_SSH_SERVER`: 远程服务器地址
+     - `REMOTE_SSH_USERNAME`: 远程服务器用户名
+     - `REMOTE_SSH_PASSWORD`: 远程服务器密码
+
+2. **`config/config.toml`文件**：用于系统主要配置
+   - 从`config/config.example.toml`复制得到：`cp config/config.example.toml config/config.toml`
+   - 包含的主要配置：
+     - LLM模型配置（API密钥、模型名称、参数等）
+     - 视觉模型配置
+     - 代理配置（可选）
+     - 沙箱环境配置（可选）
+
+在使用系统前，请确保这两个配置文件都已正确设置。特别是需要添加您的LLM API密钥以及其他必要的连接信息。
 
 ## 日志和调试
 
 系统日志存储在`logs/`目录下，可用于故障排查和系统监控。
-
-## 许可证
-
-[在此处添加许可证信息]
