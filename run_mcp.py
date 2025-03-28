@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import sys
 import json
+from datetime import datetime
 from app.agent.mcp import MCPAgent
 from app.config import config
 from app.logger import logger
@@ -11,6 +12,7 @@ from app.prompt.task import (
     SERVICE_PACKAGING_PROMPT,
     REMOTE_DEPLOY_PROMPT
 )
+from app.utils.visualize_record import save_record_to_json, generate_visualization_html
 
 class MCPRunner:
     """MCP智能体运行器类，具有适当的路径处理和配置。"""
@@ -95,35 +97,39 @@ class MCPRunner:
                 continue
                 
             try:
-                response = await self.agent.run(user_input)
-                print(f"\n智能体: {response}")
+                result = await self.agent.run(user_input)
+                result = json.dumps(result, ensure_ascii=False, indent=4)
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                save_record_to_json(f"record_{timestamp}", result)
+                generate_visualization_html(f"record_{timestamp}")
             except Exception as e:
                 logger.error(f"执行请求时出错: {str(e)}")
                 print(f"\n执行出错: {str(e)}")
 
     async def run_single_prompt(self, prompt: str) -> str:
-        """使用单个提示运行智能体。"""
+        """使用单个提示运行智能体，并保存结果。"""
         result = await self.agent.run(prompt)
-        return json.dumps(result, ensure_ascii=False, indent=4)
+        result = json.dumps(result, ensure_ascii=False, indent=4)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        save_record_to_json(f"record_{timestamp}", result)
+        generate_visualization_html(f"record_{timestamp}")
+        return result
 
     async def run_subtask(self, subtask: str) -> None:
-        """使用单个提示运行智能体。"""
+        """使用单个提示子任务运行智能体。"""
         if subtask == "1":
             result = await self.agent.run(CODE_ANALYSIS_PROMPT)
         elif subtask == "2":
             result = await self.agent.run(SERVICE_PACKAGING_PROMPT)
         elif subtask == "3":
             result = await self.agent.run(REMOTE_DEPLOY_PROMPT)
-        with open('record.json', 'w', encoding='utf-8') as f:
-            json.dump(result, f, ensure_ascii=False, indent=4)
+
 
     async def run_default(self) -> None:
         """以默认模式运行智能体。"""
         result = await self.agent.run(
             "你好，我可以使用哪些工具？列出工具后请终止。"
         )
-        with open('record.json', 'w', encoding='utf-8') as f:
-            json.dump(result, f, ensure_ascii=False, indent=4)
 
     async def cleanup(self) -> None:
         """清理智能体资源。"""

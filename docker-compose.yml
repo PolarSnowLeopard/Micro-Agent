@@ -6,6 +6,8 @@ services:
     container_name: micro_agent
     ports:
       - "8010:5000"
+      - "18000:8000"
+      - "2222:22"
     volumes:
       - .:/app
     stdin_open: true  # 保持标准输入开启

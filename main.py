@@ -1,6 +1,7 @@
 from run_mcp import MCPRunner
 import asyncio
 import sys
+import json
 from app.logger import logger
 from app.utils.visualize_record import save_record_to_json, generate_visualization_html
 
@@ -17,8 +18,8 @@ async def run_agent(task_name: str, prompt: str) -> None:
     result = ""
     try:
         await runner.initialize("stdio", None)
-        result = await runner.run_single_prompt(prompt)
-        
+        result = await runner.agent.run(prompt)
+        result = json.dumps(result, ensure_ascii=False, indent=4)
         # 保存JSON记录文件
         save_record_to_json(task_name, result)
             
@@ -36,15 +37,13 @@ async def run_agent(task_name: str, prompt: str) -> None:
         await runner.cleanup()
 
 if __name__ == "__main__":
-    from app.prompt.task import CODE_ANALYSIS_PROMPT, SERVICE_PACKAGING_PROMPT, REMOTE_DEPLOY_PROMPT
+    # from app.prompt.task import CODE_ANALYSIS_PROMPT, SERVICE_PACKAGING_PROMPT, REMOTE_DEPLOY_PROMPT
 
-    # task_name = "code_analysis"
-    # prompt = CODE_ANALYSIS_PROMPT
+    # task_name = ["code_analysis", "service_packaging", "remote_deploy"]
+    # prompt = [CODE_ANALYSIS_PROMPT, SERVICE_PACKAGING_PROMPT, REMOTE_DEPLOY_PROMPT]
 
-    # task_name = "service_packaging"
-    # prompt = SERVICE_PACKAGING_PROMPT
+    # for task, prompt in zip(task_name, prompt):
+    #     asyncio.run(run_agent(task, prompt))
 
-    task_name = "remote_deploy"
-    prompt = REMOTE_DEPLOY_PROMPT
-
-    asyncio.run(run_agent(task_name, prompt))
+    prompt = "我想知道当前机器的一些信息，比如cpu、内存、磁盘、网络等"
+    asyncio.run(run_agent("system_info", prompt))
