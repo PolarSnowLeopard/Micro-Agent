@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git最佳实践</title>
+    <!-- 添加mermaid.js支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        // 将初始化脚本移至头部，确保在DOM加载前就准备好
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose',
+            flowchart: { useMaxWidth: false, htmlLabels: true },
+            gantt: {
+                titleTopMargin: 25,
+                barHeight: 20,
+                barGap: 4,
+                topPadding: 50,
+                sidePadding: 50
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+
+        header {
+            background-color: white;
+            color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        header p{
+            color: #1a73e8;
+        }
+
+        section {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        h1,
+        h2,
+        h3 {
+            color: #1a73e8;
+        }
+
+        .mermaid {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+
+        .code-block {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', Courier, monospace;
+            overflow-x: auto;
+        }
+
+        .card {
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: #fff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #e0e0e0;
+        }
+
+        th,
+        td {
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f2f7ff;
+        }
+
+        .highlight {
+            background-color: #e8f0fe;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+
+        .diagram-section {
+            margin: 30px 0;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>Git最佳实践指南</h1>
+        <p>提高团队协作效率的Git工作流与规范</p>
+    </header>
+
+    <section>
+        <h2>1. 概述</h2>
+        <p>本文档提供了Git版本控制系统的最佳实践指南，旨在帮助团队建立一致、高效的工作流程。良好的Git实践不仅能提高开发效率，减少冲突，还能使代码库的历史记录更加清晰易读。</p>
+
+        <div class="card">
+            <h3>核心原则：</h3>
+            <ul>
+                <li>保持提交历史清晰</li>
+                <li>分支管理规范化</li>
+                <li>提交信息有意义</li>
+                <li>保护主分支</li>
+            </ul>
+        </div>
+    </section>
+
+    <section>
+        <h2>2. 分支策略</h2>
+
+        <div class="diagram-section">
+            <h3>Git Flow工作流</h3>
+            <div class="mermaid">
+gitGraph
+   commit
+   branch develop
+   checkout develop
+   commit
+   branch feature/login
+   checkout feature/login
+   commit
+   commit
+   checkout develop
+   merge feature/login
+   branch feature/dashboard
+   checkout feature/dashboard
+   commit
+   commit
+   checkout develop
+   merge feature/dashboard
+   branch release/v1.0
+   checkout release/v1.0
+   commit id: "bugfix"
+   checkout main
+   merge release/v1.0 tag: "v1.0"
+   checkout develop
+   merge release/v1.0
+   branch hotfix/v1.0.1
+   checkout hotfix/v1.0.1
+   commit id: "critical fix"
+   checkout main
+   merge hotfix/v1.0.1 tag: "v1.0.1"
+   checkout develop
+   merge hotfix/v1.0.1
+            </div>
+        </div>
+
+        <h3>分支命名规范</h3>
+        <p>采用描述性前缀来区分不同类型的分支：</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>分支类型</th>
+                    <th>前缀</th>
+                    <th>示例</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>功能开发</td>
+                    <td>feature/</td>
+                    <td>feature/user-authentication</td>
+                </tr>
+                <tr>
+                    <td>Bug修复</td>
+                    <td>bugfix/</td>
+                    <td>bugfix/login-validation</td>
+                </tr>
+                <tr>
+                    <td>紧急修复</td>
+                    <td>hotfix/</td>
+                    <td>hotfix/security-vulnerability</td>
+                </tr>
+                <tr>
+                    <td>版本发布</td>
+                    <td>release/</td>
+                    <td>release/v1.2.0</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>3. Fork工作流与多人协作</h2>
+        
+        <p>在开源项目或大型团队中，Fork工作流是一种常用的协作模式，它允许贡献者在不影响主仓库的情况下进行开发。</p>
+
+        <div class="diagram-section">
+            <h3>Fork工作流概述</h3>
+            <div class="mermaid">
+flowchart TD
+    A[主仓库] --> |1. Fork| B[个人仓库]
+    B --> |2. Clone| C[本地仓库]
+    C --> |3. 创建分支| D[功能分支]
+    D --> |4. 开发| D
+    D --> |5. Push| B
+    B --> |6. 提交PR| A
+    A --> |7. Code Review| A
+    A --> |8. Merge| A
+    A -.-> |9. 同步| B
+            </div>
+        </div>
+
+        <h3>详细步骤</h3>
+        
+        <div class="card">
+            <h4>1. Fork项目</h4>
+            <p>在项目托管平台（如GitHub、GitLab）上点击"Fork"按钮，创建项目的个人副本到自己的账号下。</p>
+        </div>
+        
+        <div class="card">
+            <h4>2. 克隆仓库</h4>
+            <div class="code-block">
+                <pre>
+# 克隆个人Fork的仓库
+git clone https://github.com/YOUR-USERNAME/REPOSITORY.git
+
+# 添加上游仓库
+git remote add upstream https://github.com/ORIGINAL-OWNER/REPOSITORY.git
+                </pre>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h4>3. 保持与上游同步</h4>
+            <div class="code-block">
+                <pre>
+# 获取上游仓库变更
+git fetch upstream
+
+# 切换到主分支
+git checkout main
+
+# 合并上游仓库变更
+git merge upstream/main
+
+# 推送到个人仓库
+git push
+                </pre>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h4>4. 创建功能分支</h4>
+            <div class="code-block">
+                <pre>
+# 创建并切换到新分支
+git checkout -b feature/your-feature
+
+# 或者先创建再切换
+git branch feature/your-feature
+git checkout feature/your-feature
+                </pre>
+            </div>
+            <p>分支命名应遵循团队规范，通常以类型前缀开始，如：feature/、bugfix/、hotfix/等。</p>
+        </div>
+        
+        <div class="card">
+            <h4>5. 开发与提交</h4>
+            <div class="code-block">
+                <pre>
+# 开发完成后添加更改
+git add .
+
+# 提交更改
+git commit -m "feat: 添加新功能"
+
+# 推送到个人仓库
+git push -u origin feature/your-feature
+                </pre>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h4>6. 提交Pull Request</h4>
+            <ol>
+                <li>在GitHub/GitLab等平台上导航到个人Fork的仓库</li>
+                <li>切换到刚推送的分支</li>
+                <li>点击"New Pull Request"或"Create Merge Request"按钮</li>
+                <li>选择目标仓库和分支（通常是上游仓库的main/master分支）</li>
+                <li>填写PR标题和描述，说明此次变更的目的和内容</li>
+                <li>提交PR等待审核</li>
+            </ol>
+        </div>
+        
+        <div class="card">
+            <h4>7. Code Review流程</h4>
+            <ol>
+                <li>项目维护者或团队成员会审核代码</li>
+                <li>可能会提出修改建议或要求解决冲突</li>
+                <li>根据反馈进行修改，并推送到相同分支</li>
+                <li>PR会自动更新，无需创建新的PR</li>
+                <li>当所有审核问题解决后，维护者会合并PR</li>
+            </ol>
+        </div>
+        
+        <h3>最佳实践</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>实践</th>
+                    <th>说明</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>频繁同步上游</td>
+                    <td>定期从上游仓库同步变更，减少合并冲突</td>
+                </tr>
+                <tr>
+                    <td>一个PR一个功能</td>
+                    <td>每个PR专注于单一功能或修复，便于审核和回滚</td>
+                </tr>
+                <tr>
+                    <td>详细的PR描述</td>
+                    <td>清晰说明变更目的、影响范围和测试方法</td>
+                </tr>
+                <tr>
+                    <td>添加测试</td>
+                    <td>为新功能或修复添加适当的测试用例</td>
+                </tr>
+                <tr>
+                    <td>及时响应反馈</td>
+                    <td>快速响应Code Review中的反馈和建议</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>常见问题解决</h3>
+        
+        <div class="card">
+            <h4>解决PR中的合并冲突</h4>
+            <div class="code-block">
+                <pre>
+# 获取最新的上游代码
+git fetch upstream
+
+# 切换到你的功能分支
+git checkout feature/your-feature
+
+# 将上游主分支合并到你的功能分支
+git merge upstream/main
+
+# 解决冲突
+# 编辑冲突文件，解决冲突
+git add .
+git commit -m "fix: 解决合并冲突"
+
+# 推送更新后的分支
+git push origin feature/your-feature
+                </pre>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h4>更新已提交的PR</h4>
+            <div class="code-block">
+                <pre>
+# 在本地功能分支上进行修改
+git add .
+git commit -m "fix: 根据反馈修改代码"
+
+# 推送到相同分支
+git push origin feature/your-feature
+
+# PR会自动更新，无需创建新PR
+                </pre>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>4. 提交规范</h2>
+        
+        <h3>提交信息格式</h3>
+        <p>采用约定式提交（Conventional Commits）规范：</p>
+        <div class="code-block">
+            <pre>&lt;类型&gt;[可选的作用域]: &lt;描述&gt;
+
+[可选的正文]
+
+[可选的页脚]</pre>
+        </div>
+
+        <h3>类型说明</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>类型</th>
+                    <th>说明</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>feat</td>
+                    <td>新增功能</td>
+                </tr>
+                <tr>
+                    <td>fix</td>
+                    <td>修复bug</td>
+                </tr>
+                <tr>
+                    <td>docs</td>
+                    <td>文档变更</td>
+                </tr>
+                <tr>
+                    <td>style</td>
+                    <td>不影响代码功能的格式变化</td>
+                </tr>
+                <tr>
+                    <td>refactor</td>
+                    <td>代码重构，既不是新增功能也不是修改bug</td>
+                </tr>
+                <tr>
+                    <td>perf</td>
+                    <td>性能优化</td>
+                </tr>
+                <tr>
+                    <td>test</td>
+                    <td>增加或修改测试</td>
+                </tr>
+                <tr>
+                    <td>build</td>
+                    <td>构建系统或外部依赖变更</td>
+                </tr>
+                <tr>
+                    <td>ci</td>
+                    <td>CI配置文件和脚本变更</td>
+                </tr>
+                <tr>
+                    <td>chore</td>
+                    <td>其他不修改src或test的变动</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>提交示例</h3>
+        <div class="code-block">
+            <pre>feat(auth): 实现用户认证功能
+
+- 添加登录表单和验证逻辑
+- 实现JWT认证机制
+- 添加用户权限控制
+
+Refs: #123</pre>
+        </div>
+    </section>
+
+    <section>
+        <h2>5. 合并策略</h2>
+
+        <div class="diagram-section">
+            <h3>常见合并方式比较</h3>
+            <div class="mermaid">
+gitGraph
+   commit
+   branch feature
+   checkout feature
+   commit
+   commit
+   checkout main
+   commit
+   checkout feature
+   commit
+   checkout main
+   merge feature
+   commit
+            </div>
+        </div>
+
+        <h3>合并方式说明</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>合并方式</th>
+                    <th>说明</th>
+                    <th>适用场景</th>
+                    <th>命令示例</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>快进合并<br>(Fast-forward)</td>
+                    <td>当目标分支是源分支的直接上游时，Git会简单地将指针前移，不创建新的合并提交</td>
+                    <td>简单的功能分支合并回主分支，没有并行开发</td>
+                    <td><code>git merge feature</code><br><code>git merge --ff-only feature</code></td>
+                </tr>
+                <tr>
+                    <td>普通合并<br>(Merge commit)</td>
+                    <td>创建一个新的合并提交，包含两个父节点，保留完整的分支历史</td>
+                    <td>希望保留完整历史记录，记录合并事件</td>
+                    <td><code>git merge --no-ff feature</code></td>
+                </tr>
+                <tr>
+                    <td>变基合并<br>(Rebase)</td>
+                    <td>重写提交历史，将一个分支的更改应用到另一个分支的顶端，使历史记录变为线性</td>
+                    <td>保持干净的提交历史，消除不必要的合并提交</td>
+                    <td><code>git checkout feature</code><br><code>git rebase main</code></td>
+                </tr>
+                <tr>
+                    <td>压缩合并<br>(Squash)</td>
+                    <td>将源分支的多个提交压缩为一个提交，然后应用到目标分支</td>
+                    <td>合并功能分支前整理提交历史，保持主分支历史简洁</td>
+                    <td><code>git merge --squash feature</code><br><code>git commit -m "feat: 合并功能"</code></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="card">
+            <h3>各种合并方式可视化比较</h3>
+            <div class="code-block">
+                <pre>
+# 1. 快进合并（Fast-forward）
+A---B---C (main)
+         \
+          D---E (feature)
+
+# 合并后
+A---B---C---D---E (main, feature)
+
+# 2. 普通合并（带合并提交）
+A---B---C (main)
+         \
+          D---E (feature)
+
+# 合并后
+A---B---C-------F (main)
+         \     /
+          D---E (feature)
+
+# 3. 变基合并（Rebase）
+A---B---C (main)
+         \
+          D---E (feature)
+
+# 变基后
+A---B---C (main)
+         \
+          D'---E' (feature)
+
+# 合并后
+A---B---C---D'---E' (main, feature)
+
+# 4. 压缩合并（Squash）
+A---B---C (main)
+         \
+          D---E (feature)
+
+# 合并后
+A---B---C---F' (main)
+         \
+          D---E (feature)
+                </pre>
+            </div>
+        </div>
+
+        <h3>建议的合并策略</h3>
+        <ul>
+            <li>功能分支合并到开发分支：使用压缩合并（Squash），保持历史干净</li>
+            <li>发布分支合并到主分支：使用普通合并（Merge commit），记录发布历史</li>
+            <li>开发分支同步主分支变更：使用变基合并（Rebase），避免不必要的合并提交</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>6. 常见问题解决</h2>
+
+        <div class="card">
+            <h3>解决合并冲突</h3>
+            <div class="code-block">
+                <pre>
+# 发生冲突时
+git status  # 查看冲突文件
+# 编辑冲突文件，解决冲突
+git add .   # 标记冲突已解决
+git commit  # 完成合并
+
+# 如果想取消合并
+git merge --abort
+                </pre>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>撤销变更</h3>
+            <div class="code-block">
+                <pre>
+# 撤销工作区修改
+git checkout -- file.txt
+
+# 撤销暂存区修改
+git reset HEAD file.txt
+
+# 修改最近的提交
+git commit --amend
+
+# 撤销已推送的提交（危险操作）
+git revert commit-hash
+
+# 重置到特定提交（危险操作）
+git reset --hard commit-hash
+                </pre>
+            </div>
+        </div>
+    </section>
+</body>
+
+</html> 
