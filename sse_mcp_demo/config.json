@@ -1,0 +1,12 @@
+{
+    "servers": [
+      {
+        "name": "time_server",
+        "url": "http://localhost:8800/sse"
+      },
+      {
+        "name": "linezolid_server",
+        "url": "http://fdueblab:25013/sse"
+      }
+    ]
+  }
