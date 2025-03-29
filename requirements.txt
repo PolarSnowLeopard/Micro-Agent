@@ -23,6 +23,7 @@ boto3~=1.37.16
 # numpy
 # datasets~=3.2.0
 fastapi~=0.115.11
+# fastapi-mcp
 # gymnasium~=1.0.0
 # pillow~=10.4.0
 # browsergym~=0.13.3
