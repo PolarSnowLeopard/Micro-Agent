@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent流式执行演示</title>
+    <!-- 引入Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .step-card {
+            margin-bottom: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .step-header {
+            padding: 12px 15px;
+            border-bottom: 1px solid #dee2e6;
+            background-color: #f1f3f5;
+            border-radius: 8px 8px 0 0;
+            font-weight: bold;
+        }
+        .step-content {
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 0 0 8px 8px;
+            white-space: pre-wrap;
+        }
+        .thought {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 6px;
+        }
+        .action {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #d1ecf1;
+            border-radius: 6px;
+        }
+        .action-result {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f8d7da;
+            border-radius: 6px;
+        }
+        .loader {
+            margin: 20px auto;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 2s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .task-button {
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">Agent流式执行演示</h1>
+        
+        <!-- 任务选择按钮 -->
+        <div class="mb-4">
+            <h4>选择要执行的任务：</h4>
+            <div class="d-flex flex-wrap">
+                <button class="btn btn-primary task-button" data-task="code_analysis">代码分析</button>
+                <button class="btn btn-success task-button" data-task="service_packaging">服务封装</button>
+                <button class="btn btn-warning task-button" data-task="remote_deploy">远程部署</button>
+                <button class="btn btn-info task-button" data-task="system_info">系统信息</button>
+            </div>
+        </div>
+        
+        <!-- API选择 -->
+        <div class="mb-4">
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="apiOption" id="flaskApi" value="flask" checked>
+                <label class="form-check-label" for="flaskApi">Flask API</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="apiOption" id="fastApi" value="fastapi">
+                <label class="form-check-label" for="fastApi">FastAPI</label>
+            </div>
+        </div>
+        
+        <!-- 状态和进度 -->
+        <div id="statusBar" class="alert alert-info mb-4" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center">
+                <span id="statusText">正在执行任务...</span>
+                <div class="loader"></div>
+            </div>
+        </div>
+        
+        <!-- 步骤显示区域 -->
+        <div id="stepsContainer" class="mb-4"></div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 获取DOM元素
+            const stepsContainer = document.getElementById('stepsContainer');
+            const statusBar = document.getElementById('statusBar');
+            const statusText = document.getElementById('statusText');
+            const taskButtons = document.querySelectorAll('.task-button');
+            
+            // API基础URL
+            const API_BASE_URLS = {
+                flask: '/stream/run/',   // Flask API
+                fastapi: '/stream/run/'  // FastAPI
+            };
+            
+            // 存储所有步骤
+            let stepResults = [];
+            let eventSource = null;
+            
+            // 添加任务按钮点击事件
+            taskButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const taskName = this.getAttribute('data-task');
+                    startTask(taskName);
+                });
+            });
+            
+            // 开始执行任务
+            function startTask(taskName) {
+                // 重置界面
+                stepsContainer.innerHTML = '';
+                stepResults = [];
+                
+                // 显示状态栏
+                statusBar.style.display = 'block';
+                statusText.textContent = `正在执行 ${taskName.replace('_', ' ')} 任务...`;
+                
+                // 获取选中的API
+                const apiType = document.querySelector('input[name="apiOption"]:checked').value;
+                const apiUrl = API_BASE_URLS[apiType] + taskName;
+                
+                // 关闭已有的EventSource连接
+                if (eventSource) {
+                    eventSource.close();
+                }
+                
+                // 创建新的EventSource连接
+                eventSource = new EventSource(apiUrl);
+                
+                // 处理事件
+                eventSource.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        // 检查是否有错误
+                        if (data.error) {
+                            addErrorStep(data.error);
+                            finishTask('失败');
+                            return;
+                        }
+                        
+                        // 添加步骤
+                        addStep(data);
+                        
+                        // 检查是否是最后一步
+                        if (data.is_last) {
+                            finishTask('完成');
+                        }
+                    } catch (e) {
+                        console.error('解析数据失败:', e);
+                        addErrorStep('解析数据失败: ' + e.message);
+                    }
+                };
+                
+                eventSource.onerror = function(error) {
+                    console.error('EventSource 错误:', error);
+                    addErrorStep('连接错误，请检查服务器状态');
+                    finishTask('错误');
+                };
+            }
+            
+            // 添加步骤
+            function addStep(data) {
+                // 保存步骤
+                stepResults.push(data);
+                
+                // 创建步骤卡片
+                const stepCard = document.createElement('div');
+                stepCard.className = 'step-card';
+                
+                // 创建头部
+                const stepHeader = document.createElement('div');
+                stepHeader.className = 'step-header';
+                stepHeader.textContent = `步骤 ${data.step}`;
+                
+                // 创建内容
+                const stepContent = document.createElement('div');
+                stepContent.className = 'step-content';
+                
+                // 添加思考内容
+                if (data.thought) {
+                    const thought = document.createElement('div');
+                    thought.className = 'thought';
+                    thought.innerHTML = '<strong>思考:</strong><br>' + data.thought;
+                    stepContent.appendChild(thought);
+                }
+                
+                // 添加行动内容
+                if (data.action) {
+                    const action = document.createElement('div');
+                    action.className = 'action';
+                    action.innerHTML = '<strong>行动:</strong><br>' + data.action;
+                    stepContent.appendChild(action);
+                }
+                
+                // 添加行动结果
+                if (data.action_result) {
+                    const actionResult = document.createElement('div');
+                    actionResult.className = 'action-result';
+                    actionResult.innerHTML = '<strong>结果:</strong><br>' + data.action_result;
+                    stepContent.appendChild(actionResult);
+                }
+                
+                // 组装卡片
+                stepCard.appendChild(stepHeader);
+                stepCard.appendChild(stepContent);
+                
+                // 添加到容器
+                stepsContainer.appendChild(stepCard);
+                
+                // 滚动到底部
+                window.scrollTo(0, document.body.scrollHeight);
+            }
+            
+            // 添加错误步骤
+            function addErrorStep(errorMessage) {
+                const errorCard = document.createElement('div');
+                errorCard.className = 'step-card';
+                
+                const errorHeader = document.createElement('div');
+                errorHeader.className = 'step-header';
+                errorHeader.textContent = '错误';
+                
+                const errorContent = document.createElement('div');
+                errorContent.className = 'step-content';
+                errorContent.style.backgroundColor = '#f8d7da';
+                errorContent.textContent = errorMessage;
+                
+                errorCard.appendChild(errorHeader);
+                errorCard.appendChild(errorContent);
+                
+                stepsContainer.appendChild(errorCard);
+            }
+            
+            // 完成任务
+            function finishTask(status) {
+                // 关闭EventSource
+                if (eventSource) {
+                    eventSource.close();
+                    eventSource = null;
+                }
+                
+                // 更新状态栏
+                statusText.textContent = `任务${status}`;
+                
+                // 3秒后隐藏状态栏
+                setTimeout(() => {
+                    statusBar.style.display = 'none';
+                }, 3000);
+            }
+        });
+    </script>
+</body>
+</html> 
