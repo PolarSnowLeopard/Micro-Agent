@@ -118,6 +118,7 @@ class BaseAgent(BaseModel, ABC):
 
         Args:
             request: Optional initial user request to process.
+                    如果为None并且已经运行过，则直接返回当前结果
 
         Returns:
             A list of strings summarizing the execution results.
@@ -125,41 +126,49 @@ class BaseAgent(BaseModel, ABC):
         Raises:
             RuntimeError: If the agent is not in IDLE state at start.
         """
-        if self.state != AgentState.IDLE:
+        if self.state != AgentState.IDLE and request is not None:
             raise RuntimeError(f"Cannot run agent from state: {self.state}")
+        
+        # 如果请求为None但有历史记录，直接返回当前结果而不重新执行
+        if request is None and hasattr(self, "_results") and self._results:
+            return self._results
 
         if request:
             self.update_memory("user", request)
 
         results: List[Record] = []
-        async with self.state_context(AgentState.RUNNING):
-            while (
-                self.current_step < self.max_steps and self.state != AgentState.FINISHED
-            ):
-                self.current_step += 1
-                logger.info(f"Executing step {self.current_step}/{self.max_steps}")
-                step_result = await self.step()
+        # 仅当有请求或尚未运行时进入运行状态
+        if request is not None or self.state == AgentState.IDLE:
+            async with self.state_context(AgentState.RUNNING):
+                while (
+                    self.current_step < self.max_steps and self.state != AgentState.FINISHED
+                ):
+                    self.current_step += 1
+                    logger.info(f"Executing step {self.current_step}/{self.max_steps}")
+                    step_result = await self.step()
 
-                # Check for stuck state
-                if self.is_stuck():
-                    self.handle_stuck_state()
+                    # Check for stuck state
+                    if self.is_stuck():
+                        self.handle_stuck_state()
 
-                step_result["step"] = self.current_step
-                results.append(step_result)
-                # results.append(f"Step {self.current_step}: {step_result}")
+                    step_result["step"] = self.current_step
+                    results.append(step_result)
+                    # results.append(f"Step {self.current_step}: {step_result}")
 
-            if self.current_step >= self.max_steps:
-                self.current_step = 0
-                self.state = AgentState.IDLE
-                results.append(
-                    Record(
-                        thought=f"Terminated: Reached max steps ({self.max_steps})",
-                        step=str(self.current_step),
-                    ).to_dict()
-                )
-                # results.append(f"Terminated: Reached max steps ({self.max_steps})")
-        await SANDBOX_CLIENT.cleanup()
-        # return "\n".join(results) if results else "No steps executed"
+                if self.current_step >= self.max_steps:
+                    self.current_step = 0
+                    self.state = AgentState.IDLE
+                    results.append(
+                        Record(
+                            thought=f"Terminated: Reached max steps ({self.max_steps})",
+                            step=str(self.current_step),
+                        ).to_dict()
+                    )
+                    # results.append(f"Terminated: Reached max steps ({self.max_steps})")
+            await SANDBOX_CLIENT.cleanup()
+        
+        # 保存结果以便后续访问
+        self._results = results
         return results if results else []
 
     @abstractmethod
