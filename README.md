@@ -189,10 +189,11 @@ Micro-Agent 框架使用两个主要的配置文件：
 python app.py
 ```
 
-服务默认在8003端口启动，可通过以下方式访问：
+服务默认在5000端口启动，可通过以下方式访问：
 
-- API文档：http://localhost:8003/
-- 演示页面：http://localhost:8003/stream_demo
+- API文档：http://localhost:5000/
+- 演示页面：http://localhost:5000/stream_demo
+- 文件上传演示：http://localhost:5000/upload_demo
 
 ### 示例任务
 
@@ -202,6 +203,24 @@ python app.py
 2. **服务封装**：将代码封装为微服务
 3. **远程部署**：将服务部署到远程服务器
 4. **系统信息**：获取系统基本信息
+5. **列出工具**：显示Agent可以使用的所有工具
+
+### API端点
+
+服务提供以下API端点：
+
+1. **GET /stream/run/{task_name}**: 流式执行指定任务
+   - 支持的任务: code_analysis, service_packaging, remote_deploy, system_info, list_tools
+   - 返回SSE格式的流式数据
+
+2. **POST /api/agent/code_analysis**: 上传ZIP文件并执行代码分析
+   - 接收一个ZIP格式的文件作为输入
+   - 将文件解压到临时目录
+   - 执行代码分析任务
+   - 返回与GET端点相同格式的流式数据
+
+3. **GET /upload_demo**: 文件上传演示页面
+   - 提供文件上传和代码分析的Web界面
 
 ### 注意事项
 
@@ -211,7 +230,7 @@ python app.py
 
 ### 自定义任务
 
-如需添加新的任务类型，请在`fastapi_app.py`文件中修改`task_configs`字典，添加新的任务配置：
+如需添加新的任务类型，请在`app.py`文件中修改`task_configs`字典，添加新的任务配置：
 
 ```python
 task_configs = {

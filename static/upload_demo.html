@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent流式执行演示</title>
+    <title>代码分析文件上传</title>
     <!-- 引入Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -60,10 +60,6 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        .task-button {
-            margin-right: 10px;
-            margin-bottom: 10px;
-        }
         .final-result {
             margin-top: 30px;
             padding: 15px;
@@ -94,37 +90,26 @@
             margin-right: 5px;
             margin-bottom: 10px;
         }
-        .task-description {
-            margin-bottom: 15px;
-            font-style: italic;
-            color: #6c757d;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="mb-4">Agent流式执行演示</h1>
+        <h1 class="mb-4">代码分析文件上传</h1>
         
-        <!-- 任务选择按钮 -->
-        <div class="mb-4">
-            <h4>选择要执行的任务：</h4>
-            <div class="d-flex flex-wrap">
-                <button class="btn btn-primary task-button" data-task="code_analysis" data-description="分析代码结构和功能 - 最终输出function.json">代码分析</button>
-                <button class="btn btn-success task-button" data-task="service_packaging" data-description="将代码封装为微服务">服务封装</button>
-                <button class="btn btn-warning task-button" data-task="remote_deploy" data-description="将服务部署到远程服务器">远程部署</button>
-                <button class="btn btn-info task-button" data-task="system_info" data-description="获取系统信息（CPU、内存、磁盘、网络等）">系统信息</button>
-                <button class="btn btn-secondary task-button" data-task="list_tools" data-description="列出代理可以使用的工具">列出工具</button>
+        <!-- 文件上传表单 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4>上传ZIP文件进行分析</h4>
             </div>
-        </div>
-        
-        <!-- 任务描述 -->
-        <div id="taskDescription" class="task-description" style="display: none;"></div>
-        
-        <!-- API选择 -->
-        <div class="mb-4" style="display: none;">
-            <div class="form-check form-check-inline">
-                <input class="form-check-input" type="radio" name="apiOption" id="fastApi" value="fastapi" checked>
-                <label class="form-check-label" for="fastApi">FastAPI</label>
+            <div class="card-body">
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="zipFile" class="form-label">选择ZIP文件:</label>
+                        <input type="file" class="form-control" id="zipFile" name="file" accept=".zip" required>
+                        <div class="form-text">请上传包含待分析代码的ZIP文件</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">开始分析</button>
+                </form>
             </div>
         </div>
         
@@ -154,67 +139,34 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // 获取DOM元素
+            const uploadForm = document.getElementById('uploadForm');
             const stepsContainer = document.getElementById('stepsContainer');
             const statusBar = document.getElementById('statusBar');
             const statusText = document.getElementById('statusText');
-            const taskButtons = document.querySelectorAll('.task-button');
             const finalResultContainer = document.getElementById('finalResultContainer');
             const finalResultTabs = document.getElementById('finalResultTabs');
             const finalResultContent = document.getElementById('finalResultContent');
-            const taskDescription = document.getElementById('taskDescription');
             
-            // API基础URL
-            const API_BASE_URL = '/stream/run/';  // FastAPI基础URL
-            
-            // 任务信息配置
-            const taskInfo = {
-                "code_analysis": {
-                    description: "分析代码结构和功能 - 最终输出function.json",
-                    expectedOutputs: ["function"]
-                },
-                "service_packaging": {
-                    description: "将代码封装为微服务",
-                    expectedOutputs: []
-                },
-                "remote_deploy": {
-                    description: "将服务部署到远程服务器",
-                    expectedOutputs: []
-                },
-                "system_info": {
-                    description: "获取系统信息（CPU、内存、磁盘、网络等）",
-                    expectedOutputs: []
-                },
-                "list_tools": {
-                    description: "列出代理可以使用的工具",
-                    expectedOutputs: []
-                }
-            };
+            // API端点
+            const API_ENDPOINT = '/api/agent/code_analysis';
             
             // 存储所有步骤和最终结果
             let stepResults = [];
             let finalResults = null;
             let eventSource = null;
-            let currentTask = null;
             
-            // 添加任务按钮点击事件
-            taskButtons.forEach(button => {
-                button.addEventListener('click', function() {
-                    const taskName = this.getAttribute('data-task');
-                    const description = this.getAttribute('data-description');
-                    
-                    // 显示任务描述
-                    taskDescription.textContent = description;
-                    taskDescription.style.display = 'block';
-                    
-                    // 启动任务
-                    startTask(taskName);
-                });
-            });
-            
-            // 开始执行任务
-            function startTask(taskName) {
-                // 设置当前任务
-                currentTask = taskName;
+            // 表单提交处理
+            uploadForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                // 获取文件
+                const fileInput = document.getElementById('zipFile');
+                const file = fileInput.files[0];
+                
+                if (!file) {
+                    alert('请选择一个ZIP文件');
+                    return;
+                }
                 
                 // 重置界面
                 stepsContainer.innerHTML = '';
@@ -226,67 +178,101 @@
                 
                 // 显示状态栏
                 statusBar.style.display = 'block';
-                statusText.textContent = `正在执行 ${taskName.replace('_', ' ')} 任务...`;
+                statusText.textContent = '上传文件并执行代码分析...';
                 
-                // 构建API URL
-                const apiUrl = API_BASE_URL + taskName;
+                // 创建FormData对象
+                const formData = new FormData();
+                formData.append('file', file);
                 
-                // 关闭已有的EventSource连接
-                if (eventSource) {
-                    eventSource.close();
-                }
-                
-                // 创建新的EventSource连接
-                eventSource = new EventSource(apiUrl);
-                
-                // 处理事件
-                eventSource.onmessage = function(event) {
-                    try {
-                        const data = JSON.parse(event.data);
-                        
-                        // 检查是否有错误
-                        if (data.error) {
-                            addErrorStep(data.error);
-                            finishTask('失败');
-                            return;
-                        }
-                        
-                        // 检查是否有警告消息
-                        if (data.warning) {
-                            addWarningStep(data.warning);
-                            finishTask('完成但有警告');
-                            return;
-                        }
-                        
-                        // 检查是否是包含最终结果的消息
-                        if (data.is_final_result && data.final_results) {
-                            finalResults = data.final_results;
-                            displayFinalResults(finalResults);
-                            finishTask('完成');
-                            return;
-                        }
-                        
-                        // 添加正常步骤
-                        if (data.step) {
-                            addStep(data);
-                        }
-                        
-                        // 检查是否是最后一步（但没有最终结果）
-                        if (data.is_last && !data.is_final_result && !data.warning) {
-                            finishTask('完成但无最终结果');
-                        }
-                    } catch (e) {
-                        console.error('解析数据失败:', e);
-                        addErrorStep('解析数据失败: ' + e.message);
+                // 发送文件
+                fetch(API_ENDPOINT, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP错误! 状态码: ${response.status}`);
                     }
-                };
-                
-                eventSource.onerror = function(error) {
-                    console.error('EventSource 错误:', error);
-                    addErrorStep('连接错误，请检查服务器状态');
+                    
+                    // 关闭已有的EventSource连接
+                    if (eventSource) {
+                        eventSource.close();
+                    }
+                    
+                    // 创建新的EventSource连接
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder("utf-8");
+                    let buffer = '';
+                    
+                    // 处理数据流
+                    function processStream() {
+                        return reader.read().then(({ done, value }) => {
+                            if (done) {
+                                return;
+                            }
+                            
+                            // 解码数据并添加到缓冲区
+                            buffer += decoder.decode(value, { stream: true });
+                            
+                            // 处理缓冲区中的每一行数据
+                            const lines = buffer.split("\n\n");
+                            buffer = lines.pop(); // 保留可能不完整的最后一行
+                            
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    try {
+                                        const data = JSON.parse(line.substring(6));
+                                        
+                                        // 检查是否有错误
+                                        if (data.error) {
+                                            addErrorStep(data.error);
+                                            finishTask('失败');
+                                            return;
+                                        }
+                                        
+                                        // 检查是否有警告消息
+                                        if (data.warning) {
+                                            addWarningStep(data.warning);
+                                            finishTask('完成但有警告');
+                                            return;
+                                        }
+                                        
+                                        // 检查是否是包含最终结果的消息
+                                        if (data.is_final_result && data.final_results) {
+                                            finalResults = data.final_results;
+                                            displayFinalResults(finalResults);
+                                            finishTask('完成');
+                                            return;
+                                        }
+                                        
+                                        // 添加正常步骤
+                                        if (data.step) {
+                                            addStep(data);
+                                        }
+                                        
+                                        // 检查是否是最后一步（但没有最终结果）
+                                        if (data.is_last && !data.is_final_result && !data.warning) {
+                                            finishTask('完成但无最终结果');
+                                        }
+                                    } catch (e) {
+                                        console.error('解析数据失败:', e, line);
+                                        addErrorStep('解析数据失败: ' + e.message);
+                                    }
+                                }
+                            }
+                            
+                            return processStream();
+                        });
+                    }
+                    
+                    return processStream();
+                })
+                .catch(error => {
+                    console.error('请求错误:', error);
+                    addErrorStep('请求错误: ' + error.message);
                     finishTask('错误');
-                };
-            }
+                });
+            });
             
             // 添加步骤
             function addStep(data) {
@@ -391,11 +377,7 @@
                 const resultTypes = Object.keys(results);
                 
                 if (resultTypes.length === 0) {
-                    const noResultMsg = taskInfo[currentTask]?.expectedOutputs.length > 0 ? 
-                        `没有找到任务 ${currentTask} 的预期输出` : 
-                        '此任务没有特定的最终输出文件';
-                    
-                    finalResultContent.textContent = noResultMsg;
+                    finalResultContent.textContent = '没有找到任务的预期输出';
                     finalResultContainer.style.display = 'block';
                     return;
                 }
@@ -458,12 +440,6 @@
             
             // 完成任务
             function finishTask(status) {
-                // 关闭EventSource
-                if (eventSource) {
-                    eventSource.close();
-                    eventSource = null;
-                }
-                
                 // 更新状态栏
                 statusText.textContent = `任务${status}`;
                 

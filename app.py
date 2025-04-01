@@ -4,8 +4,10 @@ import os
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+import shutil
+from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,8 +18,10 @@ from app.config import WORKSPACE_ROOT
 from app.prompt.task import (
     CODE_ANALYSIS_PROMPT,
     SERVICE_PACKAGING_PROMPT,
-    REMOTE_DEPLOY_PROMPT
+    REMOTE_DEPLOY_PROMPT,
+    get_code_analysis_prompt
 )
+from app.utils.file_utils import extract_zip
 
 # 设置日志记录器
 logger = logging.getLogger(__name__)
@@ -80,11 +84,15 @@ async def stream_run(task_name: str):
             ]
         },
         "system_info": {
-            "prompt": "列出你可以使用的工具，然后直接结束",
-            # "prompt": "我想知道当前机器的一些信息，比如cpu、内存、磁盘、网络等",
+            "prompt": "我想知道当前机器的一些信息，比如cpu、内存、磁盘、网络等",
             "outputs": [
                 # 当前没有特定的最终输出文件，如果将来有可以在这里添加
-                {"name": "function", "file": f"{WORKSPACE_ROOT}/visualization/function.json"}
+            ]
+        },
+        "list_tools": {
+            "prompt": "列出你可以使用的工具，然后直接结束",
+            "outputs": [
+                # 当前没有特定的最终输出文件，如果将来有可以在这里添加
             ]
         }
     }
@@ -192,7 +200,166 @@ async def stream_demo():
     """
     return FileResponse("static/stream_demo.html")
 
+# 添加文件上传演示页面路由
+@app.get("/upload_demo", tags=["demo"])
+async def upload_demo():
+    """
+    返回文件上传演示页面
+    """
+    return FileResponse("static/upload_demo.html")
+
+# 添加代码分析任务的POST API端点
+@app.post("/api/agent/code_analysis", tags=["api"])
+async def code_analysis_upload(file: UploadFile = File(...)):
+    """
+    上传ZIP文件并执行代码分析任务
+    
+    参数:
+        file: ZIP格式的代码文件
+    
+    返回:
+        流式SSE响应，每个step完成后返回一个事件
+        最后一个事件包含任务特定的最终结果
+    """
+    # 确保temp目录存在
+    workspace = Path(f"{WORKSPACE_ROOT}")
+    workspace.mkdir(parents=True, exist_ok=True)
+    
+    # 生成唯一的文件名和解压目录
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_filename = f"{workspace}/{timestamp}_{file.filename}"
+    extract_path = f"{workspace}/{timestamp}_extracted"
+    
+    try:
+        # 保存上传的文件
+        with open(zip_filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # 解压文件
+        logger.info(f"解压文件到: {extract_path}")
+        extract_zip(zip_filename, extract_path)
+        
+        # 创建一个异步生成器来执行代码分析任务
+        async def generate_stream():
+            from run_mcp import MCPRunner
+            
+            runner = None
+            full_result = []
+            try:
+                # 使用与code_analysis任务相同的配置
+                task_name = "code_analysis"
+                task_config = {
+                    "prompt": get_code_analysis_prompt(workspace=workspace, 
+                                                       input_dir=extract_path),
+                    "outputs": [
+                        {"name": "function", "file": f"{WORKSPACE_ROOT}/temp/function.json"}
+                    ]
+                }
+                
+                agent_name = "Code Analysis Agent"
+                prompt = task_config["prompt"]
+                
+                runner = MCPRunner(agent_name)
+                await runner.initialize("stdio", None)
+                
+                # 运行流式Agent
+                async for step_result in runner.run_stream(prompt):
+                    # 将结果转为SSE格式
+                    json_result = json.dumps(step_result, ensure_ascii=False)
+
+                    if not step_result.get("is_last", False):
+                        full_result.append(step_result)
+                        yield f"data: {json_result}\n\n"
+                    
+                    # 如果是最后一个结果，保存完整记录并返回特定输出
+                    else:        
+                        # 保存完整记录到文件
+                        from app.utils.visualize_record import save_record_to_json, generate_visualization_html
+                        full_json = json.dumps(full_result, ensure_ascii=False)
+                        save_record_to_json(task_name, full_json)
+                        generate_visualization_html(task_name)
+                        
+                        # 读取任务特定的最终输出文件
+                        final_results = {}
+                        
+                        # 按照任务配置读取输出文件
+                        for output_config in task_config.get("outputs", []):
+                            output_name = output_config["name"]
+                            output_file = output_config["file"]
+                            
+                            try:
+                                file_path = Path(output_file)
+                                if file_path.exists():
+                                    with open(file_path, 'r', encoding='utf-8') as f:
+                                        content = f.read()
+                                        try:
+                                            final_results[output_name] = json.loads(content)
+                                        except json.JSONDecodeError:
+                                            final_results[output_name] = content
+                            except Exception as e:
+                                logger.warning(f"无法读取输出文件 {output_file}: {str(e)}")
+                        
+                        # 调试日志，查看最终结果
+                        logger.info(f"最终结果文件状态: {final_results}")
+                        
+                        # 仅当有最终结果时才发送
+                        if final_results:
+                            # 发送包含最终结果的最后一条消息
+                            last_message = {
+                                "is_last": True,
+                                "is_final_result": True,
+                                "final_results": final_results
+                            }
+                            yield f"data: {json.dumps(last_message, ensure_ascii=False)}\n\n"
+                        else:
+                            # 如果没有找到最终结果，也发送消息通知前端
+                            logger.warning(f"没有找到任务 {task_name} 的最终输出文件")
+                            last_message = {
+                                "is_last": True,
+                                "warning": f"没有找到任务 {task_name} 的最终输出文件"
+                            }
+                            yield f"data: {json.dumps(last_message, ensure_ascii=False)}\n\n"
+                    
+            except Exception as e:
+                error_msg = f"执行出错: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                yield f"data: {json.dumps({'error': error_msg, 'is_last': True})}\n\n"
+            finally:
+                if runner:
+                    await runner.cleanup()
+                
+                # 清理临时文件
+                try:
+                    if os.path.exists(zip_filename):
+                        os.remove(zip_filename)
+                    if os.path.exists(extract_path):
+                        shutil.rmtree(extract_path)
+                    if os.path.exists(f"{workspace}/temp"):
+                        shutil.rmtree(f"{workspace}/temp")
+                except Exception as e:
+                    logger.warning(f"清理临时文件失败: {str(e)}")
+        
+        # 返回流式响应
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # 禁用Nginx缓冲
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"处理上传文件时出错: {str(e)}", exc_info=True)
+        # 确保清理临时文件
+        if os.path.exists(zip_filename):
+            os.remove(zip_filename)
+        if os.path.exists(extract_path):
+            shutil.rmtree(extract_path)
+        raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
+
 # 启动应用
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8003) 
+    uvicorn.run(app, host="0.0.0.0", port=5000) 
