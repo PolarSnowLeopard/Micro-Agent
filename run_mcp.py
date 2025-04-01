@@ -13,6 +13,7 @@ from app.prompt.task import (
     REMOTE_DEPLOY_PROMPT
 )
 from app.utils.visualize_record import save_record_to_json, generate_visualization_html
+from app.schema import AgentState
 
 class MCPRunner:
     """MCP智能体运行器类，具有适当的路径处理和配置。"""
@@ -135,6 +136,65 @@ class MCPRunner:
         """清理智能体资源。"""
         await self.agent.cleanup()
         logger.info("会话已结束")
+
+    async def run_stream(self, prompt: str):
+        """
+        以流式方式运行智能体，每完成一个步骤就yield结果
+
+        参数:
+            prompt: 任务的prompt
+        
+        返回:
+            异步生成器，每次返回单个步骤的结果
+        """
+        if not await self.ensure_connection():
+            yield {"error": "无法连接到MCP服务器，请检查服务器状态或重启程序"}
+            return
+
+        try:
+            # 初始化运行状态
+            self.agent.current_step = 0
+            self.agent.state = AgentState.IDLE
+            
+            if prompt:
+                self.agent.update_memory("user", prompt)
+            
+            # 使用状态上下文运行agent
+            async with self.agent.state_context(AgentState.RUNNING):
+                while (
+                    self.agent.current_step < self.agent.max_steps and 
+                    self.agent.state != AgentState.FINISHED
+                ):
+                    self.agent.current_step += 1
+                    logger.info(f"执行步骤 {self.agent.current_step}/{self.agent.max_steps}")
+                    
+                    # 执行单个步骤
+                    step_result = await self.agent.step()
+                    step_result["step"] = self.agent.current_step
+                    
+                    # 检查是否陷入循环
+                    if self.agent.is_stuck():
+                        self.agent.handle_stuck_state()
+                    
+                    # 将当前步骤结果以JSON格式返回
+                    yield step_result
+                
+                # 达到最大步骤或完成任务
+                if self.agent.current_step >= self.agent.max_steps:
+                    self.agent.current_step = 0
+                    self.agent.state = AgentState.IDLE
+                    yield {
+                        "thought": f"已终止: 达到最大步骤数 ({self.agent.max_steps})",
+                        "step": str(self.agent.current_step),
+                        "is_last": True
+                    }
+                else:
+                    # 标记最后一步
+                    yield {"is_last": True}
+                    
+        except Exception as e:
+            logger.error(f"运行MCPAgent时出错: {str(e)}", exc_info=True)
+            yield {"error": f"运行出错: {str(e)}", "is_last": True}
 
 
 def parse_args() -> argparse.Namespace:
