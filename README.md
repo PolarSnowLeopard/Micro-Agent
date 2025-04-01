@@ -123,3 +123,72 @@ Micro-Agent框架使用两个主要的配置文件：
 ## 日志和调试
 
 系统日志存储在`logs/`目录下，可用于故障排查和系统监控。
+
+## Agent流式执行服务
+
+本项目现在包含一个基于FastAPI的智能体流式执行服务，它提供了实时监控和查看智能体执行过程的能力。
+
+### 主要特性
+
+- **实时流式输出**：通过SSE (Server-Sent Events) 实时展示智能体执行过程
+- **直观的Web界面**：提供友好的Web界面展示执行步骤和结果
+- **任务最终结果展示**：支持展示任务特定的最终输出文件
+- **错误和警告处理**：当文件不存在或读取失败时提供适当的错误和警告信息
+
+### 启动服务
+
+```bash
+# 启动FastAPI服务
+python app.py
+```
+
+服务默认在8003端口启动，可通过以下方式访问：
+
+- API文档：http://localhost:8003/
+- 演示页面：http://localhost:8003/stream_demo
+
+### 示例任务
+
+演示页面提供了以下几个示例任务：
+
+1. **代码分析**：分析代码结构和功能，生成function.json
+2. **服务封装**：将代码封装为微服务
+3. **远程部署**：将服务部署到远程服务器
+4. **系统信息**：获取系统基本信息
+
+### 注意事项
+
+- 本服务只提供FastAPI实现，不再支持Flask实现
+- 流式输出使用SSE技术，确保浏览器支持EventSource API
+- 任务执行结果会保存在visualization目录下
+
+### 自定义任务
+
+如需添加新的任务类型，请在`fastapi_app.py`文件中修改`task_configs`字典，添加新的任务配置：
+
+```python
+task_configs = {
+    "your_task_name": {
+        "prompt": YOUR_TASK_PROMPT,
+        "outputs": [
+            {"name": "output_name", "file": "path/to/output/file.json"}
+        ]
+    },
+    # ... 其他任务
+}
+```
+
+## 贡献指南
+
+欢迎为Micro-Agent项目做出贡献！贡献方式包括但不限于：
+
+- 提交Bug报告
+- 提供新功能建议
+- 改进文档
+- 提交代码修复或新功能实现
+
+请通过GitHub Issues或Pull Requests参与项目贡献。
+
+## 许可证
+
+[MIT许可证](LICENSE)
