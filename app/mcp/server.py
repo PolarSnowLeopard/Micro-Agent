@@ -26,6 +26,7 @@ from app.tool.terminate import Terminate
 from app.tool.remote_docker_manager import RemoteDockerManager
 from app.tool.file_transfer import FileTransfer
 from app.tool.file_saver import FileSaver
+from app.tool.json_saver import JsonSaver
 from app.tool.python_execute import PythonExecute
 from app.tool.terminal import Terminal
 from app.tool.cmd import Cmd
@@ -51,6 +52,7 @@ class MCPServer:
         self.tools["remote_docker_manager"] = RemoteDockerManager()
         self.tools["file_transfer"] = FileTransfer()
         self.tools["file_saver"] = FileSaver()
+        self.tools["json_saver"] = JsonSaver()
         # self.tools["python_execute"] = PythonExecute()
         # self.tools["terminal"] = Terminal()
 
