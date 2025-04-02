@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.llm import LLM
 from app.logger import logger
-from app.sandbox.client import SANDBOX_CLIENT
 from app.schema import ROLE_TYPE, AgentState, Memory, Message, Record
 
 
@@ -165,7 +164,6 @@ class BaseAgent(BaseModel, ABC):
                         ).to_dict()
                     )
                     # results.append(f"Terminated: Reached max steps ({self.max_steps})")
-            await SANDBOX_CLIENT.cleanup()
         
         # 保存结果以便后续访问
         self._results = results
