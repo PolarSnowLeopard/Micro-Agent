@@ -7,19 +7,9 @@ max_tokens = 8192                           # Maximum number of tokens in the re
 temperature = 0.0                           # Controls randomness
 
 # Optional configuration for specific LLM models
-[llm.vision]
-model = "claude-3-7-sonnet-20250219"        # The vision model to use
-base_url = "https://api.anthropic.com/v1/"  # API endpoint URL for vision model
-api_key = "YOUR_API_KEY"                    # Your API key for vision model
-max_tokens = 8192                           # Maximum number of tokens in the response
-temperature = 0.0                           # Controls randomness for vision model
-
-## Sandbox configuration
-#[sandbox]
-#use_sandbox = false
-#image = "python:3.12-slim"
-#work_dir = "/workspace"
-#memory_limit = "1g"  # 512m
-#cpu_limit = 2.0
-#timeout = 300
-#network_enabled = true
+# [llm.vision]
+# model = "claude-3-7-sonnet-20250219"        # The vision model to use
+# base_url = "https://api.anthropic.com/v1/"  # API endpoint URL for vision model
+# api_key = "YOUR_API_KEY"                    # Your API key for vision model
+# max_tokens = 8192                           # Maximum number of tokens in the response
+# temperature = 0.0                           # Controls randomness for vision model
