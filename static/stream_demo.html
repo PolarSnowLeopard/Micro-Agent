@@ -1,478 +1,536 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent流式执行演示</title>
     <!-- 引入Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
     <style>
-        body {
-            padding: 20px;
-            background-color: #f8f9fa;
+      body {
+        padding: 20px;
+        background-color: #f8f9fa;
+      }
+      .step-card {
+        margin-bottom: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .step-header {
+        padding: 12px 15px;
+        border-bottom: 1px solid #dee2e6;
+        background-color: #f1f3f5;
+        border-radius: 8px 8px 0 0;
+        font-weight: bold;
+      }
+      .step-content {
+        padding: 15px;
+        background-color: #fff;
+        border-radius: 0 0 8px 8px;
+        white-space: pre-wrap;
+      }
+      .thought {
+        margin-bottom: 10px;
+        padding: 10px;
+        background-color: #f0f7ff;
+        border-radius: 6px;
+      }
+      .action {
+        margin-bottom: 10px;
+        padding: 10px;
+        background-color: #fff5e6;
+        border-radius: 6px;
+      }
+      .action-result {
+        margin-bottom: 10px;
+        padding: 10px;
+        background-color: #f0fff0;
+        border-radius: 6px;
+      }
+      .loader {
+        margin: 20px auto;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        animation: spin 2s linear infinite;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
         }
-        .step-card {
-            margin-bottom: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        100% {
+          transform: rotate(360deg);
         }
-        .step-header {
-            padding: 12px 15px;
-            border-bottom: 1px solid #dee2e6;
-            background-color: #f1f3f5;
-            border-radius: 8px 8px 0 0;
-            font-weight: bold;
-        }
-        .step-content {
-            padding: 15px;
-            background-color: #fff;
-            border-radius: 0 0 8px 8px;
-            white-space: pre-wrap;
-        }
-        .thought {
-            margin-bottom: 10px;
-            padding: 10px;
-            background-color: #e9ecef;
-            border-radius: 6px;
-        }
-        .action {
-            margin-bottom: 10px;
-            padding: 10px;
-            background-color: #d1ecf1;
-            border-radius: 6px;
-        }
-        .action-result {
-            margin-bottom: 10px;
-            padding: 10px;
-            background-color: #f8d7da;
-            border-radius: 6px;
-        }
-        .loader {
-            margin: 20px auto;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #3498db;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 2s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .task-button {
-            margin-right: 10px;
-            margin-bottom: 10px;
-        }
-        .final-result {
-            margin-top: 30px;
-            padding: 15px;
-            background-color: #e6f7ff;
-            border: 1px solid #91d5ff;
-            border-radius: 8px;
-        }
-        .final-result-header {
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 15px;
-            color: #0050b3;
-        }
-        .final-result-content {
-            background-color: #fff;
-            padding: 15px;
-            border-radius: 6px;
-            border: 1px solid #d9d9d9;
-            max-height: 500px;
-            overflow-y: auto;
-        }
-        .json-viewer {
-            font-family: monospace;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        .tab-button {
-            margin-right: 5px;
-            margin-bottom: 10px;
-        }
-        .task-description {
-            margin-bottom: 15px;
-            font-style: italic;
-            color: #6c757d;
-        }
+      }
+      .task-button {
+        margin-right: 10px;
+        margin-bottom: 10px;
+      }
+      .final-result {
+        margin-top: 30px;
+        padding: 15px;
+        background-color: #e6f7ff;
+        border: 1px solid #91d5ff;
+        border-radius: 8px;
+      }
+      .final-result-header {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 15px;
+        color: #0050b3;
+      }
+      .final-result-content {
+        background-color: #fff;
+        padding: 15px;
+        border-radius: 6px;
+        border: 1px solid #d9d9d9;
+        max-height: 500px;
+        overflow-y: auto;
+      }
+      .json-viewer {
+        font-family: monospace;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .tab-button {
+        margin-right: 5px;
+        margin-bottom: 10px;
+      }
+      .task-description {
+        margin-bottom: 15px;
+        font-style: italic;
+        color: #6c757d;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
-        <h1 class="mb-4">Agent流式执行演示</h1>
-        
-        <!-- 任务选择按钮 -->
-        <div class="mb-4">
-            <h4>选择要执行的任务：</h4>
-            <div class="d-flex flex-wrap">
-                <button class="btn btn-primary task-button" data-task="code_analysis" data-description="分析代码结构和功能 - 最终输出function.json">代码分析</button>
-                <button class="btn btn-success task-button" data-task="service_packaging" data-description="将代码封装为微服务">服务封装</button>
-                <button class="btn btn-warning task-button" data-task="remote_deploy" data-description="将服务部署到远程服务器">远程部署</button>
-                <button class="btn btn-info task-button" data-task="system_info" data-description="获取系统信息（CPU、内存、磁盘、网络等）">系统信息</button>
-                <button class="btn btn-secondary task-button" data-task="list_tools" data-description="列出代理可以使用的工具">列出工具</button>
-            </div>
+      <h1 class="mb-4">Agent流式执行演示</h1>
+
+      <!-- 任务选择按钮 -->
+      <div class="mb-4">
+        <h4>选择要执行的任务：</h4>
+        <div class="d-flex flex-wrap">
+          <button
+            class="btn btn-primary task-button"
+            data-task="code_analysis"
+            data-description="分析代码结构和功能 - 最终输出function.json"
+          >
+            代码分析
+          </button>
+          <button
+            class="btn btn-success task-button"
+            data-task="service_packaging"
+            data-description="将代码封装为微服务"
+          >
+            服务封装
+          </button>
+          <button
+            class="btn btn-warning task-button"
+            data-task="remote_deploy"
+            data-description="将服务部署到远程服务器"
+          >
+            远程部署
+          </button>
+          <button
+            class="btn btn-info task-button"
+            data-task="system_info"
+            data-description="获取系统信息（CPU、内存、磁盘、网络等）"
+          >
+            系统信息
+          </button>
+          <button
+            class="btn btn-secondary task-button"
+            data-task="list_tools"
+            data-description="列出代理可以使用的工具"
+          >
+            列出工具
+          </button>
         </div>
-        
-        <!-- 任务描述 -->
-        <div id="taskDescription" class="task-description" style="display: none;"></div>
-        
-        <!-- API选择 -->
-        <div class="mb-4" style="display: none;">
-            <div class="form-check form-check-inline">
-                <input class="form-check-input" type="radio" name="apiOption" id="fastApi" value="fastapi" checked>
-                <label class="form-check-label" for="fastApi">FastAPI</label>
-            </div>
+      </div>
+
+      <!-- 任务描述 -->
+      <div
+        id="taskDescription"
+        class="task-description"
+        style="display: none"
+      ></div>
+
+      <!-- API选择 -->
+      <div class="mb-4" style="display: none">
+        <div class="form-check form-check-inline">
+          <input
+            class="form-check-input"
+            type="radio"
+            name="apiOption"
+            id="fastApi"
+            value="fastapi"
+            checked
+          />
+          <label class="form-check-label" for="fastApi">FastAPI</label>
         </div>
-        
-        <!-- 状态和进度 -->
-        <div id="statusBar" class="alert alert-info mb-4" style="display: none;">
-            <div class="d-flex justify-content-between align-items-center">
-                <span id="statusText">正在执行任务...</span>
-                <div class="loader"></div>
-            </div>
+      </div>
+
+      <!-- 状态和进度 -->
+      <div id="statusBar" class="alert alert-info mb-4" style="display: none">
+        <div class="d-flex justify-content-between align-items-center">
+          <span id="statusText">正在执行任务...</span>
+          <div class="loader"></div>
         </div>
-        
-        <!-- 最终结果显示区域 -->
-        <div id="finalResultContainer" class="final-result" style="display: none;">
-            <div class="final-result-header">任务最终结果</div>
-            <div id="finalResultTabs" class="mb-3">
-                <!-- 这里将动态添加标签按钮 -->
-            </div>
-            <div id="finalResultContent" class="final-result-content">
-                <!-- 这里将动态添加结果内容 -->
-            </div>
+      </div>
+
+      <!-- 最终结果显示区域 -->
+      <div id="finalResultContainer" class="final-result" style="display: none">
+        <div class="final-result-header">任务最终结果</div>
+        <div id="finalResultTabs" class="mb-3">
+          <!-- 这里将动态添加标签按钮 -->
         </div>
-        
-        <!-- 步骤显示区域 -->
-        <div id="stepsContainer" class="mb-4"></div>
+        <div id="finalResultContent" class="final-result-content">
+          <!-- 这里将动态添加结果内容 -->
+        </div>
+      </div>
+
+      <!-- 步骤显示区域 -->
+      <div id="stepsContainer" class="mb-4"></div>
     </div>
-    
+
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // 获取DOM元素
-            const stepsContainer = document.getElementById('stepsContainer');
-            const statusBar = document.getElementById('statusBar');
-            const statusText = document.getElementById('statusText');
-            const taskButtons = document.querySelectorAll('.task-button');
-            const finalResultContainer = document.getElementById('finalResultContainer');
-            const finalResultTabs = document.getElementById('finalResultTabs');
-            const finalResultContent = document.getElementById('finalResultContent');
-            const taskDescription = document.getElementById('taskDescription');
-            
-            // API基础URL
-            const API_BASE_URL = '/stream/run/';  // FastAPI基础URL
-            
-            // 任务信息配置
-            const taskInfo = {
-                "code_analysis": {
-                    description: "分析代码结构和功能 - 最终输出function.json",
-                    expectedOutputs: ["function"]
-                },
-                "service_packaging": {
-                    description: "将代码封装为微服务",
-                    expectedOutputs: []
-                },
-                "remote_deploy": {
-                    description: "将服务部署到远程服务器",
-                    expectedOutputs: []
-                },
-                "system_info": {
-                    description: "获取系统信息（CPU、内存、磁盘、网络等）",
-                    expectedOutputs: []
-                },
-                "list_tools": {
-                    description: "列出代理可以使用的工具",
-                    expectedOutputs: []
-                }
-            };
-            
-            // 存储所有步骤和最终结果
-            let stepResults = [];
-            let finalResults = null;
-            let eventSource = null;
-            let currentTask = null;
-            
-            // 添加任务按钮点击事件
-            taskButtons.forEach(button => {
-                button.addEventListener('click', function() {
-                    const taskName = this.getAttribute('data-task');
-                    const description = this.getAttribute('data-description');
-                    
-                    // 显示任务描述
-                    taskDescription.textContent = description;
-                    taskDescription.style.display = 'block';
-                    
-                    // 启动任务
-                    startTask(taskName);
-                });
-            });
-            
-            // 开始执行任务
-            function startTask(taskName) {
-                // 设置当前任务
-                currentTask = taskName;
-                
-                // 重置界面
-                stepsContainer.innerHTML = '';
-                finalResultContainer.style.display = 'none';
-                finalResultTabs.innerHTML = '';
-                finalResultContent.innerHTML = '';
-                stepResults = [];
-                finalResults = null;
-                
-                // 显示状态栏
-                statusBar.style.display = 'block';
-                statusText.textContent = `正在执行 ${taskName.replace('_', ' ')} 任务...`;
-                
-                // 构建API URL
-                const apiUrl = API_BASE_URL + taskName;
-                
-                // 关闭已有的EventSource连接
-                if (eventSource) {
-                    eventSource.close();
-                }
-                
-                // 创建新的EventSource连接
-                eventSource = new EventSource(apiUrl);
-                
-                // 处理事件
-                eventSource.onmessage = function(event) {
-                    try {
-                        const data = JSON.parse(event.data);
-                        
-                        // 检查是否有错误
-                        if (data.error) {
-                            addErrorStep(data.error);
-                            finishTask('失败');
-                            return;
-                        }
-                        
-                        // 检查是否有警告消息
-                        if (data.warning) {
-                            addWarningStep(data.warning);
-                            finishTask('完成但有警告');
-                            return;
-                        }
-                        
-                        // 检查是否是包含最终结果的消息
-                        if (data.is_final_result && data.final_results) {
-                            finalResults = data.final_results;
-                            displayFinalResults(finalResults);
-                            finishTask('完成');
-                            return;
-                        }
-                        
-                        // 添加正常步骤
-                        if (data.step) {
-                            addStep(data);
-                        }
-                        
-                        // 检查是否是最后一步（但没有最终结果）
-                        if (data.is_last && !data.is_final_result && !data.warning) {
-                            finishTask('完成但无最终结果');
-                        }
-                    } catch (e) {
-                        console.error('解析数据失败:', e);
-                        addErrorStep('解析数据失败: ' + e.message);
-                    }
-                };
-                
-                eventSource.onerror = function(error) {
-                    console.error('EventSource 错误:', error);
-                    addErrorStep('连接错误，请检查服务器状态');
-                    finishTask('错误');
-                };
-            }
-            
-            // 添加步骤
-            function addStep(data) {
-                // 保存步骤
-                stepResults.push(data);
-                
-                // 创建步骤卡片
-                const stepCard = document.createElement('div');
-                stepCard.className = 'step-card';
-                
-                // 创建头部
-                const stepHeader = document.createElement('div');
-                stepHeader.className = 'step-header';
-                stepHeader.textContent = `步骤 ${data.step}`;
-                
-                // 创建内容
-                const stepContent = document.createElement('div');
-                stepContent.className = 'step-content';
-                
-                // 添加思考内容
-                if (data.thought) {
-                    const thought = document.createElement('div');
-                    thought.className = 'thought';
-                    thought.innerHTML = '<strong>思考:</strong><br>' + data.thought;
-                    stepContent.appendChild(thought);
-                }
-                
-                // 添加行动内容
-                if (data.action) {
-                    const action = document.createElement('div');
-                    action.className = 'action';
-                    action.innerHTML = '<strong>行动:</strong><br>' + data.action;
-                    stepContent.appendChild(action);
-                }
-                
-                // 添加行动结果
-                if (data.action_result) {
-                    const actionResult = document.createElement('div');
-                    actionResult.className = 'action-result';
-                    actionResult.innerHTML = '<strong>结果:</strong><br>' + data.action_result;
-                    stepContent.appendChild(actionResult);
-                }
-                
-                // 组装卡片
-                stepCard.appendChild(stepHeader);
-                stepCard.appendChild(stepContent);
-                
-                // 添加到容器
-                stepsContainer.appendChild(stepCard);
-                
-                // 滚动到底部
-                window.scrollTo(0, document.body.scrollHeight);
-            }
-            
-            // 添加错误步骤
-            function addErrorStep(errorMessage) {
-                const errorCard = document.createElement('div');
-                errorCard.className = 'step-card';
-                
-                const errorHeader = document.createElement('div');
-                errorHeader.className = 'step-header';
-                errorHeader.textContent = '错误';
-                
-                const errorContent = document.createElement('div');
-                errorContent.className = 'step-content';
-                errorContent.style.backgroundColor = '#f8d7da';
-                errorContent.textContent = errorMessage;
-                
-                errorCard.appendChild(errorHeader);
-                errorCard.appendChild(errorContent);
-                
-                stepsContainer.appendChild(errorCard);
-            }
-            
-            // 添加警告步骤
-            function addWarningStep(warningMessage) {
-                const warningCard = document.createElement('div');
-                warningCard.className = 'step-card';
-                
-                const warningHeader = document.createElement('div');
-                warningHeader.className = 'step-header';
-                warningHeader.textContent = '警告';
-                
-                const warningContent = document.createElement('div');
-                warningContent.className = 'step-content';
-                warningContent.style.backgroundColor = '#fff3cd';
-                warningContent.textContent = warningMessage;
-                
-                warningCard.appendChild(warningHeader);
-                warningCard.appendChild(warningContent);
-                
-                stepsContainer.appendChild(warningCard);
-            }
-            
-            // 显示最终结果
-            function displayFinalResults(results) {
-                // 清空之前的内容
-                finalResultTabs.innerHTML = '';
-                finalResultContent.innerHTML = '';
-                
-                // 创建结果类型标签
-                const resultTypes = Object.keys(results);
-                
-                if (resultTypes.length === 0) {
-                    const noResultMsg = taskInfo[currentTask]?.expectedOutputs.length > 0 ? 
-                        `没有找到任务 ${currentTask} 的预期输出` : 
-                        '此任务没有特定的最终输出文件';
-                    
-                    finalResultContent.textContent = noResultMsg;
-                    finalResultContainer.style.display = 'block';
-                    return;
-                }
-                
-                // 为每个结果类型创建标签按钮
-                resultTypes.forEach((type, index) => {
-                    const tabButton = document.createElement('button');
-                    tabButton.className = `btn ${index === 0 ? 'btn-primary' : 'btn-outline-primary'} tab-button`;
-                    tabButton.textContent = type;
-                    tabButton.dataset.resultType = type;
-                    tabButton.addEventListener('click', function() {
-                        // 切换按钮样式
-                        document.querySelectorAll('.tab-button').forEach(btn => {
-                            btn.className = 'btn btn-outline-primary tab-button';
-                        });
-                        this.className = 'btn btn-primary tab-button';
-                        
-                        // 显示对应结果
-                        showResultContent(this.dataset.resultType);
-                    });
-                    
-                    finalResultTabs.appendChild(tabButton);
-                });
-                
-                // 默认显示第一个结果
-                showResultContent(resultTypes[0]);
-                
-                // 显示结果容器
-                finalResultContainer.style.display = 'block';
-                
-                // 滚动到结果区域
-                finalResultContainer.scrollIntoView({ behavior: 'smooth' });
-            }
-            
-            // 显示特定类型的结果内容
-            function showResultContent(type) {
-                finalResultContent.innerHTML = '';
-                
-                const resultData = finalResults[type];
-                
-                // 创建显示元素
-                const jsonViewer = document.createElement('div');
-                jsonViewer.className = 'json-viewer';
-                
-                // 格式化JSON
-                let formattedContent;
-                try {
-                    if (typeof resultData === 'object') {
-                        formattedContent = JSON.stringify(resultData, null, 2);
-                    } else {
-                        formattedContent = resultData;
-                    }
-                } catch (e) {
-                    formattedContent = `无法解析结果: ${e.message}`;
-                }
-                
-                jsonViewer.textContent = formattedContent;
-                finalResultContent.appendChild(jsonViewer);
-            }
-            
-            // 完成任务
-            function finishTask(status) {
-                // 关闭EventSource
-                if (eventSource) {
-                    eventSource.close();
-                    eventSource = null;
-                }
-                
-                // 更新状态栏
-                statusText.textContent = `任务${status}`;
-                
-                // 3秒后隐藏状态栏
-                setTimeout(() => {
-                    statusBar.style.display = 'none';
-                }, 3000);
-            }
+      document.addEventListener("DOMContentLoaded", function () {
+        // 获取DOM元素
+        const stepsContainer = document.getElementById("stepsContainer");
+        const statusBar = document.getElementById("statusBar");
+        const statusText = document.getElementById("statusText");
+        const taskButtons = document.querySelectorAll(".task-button");
+        const finalResultContainer = document.getElementById(
+          "finalResultContainer"
+        );
+        const finalResultTabs = document.getElementById("finalResultTabs");
+        const finalResultContent =
+          document.getElementById("finalResultContent");
+        const taskDescription = document.getElementById("taskDescription");
+
+        // API基础URL
+        const API_BASE_URL = "/stream/run/"; // FastAPI基础URL
+
+        // 任务信息配置
+        const taskInfo = {
+          code_analysis: {
+            description: "分析代码结构和功能 - 最终输出function.json",
+            expectedOutputs: ["function"],
+          },
+          service_packaging: {
+            description: "将代码封装为微服务",
+            expectedOutputs: [],
+          },
+          remote_deploy: {
+            description: "将服务部署到远程服务器",
+            expectedOutputs: [],
+          },
+          system_info: {
+            description: "获取系统信息（CPU、内存、磁盘、网络等）",
+            expectedOutputs: [],
+          },
+          list_tools: {
+            description: "列出代理可以使用的工具",
+            expectedOutputs: [],
+          },
+        };
+
+        // 存储所有步骤和最终结果
+        let stepResults = [];
+        let finalResults = null;
+        let eventSource = null;
+        let currentTask = null;
+
+        // 添加任务按钮点击事件
+        taskButtons.forEach((button) => {
+          button.addEventListener("click", function () {
+            const taskName = this.getAttribute("data-task");
+            const description = this.getAttribute("data-description");
+
+            // 显示任务描述
+            taskDescription.textContent = description;
+            taskDescription.style.display = "block";
+
+            // 启动任务
+            startTask(taskName);
+          });
         });
+
+        // 开始执行任务
+        function startTask(taskName) {
+          // 设置当前任务
+          currentTask = taskName;
+
+          // 重置界面
+          stepsContainer.innerHTML = "";
+          finalResultContainer.style.display = "none";
+          finalResultTabs.innerHTML = "";
+          finalResultContent.innerHTML = "";
+          stepResults = [];
+          finalResults = null;
+
+          // 显示状态栏
+          statusBar.style.display = "block";
+          statusText.textContent = `正在执行 ${taskName.replace(
+            "_",
+            " "
+          )} 任务...`;
+
+          // 构建API URL
+          const apiUrl = API_BASE_URL + taskName;
+
+          // 关闭已有的EventSource连接
+          if (eventSource) {
+            eventSource.close();
+          }
+
+          // 创建新的EventSource连接
+          eventSource = new EventSource(apiUrl);
+
+          // 处理事件
+          eventSource.onmessage = function (event) {
+            try {
+              const data = JSON.parse(event.data);
+
+              // 检查是否有错误
+              if (data.error) {
+                addErrorStep(data.error);
+                finishTask("失败");
+                return;
+              }
+
+              // 检查是否有警告消息
+              if (data.warning) {
+                addWarningStep(data.warning);
+                finishTask("完成但有警告");
+                return;
+              }
+
+              // 检查是否是包含最终结果的消息
+              if (data.is_final_result && data.final_results) {
+                finalResults = data.final_results;
+                displayFinalResults(finalResults);
+                finishTask("完成");
+                return;
+              }
+
+              // 添加正常步骤
+              if (data.step) {
+                addStep(data);
+              }
+
+              // 检查是否是最后一步（但没有最终结果）
+              if (data.is_last && !data.is_final_result && !data.warning) {
+                finishTask("完成但无最终结果");
+              }
+            } catch (e) {
+              console.error("解析数据失败:", e);
+              addErrorStep("解析数据失败: " + e.message);
+            }
+          };
+
+          eventSource.onerror = function (error) {
+            console.error("EventSource 错误:", error);
+            addErrorStep("连接错误，请检查服务器状态");
+            finishTask("错误");
+          };
+        }
+
+        // 添加步骤
+        function addStep(data) {
+          // 保存步骤
+          stepResults.push(data);
+
+          // 创建步骤卡片
+          const stepCard = document.createElement("div");
+          stepCard.className = "step-card";
+
+          // 创建头部
+          const stepHeader = document.createElement("div");
+          stepHeader.className = "step-header";
+          stepHeader.textContent = `步骤 ${data.step}`;
+
+          // 创建内容
+          const stepContent = document.createElement("div");
+          stepContent.className = "step-content";
+
+          // 添加思考内容
+          if (data.thought) {
+            const thought = document.createElement("div");
+            thought.className = "thought";
+            thought.innerHTML = "<strong>思考:</strong><br>" + data.thought;
+            stepContent.appendChild(thought);
+          }
+
+          // 添加行动内容
+          if (data.action) {
+            const action = document.createElement("div");
+            action.className = "action";
+            action.innerHTML = "<strong>行动:</strong><br>" + data.action;
+            stepContent.appendChild(action);
+          }
+
+          // 添加行动结果
+          if (data.action_result) {
+            const actionResult = document.createElement("div");
+            actionResult.className = "action-result";
+            actionResult.innerHTML =
+              "<strong>结果:</strong><br>" + data.action_result;
+            stepContent.appendChild(actionResult);
+          }
+
+          // 组装卡片
+          stepCard.appendChild(stepHeader);
+          stepCard.appendChild(stepContent);
+
+          // 添加到容器
+          stepsContainer.appendChild(stepCard);
+
+          // 滚动到底部
+          window.scrollTo(0, document.body.scrollHeight);
+        }
+
+        // 添加错误步骤
+        function addErrorStep(errorMessage) {
+          const errorCard = document.createElement("div");
+          errorCard.className = "step-card";
+
+          const errorHeader = document.createElement("div");
+          errorHeader.className = "step-header";
+          errorHeader.textContent = "错误";
+
+          const errorContent = document.createElement("div");
+          errorContent.className = "step-content";
+          errorContent.style.backgroundColor = "#f8d7da";
+          errorContent.textContent = errorMessage;
+
+          errorCard.appendChild(errorHeader);
+          errorCard.appendChild(errorContent);
+
+          stepsContainer.appendChild(errorCard);
+        }
+
+        // 添加警告步骤
+        function addWarningStep(warningMessage) {
+          const warningCard = document.createElement("div");
+          warningCard.className = "step-card";
+
+          const warningHeader = document.createElement("div");
+          warningHeader.className = "step-header";
+          warningHeader.textContent = "警告";
+
+          const warningContent = document.createElement("div");
+          warningContent.className = "step-content";
+          warningContent.style.backgroundColor = "#fff3cd";
+          warningContent.textContent = warningMessage;
+
+          warningCard.appendChild(warningHeader);
+          warningCard.appendChild(warningContent);
+
+          stepsContainer.appendChild(warningCard);
+        }
+
+        // 显示最终结果
+        function displayFinalResults(results) {
+          // 清空之前的内容
+          finalResultTabs.innerHTML = "";
+          finalResultContent.innerHTML = "";
+
+          // 创建结果类型标签
+          const resultTypes = Object.keys(results);
+
+          if (resultTypes.length === 0) {
+            const noResultMsg =
+              taskInfo[currentTask]?.expectedOutputs.length > 0
+                ? `没有找到任务 ${currentTask} 的预期输出`
+                : "此任务没有特定的最终输出文件";
+
+            finalResultContent.textContent = noResultMsg;
+            finalResultContainer.style.display = "block";
+            return;
+          }
+
+          // 为每个结果类型创建标签按钮
+          resultTypes.forEach((type, index) => {
+            const tabButton = document.createElement("button");
+            tabButton.className = `btn ${
+              index === 0 ? "btn-primary" : "btn-outline-primary"
+            } tab-button`;
+            tabButton.textContent = type;
+            tabButton.dataset.resultType = type;
+            tabButton.addEventListener("click", function () {
+              // 切换按钮样式
+              document.querySelectorAll(".tab-button").forEach((btn) => {
+                btn.className = "btn btn-outline-primary tab-button";
+              });
+              this.className = "btn btn-primary tab-button";
+
+              // 显示对应结果
+              showResultContent(this.dataset.resultType);
+            });
+
+            finalResultTabs.appendChild(tabButton);
+          });
+
+          // 默认显示第一个结果
+          showResultContent(resultTypes[0]);
+
+          // 显示结果容器
+          finalResultContainer.style.display = "block";
+
+          // 滚动到结果区域
+          finalResultContainer.scrollIntoView({ behavior: "smooth" });
+        }
+
+        // 显示特定类型的结果内容
+        function showResultContent(type) {
+          finalResultContent.innerHTML = "";
+
+          const resultData = finalResults[type];
+
+          // 创建显示元素
+          const jsonViewer = document.createElement("div");
+          jsonViewer.className = "json-viewer";
+
+          // 格式化JSON
+          let formattedContent;
+          try {
+            if (typeof resultData === "object") {
+              formattedContent = JSON.stringify(resultData, null, 2);
+            } else {
+              formattedContent = resultData;
+            }
+          } catch (e) {
+            formattedContent = `无法解析结果: ${e.message}`;
+          }
+
+          jsonViewer.textContent = formattedContent;
+          finalResultContent.appendChild(jsonViewer);
+        }
+
+        // 完成任务
+        function finishTask(status) {
+          // 关闭EventSource
+          if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+          }
+
+          // 更新状态栏
+          statusText.textContent = `任务${status}`;
+
+          // 3秒后隐藏状态栏
+          setTimeout(() => {
+            statusBar.style.display = "none";
+          }, 3000);
+        }
+      });
     </script>
-</body>
-</html> 
+  </body>
+</html>
