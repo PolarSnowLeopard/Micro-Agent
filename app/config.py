@@ -29,25 +29,8 @@ class LLMSettings(BaseModel):
     temperature: float = Field(1.0, description="采样温度")
 
 
-class SandboxSettings(BaseModel):
-    """执行沙箱的配置"""
-
-    use_sandbox: bool = Field(False, description="是否使用沙箱")
-    image: str = Field("python:3.12-slim", description="基础镜像")
-    work_dir: str = Field("/workspace", description="容器工作目录")
-    memory_limit: str = Field("512m", description="内存限制")
-    cpu_limit: float = Field(1.0, description="CPU限制")
-    timeout: int = Field(300, description="默认命令超时（秒）")
-    network_enabled: bool = Field(
-        False, description="是否允许网络访问"
-    )
-
-
 class AppConfig(BaseModel):
     llm: Dict[str, LLMSettings]
-    sandbox: Optional[SandboxSettings] = Field(
-        None, description="沙箱配置"
-    )
 
     class Config:
         arbitrary_types_allowed = True
@@ -105,12 +88,6 @@ class Config:
             "temperature": base_llm.get("temperature", 1.0),
         }
 
-        sandbox_config = raw_config.get("sandbox", {})
-        if sandbox_config:
-            sandbox_settings = SandboxSettings(**sandbox_config)
-        else:
-            sandbox_settings = SandboxSettings()
-
         config_dict = {
             "llm": {
                 "default": default_settings,
@@ -119,7 +96,6 @@ class Config:
                     for name, override_config in llm_overrides.items()
                 },
             },
-            "sandbox": sandbox_settings,
         }
 
         self._config = AppConfig(**config_dict)
@@ -127,10 +103,6 @@ class Config:
     @property
     def llm(self) -> Dict[str, LLMSettings]:
         return self._config.llm
-
-    @property
-    def sandbox(self) -> SandboxSettings:
-        return self._config.sandbox
 
     @property
     def workspace_root(self) -> Path:
