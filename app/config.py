@@ -27,8 +27,6 @@ class LLMSettings(BaseModel):
         description="所有请求累计使用的最大输入令牌数（None表示无限制）",
     )
     temperature: float = Field(1.0, description="采样温度")
-    api_type: str = Field(..., description="Azure、Openai或Ollama")
-    api_version: str = Field(..., description="如果是AzureOpenai，则指定Azure Openai版本")
 
 
 class SandboxSettings(BaseModel):
@@ -105,8 +103,6 @@ class Config:
             "max_tokens": base_llm.get("max_tokens", 4096),
             "max_input_tokens": base_llm.get("max_input_tokens"),
             "temperature": base_llm.get("temperature", 1.0),
-            "api_type": base_llm.get("api_type", ""),
-            "api_version": base_llm.get("api_version", ""),
         }
 
         sandbox_config = raw_config.get("sandbox", {})

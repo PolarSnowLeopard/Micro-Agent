@@ -198,7 +198,6 @@ class LLM:
             self.model = llm_config.model
             self.max_tokens = llm_config.max_tokens
             self.temperature = llm_config.temperature
-            self.api_type = llm_config.api_type
             self.api_key = llm_config.api_key
             self.base_url = llm_config.base_url
 
@@ -218,7 +217,7 @@ class LLM:
                 # 如果模型不在tiktoken的预设中，使用cl100k_base作为默认
                 self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
-            # 只保留OpenAI客户端
+            # 初始化OpenAI客户端
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
             self.token_counter = TokenCounter(self.tokenizer)
