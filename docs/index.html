@@ -159,8 +159,9 @@
                     welcomeSection.style.display = 'none';
                     docFrame.style.display = 'block';
                     
-                    // 设置iframe源
-                    docFrame.src = docPath;
+                    // 设置iframe源 - 添加时间戳防止缓存
+                    const timestamp = new Date().getTime();
+                    docFrame.src = docPath + '?t=' + timestamp;
                     
                     // 在iframe加载完成后初始化Mermaid图表
                     docFrame.onload = function() {
