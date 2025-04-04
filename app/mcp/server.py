@@ -33,13 +33,13 @@ from app.tool.cmd import Cmd
 from app.tool.bash import Bash
 
 class MCPServer:
-    """MCP Server implementation with tool registration and management."""
+    """集成旧工具类的MCP服务器实现，包含工具注册和管理。"""
 
     def __init__(self, name: str = "ioeb"):
         self.server = FastMCP(name)
         self.tools: Dict[str, BaseTool] = {}
 
-        # Initialize standard tools
+        # 初始化标准工具
 
         # 如果是windows，则使用cmd，否则使用bash
         if platform.system() == "Windows":
@@ -57,31 +57,31 @@ class MCPServer:
         # self.tools["terminal"] = Terminal()
 
     def register_tool(self, tool: BaseTool, method_name: Optional[str] = None) -> None:
-        """Register a tool with parameter validation and documentation."""
+        """注册带有参数验证和文档的工具。"""
         tool_name = method_name or tool.name
         tool_param = tool.to_param()
         tool_function = tool_param["function"]
 
-        # Define the async function to be registered
+        # 定义要注册的异步函数
         async def tool_method(**kwargs):
             logger.info(f"Executing {tool_name}: {kwargs}")
             result = await tool.execute(**kwargs)
 
             logger.info(f"Result of {tool_name}: {result}")
 
-            # Handle different types of results (match original logic)
+            # 处理不同类型的结果（匹配原始逻辑）
             if hasattr(result, "model_dump"):
                 return json.dumps(result.model_dump())
             elif isinstance(result, dict):
                 return json.dumps(result)
             return result
 
-        # Set method metadata
+        # 设置方法元数据
         tool_method.__name__ = tool_name
         tool_method.__doc__ = self._build_docstring(tool_function)
         tool_method.__signature__ = self._build_signature(tool_function)
 
-        # Store parameter schema (important for tools that access it programmatically)
+        # 存储参数模式（对于以编程方式访问它的工具很重要）
         param_props = tool_function.get("parameters", {}).get("properties", {})
         required_params = tool_function.get("parameters", {}).get("required", [])
         tool_method._parameter_schema = {
@@ -93,17 +93,17 @@ class MCPServer:
             for param_name, param_details in param_props.items()
         }
 
-        # Register with server
+        # 在服务器上注册
         self.server.tool()(tool_method)
-        logger.info(f"Registered tool: {tool_name}")
+        logger.info(f"已注册工具: {tool_name}")
 
     def _build_docstring(self, tool_function: dict) -> str:
-        """Build a formatted docstring from tool function metadata."""
+        """从工具函数元数据构建格式化的文档字符串。"""
         description = tool_function.get("description", "")
         param_props = tool_function.get("parameters", {}).get("properties", {})
         required_params = tool_function.get("parameters", {}).get("required", [])
 
-        # Build docstring (match original format)
+        # 构建文档字符串（匹配原始格式）
         docstring = description
         if param_props:
             docstring += "\n\nParameters:\n"
@@ -120,18 +120,18 @@ class MCPServer:
         return docstring
 
     def _build_signature(self, tool_function: dict) -> Signature:
-        """Build a function signature from tool function metadata."""
+        """从工具函数元数据构建函数签名。"""
         param_props = tool_function.get("parameters", {}).get("properties", {})
         required_params = tool_function.get("parameters", {}).get("required", [])
 
         parameters = []
 
-        # Follow original type mapping
+        # 遵循原始类型映射
         for param_name, param_details in param_props.items():
             param_type = param_details.get("type", "")
             default = Parameter.empty if param_name in required_params else None
 
-            # Map JSON Schema types to Python types (same as original)
+            # 将JSON模式类型映射到Python类型（与原始相同）
             annotation = Any
             if param_type == "string":
                 annotation = str
@@ -146,7 +146,7 @@ class MCPServer:
             elif param_type == "array":
                 annotation = list
 
-            # Create parameter with same structure as original
+            # 创建与原始结构相同的参数
             param = Parameter(
                 name=param_name,
                 kind=Parameter.KEYWORD_ONLY,
@@ -158,38 +158,38 @@ class MCPServer:
         return Signature(parameters=parameters)
 
     async def cleanup(self) -> None:
-        """Clean up server resources."""
-        logger.info("Cleaning up resources")
-        # Follow original cleanup logic - only clean browser tool
+        """清理服务器资源。"""
+        logger.info("正在清理资源")
+        # 遵循原始清理逻辑 - 仅清理浏览器工具
         if "browser" in self.tools and hasattr(self.tools["browser"], "cleanup"):
             await self.tools["browser"].cleanup()
 
     def register_all_tools(self) -> None:
-        """Register all tools with the server."""
+        """向服务器注册所有工具。"""
         for tool in self.tools.values():
             self.register_tool(tool)
 
     def run(self, transport: str = "stdio") -> None:
-        """Run the MCP server."""
-        # Register all tools
+        """运行MCP服务器。"""
+        # 注册所有工具
         self.register_all_tools()
 
-        # Register cleanup function (match original behavior)
+        # 注册清理函数（匹配原始行为）
         atexit.register(lambda: asyncio.run(self.cleanup()))
 
-        # Start server (with same logging as original)
-        logger.info(f"Starting OpenManus server ({transport} mode)")
+        # 启动服务器（使用与原始相同的日志记录）
+        logger.info(f"启动Micro Agent服务器（{transport}模式）")
         self.server.run(transport=transport)
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="OpenManus MCP Server")
+    """解析命令行参数。"""
+    parser = argparse.ArgumentParser(description="Micro Agent MCP服务器")
     parser.add_argument(
         "--transport",
         choices=["stdio"],
         default="stdio",
-        help="Communication method: stdio or http (default: stdio)",
+        help="通信方法: stdio或http（默认: stdio）",
     )
     return parser.parse_args()
 
