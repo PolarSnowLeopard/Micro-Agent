@@ -1,52 +1,116 @@
 # Micro-Agent 智能体框架
 
-本项目是一个灵活、可扩展的智能体框架，旨在为上层应用提供智能代理能力。Micro-Agent 中的"Micro"意为"微"，与微服务中的"微"同义，代表其轻量级、模块化的特性。该框架可用于构建各种智能应用，目前已实现的示例包括代码分析、微服务封装及远程部署等功能。
+<div align="center">
 
-## 一、框架特性
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Python](https://img.shields.io/badge/python-3.12-blue)
 
-Micro-Agent 框架的核心特性包括：
+</div>
 
-1. **灵活的智能体架构**：
+Micro-Agent 是一个灵活、可扩展的智能体框架，专为构建各种基于大语言模型的智能应用而设计。"Micro"意为"微"，与微服务中的"微"同义，代表其轻量级、模块化的特性。
 
-   - 支持自定义智能体
-   - 提供继承体系便于扩展
-   - 灵活的工具调用机制
+## 📌 特性概览
 
-2. **强大的工具系统**：
+- **现代智能体架构**：基于大语言模型构建的灵活智能代理系统
+- **模型上下文协议 (MCP) 支持**：集成MCP协议，提供标准化工具调用机制
+- **多服务器连接**：支持同时连接多个MCP服务器，灵活扩展工具生态
+- **强大的内置工具集**：包含文件操作、命令执行、远程部署等常用工具
+- **流式处理**：支持实时流式输出，提升交互体验
+- **可视化界面**：提供基于Web的执行过程可视化
 
-   - Python 执行工具
-   - 命令行工具
-   - 文件操作工具
-   - 远程连接工具
-   - 支持自定义工具开发
+## 🚀 快速开始
 
-3. **基于大语言模型的推理能力**：
+### 通过 Docker 运行（推荐）
 
-   - 基于 OpenAI SDK 的 LLM 接口
+```bash
+# 克隆项目
+git clone https://github.com/PolarSnowLeopard/Micro-Agent
+cd Micro-Agent
 
-4. **稳定的日志系统**：
+# 配置环境
+cp .env.example .env
+cp config/config.example.toml config/config.toml
+# 编辑配置文件，设置API密钥等
 
-   - 单例模式设计，避免重复初始化
-   - 支持多个命名日志实例
-   - 灵活的日志级别配置
+# 启动容器
+docker-compose up -d
+docker-compose exec micro_agent bash
 
-5. **完整的开发文档**：
-   - 详细的架构说明
-   - 工具开发指南
-   - 示例代码
+# 在容器内运行
+python main.py
+# 或启动Web界面
+python app.py  # 访问 http://localhost:5000
+```
 
-## 二、已实现的示例应用
+### 本地环境运行
+
+```bash
+# 克隆项目
+git clone https://github.com/PolarSnowLeopard/Micro-Agent
+cd Micro-Agent
+
+# 创建Python环境（推荐3.12）
+conda create -n micro-agent python=3.12
+conda activate micro-agent
+
+# 配置环境
+cp .env.example .env
+cp config/config.example.toml config/config.toml
+# 编辑配置文件，设置API密钥等
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 运行项目
+python main.py
+# 或启动Web界面
+python app.py  # 访问 http://localhost:5000
+```
+
+> ⚠️ **安全提示**：由于本项目可能执行系统命令，强烈建议在容器环境中运行，以避免对宿主系统的潜在影响。
+
+## 🧠 系统架构
+
+Micro-Agent 框架由以下主要组件构成：
+
+### 智能体系统
+
+- **BaseAgent**：所有智能体的基础类
+- **ToolCallAgent**：支持工具调用的智能体
+- **ReActAgent**：基于ReAct策略的智能体
+- **MCPAgent**：支持MCP协议的智能体，可连接多个服务器
+
+### 工具系统
+
+- **BaseTool**：工具基类，定义标准接口
+- **ToolCollection**：工具集合，支持工具分组管理
+- **MCPClientTool**：MCP客户端工具，支持远程工具调用
+- **内置工具**：文件操作、命令执行、远程部署等
+
+### MCP系统
+
+- **MCPServer**：集成旧工具的MCP服务器实现
+- **MCPClients**：管理多个MCP服务器连接
+- **多服务器支持**：同时连接多个服务器，汇集不同来源的工具
+
+### 支持系统
+
+- **提示系统**：智能体的系统提示和任务提示
+- **语言模型接口**：封装LLM API调用
+- **配置系统**：统一管理系统配置
+- **日志系统**：单例模式设计的多实例日志系统
+
+## 📊 示例应用
 
 目前，框架已实现以下示例应用：
 
 1. **代码分析 Agent**：
-
    - 自动分析代码结构和依赖关系
    - 生成代码依赖可视化图表
    - 输出详细的代码分析报告
 
 2. **服务封装 Agent**：
-
    - 将现有代码自动封装为微服务
    - 生成 Docker 配置文件
    - 创建微服务部署所需的全部资源
@@ -56,268 +120,132 @@ Micro-Agent 框架的核心特性包括：
    - 提供部署状态监控
    - 支持部署过程的日志记录和查看
 
-## 三、系统架构
+4. **系统信息 Agent**：
+   - 获取系统硬件和软件信息
+   - 分析系统资源使用情况
 
-Micro-Agent 框架的主要组件包括：
+## 💻 Web界面与API
 
-- 智能体系统（BaseAgent, ReActAgent, ToolCallAgent 等）
-- 工具系统（BaseTool 及各种具体工具实现）
-- MCP 系统（基于工具系统扩展）
-- 提示系统
-- 语言模型接口
-- 配置系统
-- 日志系统（单例模式设计，支持多实例命名）
+Micro-Agent 提供了基于FastAPI的流式执行服务，可通过Web界面直观地监控智能体执行过程。
 
-## 四、开发与使用
+### 主要功能
 
-### 安全建议
+- **实时流式输出**：通过SSE实时展示智能体执行过程
+- **Web界面**：直观展示执行步骤和结果
+- **文件上传**：支持上传ZIP文件进行代码分析
+- **结果可视化**：可视化展示执行结果
 
-由于 Micro-Agent 框架可能会使用 bash/命令行等工具对系统进行操作，为了安全起见，**强烈建议**在容器环境中运行本项目，以避免可能的不可控操作对宿主系统造成影响。
+### 访问方式
 
-### 通过 Docker 运行（推荐）
+服务默认在5000端口启动，可通过以下方式访问：
 
-1. 克隆仓库：
+- **API文档**：http://localhost:5000/
+- **演示界面**：http://localhost:5000/stream_demo
+- **文件上传**：http://localhost:5000/upload_demo
 
-   ```bash
-   git clone https://github.com/PolarSnowLeopard/Micro-Agent
-   cd Micro-Agent
-   ```
+### API端点
 
-2. 创建并配置环境变量文件：
+- **GET /stream/run/{task_name}**：流式执行指定任务
+- **POST /api/agent/code_analysis**：上传ZIP文件并执行代码分析
 
-   ```bash
-   cp .env.example .env
-   cp config/config.example.toml config/config.toml
-   # 编辑.env和config/config.toml文件，设置所需的API密钥和配置参数
-   ```
+## 🔧 配置选项
 
-3. 使用 docker-compose 启动服务：
+Micro-Agent 使用两个主要配置文件：
 
-   ```bash
-   docker-compose up -d  # 后台运行
-   docker-compose exec micro_agent bash  # 进入容器
-   ```
+1. **`.env`文件**：环境变量和敏感信息
+   - 远程服务器连接信息
+   - API密钥
+   - 其他环境变量
 
-4. 在容器内运行您的 Agent：
+2. **`config/config.toml`文件**：系统配置
+   - LLM模型配置（模型名称、参数等）
+   - 视觉模型配置
+   - 应用程序设置
 
-   ```bash
-   python main.py
-   ```
+## 📝 日志和调试
 
-   或运行具有 web 交互界面的示例：
-
-   ```bash
-   python app.py
-   ```
-
-   然后访问：`http://localhost:5000/stream_demo` [详见七、Agent 流式执行服务](#七agent-流式执行服务)
-
-### 直接在本地环境运行（不推荐）
-
-如果您确实需要在本地环境运行，请谨慎操作并了解可能的风险：
-
-### 开发环境设置
-
-- 建议 python 版本为 3.12.
-
-1. 克隆仓库：
-
-   ```bash
-   git clone https://github.com/PolarSnowLeopard/Micro-Agent
-   cd Micro-Agent
-   ```
-
-2. 使用 conda 创建 python 环境（可选）：
-
-   ```bash
-   conda create -n micro-agent python=3.12
-   conda activate micro-agent
-   ```
-
-3. 创建并配置环境变量文件：
-
-   ```bash
-   cp .env.example .env
-   cp config/config.example.toml config/config.toml
-   # 编辑.env和config/config.toml文件，设置所需的API密钥和配置参数
-   ```
-
-4. 安装依赖：
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-5. 运行您的 Agent：
-
-   ```bash
-   python main.py
-   ```
-
-   或运行具有 web 交互界面的示例：
-
-   ```bash
-   python app.py
-   ```
-
-   然后访问：`http://localhost:5000/stream_demo` [详见七、Agent 流式执行服务](#七agent-流式执行服务)
-
-### 文档中心
-
-项目提供了完整的文档中心，可通过以下方式访问(或访问线上文档[fdueblab.cn/docs](https://fdueblab.cn/docs))：
-
-1. 启动文档服务器：
-
-   ```bash
-   cd docs
-   python -m http.server 8000
-   ```
-
-2. 浏览器访问：`http://localhost:8000`
-
-文档中心包含详细的系统架构说明、API 文档、智能体开发指南以及工具开发指南。有关自定义开发、创建自定义智能体和工具的具体方法，请参考文档中心的相关章节。
-
-## 五、配置选项
-
-Micro-Agent 框架使用两个主要的配置文件：
-
-1. **`.env`文件**：用于存储环境变量和敏感信息
-
-   - 从`.env.example`复制得到：`cp .env.example .env`
-   - 包含的主要配置：
-     - `REMOTE_SSH_SERVER`: 远程服务器地址
-     - `REMOTE_SSH_USERNAME`: 远程服务器用户名
-     - `REMOTE_SSH_PASSWORD`: 远程服务器密码
-   - 开发时，如果有更多环境变量需要设置，请在`.env`文件中添加，并在提交代码前将其一并更新至`.env.example`文件中。
-
-2. **`config/config.toml`文件**：用于系统主要配置
-   - 从`config/config.example.toml`复制得到：`cp config/config.example.toml config/config.toml`
-   - 包含的主要配置：
-     - LLM 模型配置（API 密钥、模型名称、参数等）
-     - 视觉模型配置
-
-在使用系统前，请确保这两个配置文件都已正确设置。特别是需要添加您的 LLM API 密钥以及其他必要的连接信息。
-
-## 六、日志和调试
-
-系统日志存储在`logs/`目录下，可用于故障排查和系统监控。日志系统采用单例模式设计，提供以下使用方式：
-
-### 使用默认日志实例
+系统日志存储在`logs/`目录下，提供多种使用方式：
 
 ```python
+# 使用默认日志实例
 from app.logger import logger
+logger.info("信息日志")
 
-logger.info("这是一条信息日志")
-logger.error("这是一条错误日志")
-```
-
-### 创建命名日志实例
-
-```python
+# 创建命名日志实例
 from app.logger import Logger
-
-# 创建或获取命名为"my_module"的日志实例
 custom_logger = Logger("my_module")
-custom_logger.info("这是一条来自自定义日志的信息")
+custom_logger.info("自定义日志")
+
+# 配置日志级别
+logger.define_log_level(print_level="DEBUG", logfile_level="INFO")
 ```
 
-### 配置日志级别
+## 🌟 MCP功能详解
 
-```python
-from app.logger import logger
-
-# 配置控制台输出级别为DEBUG，文件日志级别为INFO
-logger.define_log_level(print_level="DEBUG", logfile_level="INFO", name="debug_session")
-```
-
-所有日志文件会自动保存在`logs/`目录下，文件名包含日志实例名和创建时间戳。
-
-## 七、Agent 流式执行服务
-
-本项目现在包含一个基于 FastAPI 的智能体流式执行服务，它提供了实时监控和查看智能体执行过程的能力。
+Micro-Agent 集成了模型上下文协议(Model Context Protocol, MCP)，提供标准化的工具调用机制。
 
 ### 主要特性
 
-- **实时流式输出**：通过 SSE (Server-Sent Events) 实时展示智能体执行过程
-- **直观的 Web 界面**：提供友好的 Web 界面展示执行步骤和结果
-- **任务最终结果展示**：支持展示任务特定的最终输出文件
-- **错误和警告处理**：当文件不存在或读取失败时提供适当的错误和警告信息
+- **多服务器连接**：支持同时连接多个MCP服务器
+- **工具转发**：将任何MCP服务器工具转发给智能体使用
+- **内置MCP服务器**：默认提供内置MCP服务器
+- **灵活配置**：支持stdio和SSE连接方式
 
-### 启动服务
-
-```bash
-# 启动FastAPI服务
-python app.py
-```
-
-服务默认在 5000 端口启动，可通过以下方式访问：
-
-- API 文档：http://localhost:5000/
-- 演示页面：http://localhost:5000/stream_demo
-- 文件上传演示：http://localhost:5000/upload_demo
-
-### 示例任务
-
-演示页面提供了以下几个示例任务：
-
-1. **代码分析**：分析代码结构和功能，生成 function.json
-2. **服务封装**：将代码封装为微服务
-3. **远程部署**：将服务部署到远程服务器
-4. **系统信息**：获取系统基本信息
-5. **列出工具**：显示 Agent 可以使用的所有工具
-
-### API 端点
-
-服务提供以下 API 端点：
-
-1. **GET /stream/run/{task_name}**: 流式执行指定任务
-
-   - 支持的任务: code_analysis, service_packaging, remote_deploy, system_info, list_tools
-   - 返回 SSE 格式的流式数据
-
-2. **POST /api/agent/code_analysis**: 上传 ZIP 文件并执行代码分析
-
-   - 接收一个 ZIP 格式的文件作为输入
-   - 将文件解压到临时目录
-   - 执行代码分析任务
-   - 返回与 GET 端点相同格式的流式数据
-
-3. **GET /upload_demo**: 文件上传演示页面
-   - 提供文件上传和代码分析的 Web 界面
-
-### 注意事项
-
-- 本服务只提供 FastAPI 实现，不再支持 Flask 实现
-- 流式输出使用 SSE 技术，确保浏览器支持 EventSource API
-- 任务执行结果会保存在 visualization 目录下
-
-### 自定义任务
-
-如需添加新的任务类型，请在`app.py`文件中修改`task_configs`字典，添加新的任务配置：
+### 使用方法
 
 ```python
-task_configs = {
-    "your_task_name": {
-        "prompt": YOUR_TASK_PROMPT,
-        "outputs": [
-            {"name": "output_name", "file": "path/to/output/file.json"}
-        ]
-    },
-    # ... 其他任务
-}
+# 在代码中使用MCPRunner
+from run_mcp import MCPRunner
+
+# 创建runner实例
+runner = MCPRunner("My Agent")
+
+# 添加内置服务器（默认自动添加）
+server_id = await runner.add_server(
+    connection_type="stdio",
+    server_id="stdio_built_in"
+)
+
+# 添加自定义服务器
+custom_server = await runner.add_server(
+    connection_type="sse",
+    server_url="http://localhost:8000/sse"
+)
+
+# 运行智能体
+result = await runner.agent.run("执行任务")
 ```
 
-## 八、贡献指南
+## 📚 文档
 
-欢迎为 Micro-Agent 项目做出贡献！贡献方式包括但不限于：
+项目提供完整的文档中心，可通过以下方式访问：
 
-- 提交 Bug 报告
+1. **在线文档**：访问 [fdueblab.cn/docs](https://fdueblab.cn/docs)
+
+2. **本地文档**：
+   ```bash
+   cd docs
+   python -m http.server 8000
+   # 访问 http://localhost:8000
+   ```
+
+## 👥 贡献指南
+
+欢迎为Micro-Agent项目做出贡献！贡献方式包括：
+
+- 提交Bug报告
 - 提供新功能建议
 - 改进文档
 - 提交代码修复或新功能实现
 
-请通过 GitHub Issues 或 Pull Requests 参与项目贡献。
+请通过GitHub Issues或Pull Requests参与项目贡献。
 
-## 九、许可证
+## 📄 许可证
 
 [MIT 许可证](LICENSE)
+
+---
+
+<div align="center">
+  <small>© 2023-2024 Micro-Agent Project Team. All rights reserved.</small>
+</div>
