@@ -4,8 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Micro-Agent工具开发流程</title>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@9.3.0/dist/mermaid.min.js"></script>
+    <title>Micro-Agent 工具开发指南</title>
     <style>
         body {
             font-family: 'Microsoft YaHei', Arial, sans-serif;
@@ -14,186 +13,313 @@
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
-            background-color: #f9f9f9;
+            background-color: #f8f9fa;
         }
-
-        h1,
-        h2,
-        h3 {
-            color: #2c3e50;
-        }
-
-        h1 {
+        
+        header {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
             text-align: center;
-            margin-bottom: 30px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #3498db;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
         }
-
+        
+        h1, h2, h3 {
+            color: #1a73e8;
+        }
+        
+        section {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        
         .container {
             background-color: white;
             padding: 20px;
             border-radius: 5px;
             box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
-
-        .flow-chart {
-            width: 100%;
+        
+        .workflow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
             margin: 30px 0;
-            text-align: center;
         }
-
+        
+        .code-block, .code {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre;
+            margin: 15px 0;
+        }
+        
+        pre.code-block {
+            background-color: #f5f5f5;
+            color: #333;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            line-height: 1.4;
+            white-space: pre;
+        }
+        
+        .important, .tip, .alert {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+        }
+        
+        .important {
+            background-color: #e8f0fe;
+            border-left: 5px solid #1a73e8;
+        }
+        
+        .tip {
+            background-color: #d4edda;
+            border-left: 5px solid #28a745;
+            color: #155724;
+        }
+        
+        .alert {
+            background-color: #f8d7da;
+            border-left: 5px solid #dc3545;
+            color: #721c24;
+        }
+        
+        .diagram {
+            max-width: 100%;
+            height: auto;
+            margin: 20px 0;
+            border: 1px solid #ddd;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        th {
+            background-color: #f5f7fa;
+            color: #333;
+        }
+        
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        
+        .mermaid {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            overflow: auto;
+        }
+        
         .step {
-            margin-bottom: 40px;
-            padding: 20px;
+            margin-bottom: 20px;
+            padding: 15px;
             background-color: #f8f9fa;
             border-radius: 5px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
             position: relative;
         }
-
+        
         .step-number {
             position: absolute;
-            top: -15px;
-            left: -15px;
-            width: 40px;
-            height: 40px;
-            background-color: #3498db;
+            top: -10px;
+            left: -10px;
+            width: 30px;
+            height: 30px;
+            background-color: #1a73e8;
             color: white;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: bold;
-            font-size: 18px;
         }
-
-        pre.code-block {
-            background-color: #272822;
-            color: #f8f8f2;
+        
+        nav {
+            background-color: white;
             padding: 15px;
             border-radius: 5px;
-            overflow-x: auto;
-            margin: 15px 0;
-            font-family: 'Courier New', Courier, monospace;
-            line-height: 1.4;
-            white-space: pre;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
         }
-
-        .diagram {
-            max-width: 100%;
-            height: auto;
-            margin: 20px 0;
-            border: 1px solid #ddd;
+        
+        nav ul {
+            list-style-type: none;
+            padding: 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
         }
-
-        .alert {
-            background-color: #f8d7da;
-            color: #721c24;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
-            border-left: 5px solid #dc3545;
+        
+        nav li {
+            margin: 0;
         }
-
-        .tip {
-            background-color: #d4edda;
-            color: #155724;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
-            border-left: 5px solid #28a745;
+        
+        nav a {
+            text-decoration: none;
+            color: #1a73e8;
+            padding: 5px 10px;
+            border-radius: 3px;
+            transition: background-color 0.2s;
         }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
+        
+        nav a:hover {
+            background-color: #e8f0fe;
         }
-
-        th,
-        td {
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-
-        th {
-            background-color: #3498db;
-            color: white;
-        }
-
-        tr:hover {
-            background-color: #f5f5f5;
-        }
-
-        .mermaid {
-            margin: 30px 0;
-            text-align: center;
-        }
-
+        
         footer {
             text-align: center;
-            margin-top: 50px;
+            margin-top: 30px;
             padding: 20px;
-            color: #777;
+            color: #666;
             font-size: 14px;
             border-top: 1px solid #eee;
         }
+        
+        /* 响应式样式优化 */
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            
+            nav ul {
+                flex-direction: column;
+                gap: 5px;
+            }
+        }
     </style>
+    <!-- 添加mermaid.js支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: 'default',
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true,
+                    curve: 'basis'
+                },
+                securityLevel: 'loose'
+            });
+        });
+    </script>
 </head>
 
 <body>
-    <h1>Micro-Agent 工具开发流程可视化指南</h1>
+    <header>
+        <h1>Micro-Agent 工具开发指南</h1>
+        <p>本文档详细介绍如何在Micro-Agent框架中创建、使用和扩展工具</p>
+    </header>
 
-    <div class="container">
-        <h2>1. 工具系统架构</h2>
-        <p>Micro-Agent工具系统是一个可扩展的框架，允许智能体通过定义良好的接口来执行各种操作。以下是系统的核心架构：</p>
+    <nav>
+        <ul>
+            <li><a href="#introduction">1. 工具系统介绍</a></li>
+            <li><a href="#workflow">2. 工具添加流程</a></li>
+            <li><a href="#parameters">3. 工具参数定义规范</a></li>
+            <li><a href="#inheritance">4. 工具继承关系</a></li>
+            <li><a href="#execution">5. 工具执行流程</a></li>
+            <li><a href="#mcptools">6. MCP工具</a></li>
+            <li><a href="#examples">7. 完整示例</a></li>
+            <li><a href="#bestpractices">8. 最佳实践</a></li>
+        </ul>
+    </nav>
 
-        <pre class="mermaid">
-graph TD
-    Agent[智能体 Agent] -->|使用| ToolColl[工具集合 ToolCollection]
-    ToolColl -->|包含| Tool1[工具1]
-    ToolColl -->|包含| Tool2[工具2]
-    ToolColl -->|包含| Tool3[工具3]
-    ToolColl -->|包含| Tool4[工具...]
-    Tool1 -->|继承| BaseTool[BaseTool]
-    Tool2 -->|继承| BaseTool
-    Tool3 -->|继承| BaseTool
-    Tool4 -->|继承| BaseTool
-    BaseTool -->|返回| ToolRes[ToolResult]
-    ToolRes -->|处理| Agent
-        </pre>
-    </div>
+    <section id="introduction">
+        <h2>1. 工具系统介绍</h2>
+        <p>Micro-Agent 的工具系统是一个灵活而强大的组件，它允许智能体执行各种操作，从简单的命令行指令到复杂的远程部署任务。</p>
+        
+        <h3>工具系统架构</h3>
+        <div class="diagram">
+            <pre>
+BaseTool (抽象基类)
+  ├── 命令行工具
+  │    ├── Bash - Linux/macOS命令执行
+  │    └── Cmd - Windows命令执行
+  ├── 文件工具
+  │    ├── FileTransfer - 文件传输
+  │    ├── FileSaver - 文件保存
+  │    └── JsonSaver - JSON数据保存
+  ├── 远程工具
+  │    └── RemoteDockerManager - 远程Docker管理
+  ├── 代码工具
+  │    └── PythonExecute - Python代码执行
+  ├── MCP工具
+  │    ├── MCPClientTool - 远程工具代理
+  │    └── MCPClients - 工具集合管理器
+  └── 控制工具
+       └── Terminate - 终止执行
+            </pre>
+        </div>
+        
+        <p>在Micro-Agent中，所有工具都继承自<code>BaseTool</code>抽象基类，它定义了工具的基本接口和属性。</p>
+        
+        <h3>工具类型</h3>
+        <ul>
+            <li><strong>命令行工具</strong>：执行系统命令，如Bash和Cmd</li>
+            <li><strong>文件操作工具</strong>：处理文件读写，如FileSaver和JsonSaver</li>
+            <li><strong>远程工具</strong>：与远程系统交互，如RemoteDockerManager</li>
+            <li><strong>代码执行工具</strong>：执行代码片段，如PythonExecute</li>
+            <li><strong>MCP工具</strong>：通过MCP协议与远程服务器交互的工具，如MCPClientTool</li>
+            <li><strong>控制工具</strong>：控制智能体的执行流程，如Terminate</li>
+        </ul>
+    </section>
 
-    <div class="container">
+    <section id="workflow">
         <h2>2. 工具添加流程</h2>
 
-        <pre class="mermaid">
+        <div class="mermaid">
 graph TB
     A[创建工具类文件] --> B[定义工具类]
     B --> C[实现execute方法]
     C --> D[注册工具到__init__.py]
     D --> E[将工具添加到智能体的工具集合]
     E --> F[测试工具功能]
-        </pre>
+        </div>
 
         <div class="step">
             <div class="step-number">1</div>
             <h3>创建工具类文件</h3>
             <p>在<code>app/tool/</code>目录下创建一个新的Python文件，文件名应该反映工具的功能。</p>
-            <pre class="code-block"># 例如：app/tool/my_new_tool.py
+            <div class="code">
+# 例如：app/tool/my_new_tool.py
 from app.tool.base import BaseTool, ToolResult
 
-# 导入其他必要的模块</pre>
+# 导入其他必要的模块</div>
         </div>
 
         <div class="step">
             <div class="step-number">2</div>
             <h3>定义工具类</h3>
             <p>创建一个继承自<code>BaseTool</code>的类，并定义必要的属性。</p>
-            <pre class="code-block">class MyNewTool(BaseTool):
+            <div class="code">
+class MyNewTool(BaseTool):
     # 工具的唯一名称
     name: str = "my_new_tool"
 
@@ -211,20 +337,21 @@ from app.tool.base import BaseTool, ToolResult
             # 更多参数...
         },
         "required": ["param_name"],  # 必需的参数列表
-    }</pre>
+    }</div>
         </div>
 
         <div class="step">
             <div class="step-number">3</div>
             <h3>实现execute方法</h3>
             <p>实现工具的核心功能逻辑，包括参数处理、操作执行和结果返回。</p>
-            <pre class="code-block">async def execute(self, param_name: str, **kwargs) -> ToolResult:
+            <div class="code">
+async def execute(self, param_name: str, **kwargs) -> ToolResult:
     try:
         # 实现工具的功能逻辑
         result = await self._perform_operation(param_name)
         return ToolResult(output=result)
     except Exception as e:
-        return ToolResult(error=f"执行过程中发生错误: {str(e)}")</pre>
+        return ToolResult(error=f"执行过程中发生错误: {str(e)}")</div>
             <div class="tip">
                 <strong>提示：</strong>对于长时间运行的操作，考虑实现超时机制或使用多进程/多线程来避免阻塞。
             </div>
@@ -234,20 +361,22 @@ from app.tool.base import BaseTool, ToolResult
             <div class="step-number">4</div>
             <h3>注册工具到__init__.py</h3>
             <p>将新工具添加到<code>app/tool/__init__.py</code>文件中，使其在整个项目中可导入。</p>
-            <pre class="code-block"># 在app/tool/__init__.py中添加
+            <div class="code">
+# 在app/tool/__init__.py中添加
 from app.tool.my_new_tool import MyNewTool
 
 __all__ = [
     # 现有工具...
     "MyNewTool",
-]</pre>
+]</div>
         </div>
 
         <div class="step">
             <div class="step-number">5</div>
             <h3>将工具添加到智能体的工具集合</h3>
             <p>修改相关智能体的初始化代码，将新工具的实例添加到其<code>available_tools</code>集合中。</p>
-            <pre class="code-block"># 例如在app/agent/mcp.py中
+            <div class="code">
+# 例如在app/agent/mcp.py中
 from app.tool import MyNewTool
 
 # 修改available_tools定义
@@ -257,24 +386,25 @@ available_tools: ToolCollection = Field(
         MyNewTool(),  # 添加新工具
         FileSaver(), Terminate()
     )
-)</pre>
+)</div>
         </div>
 
         <div class="step">
             <div class="step-number">6</div>
             <h3>测试工具功能</h3>
             <p>运行Micro-Agent，测试新工具的功能是否正常工作，特别是与智能体的交互。</p>
-            <pre class="code-block">python main.py
+            <div class="code">
+python main.py
 
 # 输入提示来测试新工具
-> 使用my_new_tool工具进行[具体操作]</pre>
+> 使用my_new_tool工具进行[具体操作]</div>
             <div class="alert">
                 <strong>注意：</strong>确保处理边界情况和错误情况，以保证工具的鲁棒性。
             </div>
         </div>
-    </div>
+    </section>
 
-    <div class="container">
+    <section id="parameters">
         <h2>3. 工具参数定义规范</h2>
 
         <table>
@@ -325,12 +455,12 @@ available_tools: ToolCollection = Field(
                 <li>使用<code>enum</code>限制参数可选值</li>
             </ul>
         </div>
-    </div>
+    </section>
 
-    <div class="container">
+    <section id="inheritance">
         <h2>4. 工具继承关系</h2>
 
-        <pre class="mermaid">
+        <div class="mermaid">
 classDiagram
     class BaseTool {
         +str name
@@ -364,13 +494,13 @@ classDiagram
     BaseTool <|-- MyNewTool
     BaseTool ..> ToolResult
     ToolCollection o-- BaseTool
-        </pre>
-    </div>
+        </div>
+    </section>
 
-    <div class="container">
+    <section id="execution">
         <h2>5. 工具执行流程</h2>
 
-        <pre class="mermaid">
+        <div class="mermaid">
 sequenceDiagram
     participant User as 用户
     participant Agent as 智能体
@@ -384,79 +514,257 @@ sequenceDiagram
     Tool-->>TC: 返回结果
     TC-->>Agent: 处理结果
     Agent-->>User: 呈现最终结果
-        </pre>
-    </div>
+        </div>
+    </section>
 
-    <div class="container">
-        <h2>6. 实例分析：终止工具</h2>
+    <section id="mcptools">
+        <h2>6. MCP工具</h2>
+        <p>MCP (Model Context Protocol) 工具是一组特殊的工具，它们允许智能体与远程MCP服务器交互，大大扩展了可用工具的范围。</p>
+        
+        <h3>MCPClientTool</h3>
+        <p>MCPClientTool是一个代理工具，代表远程MCP服务器上的一个工具。它继承自BaseTool，但其execute方法会将调用转发到远程服务器。</p>
+        
+        <div class="code">
+class MCPClientTool(BaseTool):
+    """代表可以从客户端调用MCP服务器上的工具代理。"""
 
-        <p>以下是<code>Terminate</code>工具的完整实现，它是一个简单工具的典型示例：</p>
+    session: Optional[ClientSession] = None
+    server_id: str = None  # 添加服务器ID以跟踪工具所属的服务器
+    original_name: str = None  # 存储原始工具名（无前缀）
 
-        <pre class="code-block">class Terminate(BaseTool):
-    name: str = "terminate"
-    description: str = "终止交互当请求完成或无法继续时"
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        parameters: dict,
+        session: ClientSession = None,
+        server_id: str = None,
+        original_name: str = None,
+    ):
+        """初始化MCP客户端工具。"""
+        super().__init__(name=name, description=description, parameters=parameters)
+        self.session = session
+        self.server_id = server_id
+        self.original_name = original_name
+
+    async def execute(self, **kwargs) -> ToolResult:
+        """通过向MCP服务器发起远程调用来执行工具。"""
+        if not self.session:
+            return ToolResult(error="未连接到MCP服务器")
+
+        try:
+            # 使用原始工具名称（无前缀）调用远程工具
+            tool_name = self.original_name or self.name
+            
+            if tool_name.lower() != "terminate" and not self.name.endswith("_terminate"):
+                logger.info(f"执行工具 {self.name}，实际调用远程工具: {tool_name}，参数: {kwargs}")
+            else:
+                logger.info(f"准备执行终止工具 {self.name} -> {tool_name}")
+            
+            result = await self.session.call_tool(tool_name, kwargs)
+            content_str = ", ".join(
+                item.text for item in result.content if isinstance(item, TextContent)
+            )
+            
+            return ToolResult(output=content_str or "未返回输出。")
+        except Exception as e:
+            logger.error(f"执行工具 {self.name} 时出错: {str(e)}")
+            return ToolResult(error=f"执行工具时出错: {str(e)}")
+        </div>
+        
+        <h3>MCPClients</h3>
+        <p>MCPClients是一个特殊的ToolCollection，用于管理与多个MCP服务器的连接，并将这些服务器上的工具作为本地工具提供给智能体。</p>
+        
+        <div class="code">
+class MCPClients(ToolCollection):
+    """
+    一个工具集合，用于连接到多个MCP服务器并通过模型上下文协议管理可用工具。
+    """
+
+    sessions: Dict[str, ClientSession] = {}  # 服务器ID到会话的映射
+    exit_stacks: Dict[str, AsyncExitStack] = {}  # 服务器ID到退出栈的映射
+    description: str = "用于服务器交互的MCP客户端工具"
+    
+    # 主要方法包括:
+    # - connect_sse(server_url, server_id): 连接到SSE服务器
+    # - connect_stdio(command, args, server_id): 连接到stdio服务器
+    # - disconnect(server_id): 断开与服务器的连接
+    # - _initialize_and_list_tools(server_id): 从服务器获取工具列表并注册
+        </div>
+        
+        <h3>多服务器支持</h3>
+        <p>Micro-Agent支持同时连接多个MCP服务器，并使用所有这些服务器提供的工具。为避免工具名称冲突，每个工具名都会添加服务器ID前缀。</p>
+        
+        <div class="important">
+            <h4>多服务器连接示例</h4>
+            <div class="code">
+# 创建MCPAgent实例
+agent = MCPAgent(name="Multi-Server Agent")
+
+# 连接内置服务器（默认自动添加）
+built_in_id = await agent.initialize(
+    connection_type="stdio",
+    server_id="stdio_built_in"
+)
+
+# 连接另一个stdio服务器
+custom_server = await agent.connect_additional_server(
+    connection_type="stdio",
+    command="/usr/bin/python3",
+    args=["-m", "custom_mcp_server"],
+    server_id="custom_stdio"
+)
+
+# 连接SSE服务器
+sse_server = await agent.connect_additional_server(
+    connection_type="sse",
+    server_url="http://example.com/mcp",
+    server_id="remote_sse"
+)
+
+# 使用工具时，需要使用完整名称（包含服务器前缀）
+result = await agent.run("请使用stdio_built_in_bash工具执行ls命令")
+            </div>
+        </div>
+        
+        <h3>内置MCP服务器</h3>
+        <p>Micro-Agent默认提供一个内置的MCP服务器，该服务器提供以下基本工具：</p>
+        <ul>
+            <li><strong>bash/cmd</strong>：根据操作系统执行命令行指令</li>
+            <li><strong>terminate</strong>：终止智能体执行</li>
+            <li><strong>remote_docker_manager</strong>：管理远程Docker容器</li>
+            <li><strong>file_transfer</strong>：文件传输功能</li>
+            <li><strong>file_saver</strong>：文件保存功能</li>
+            <li><strong>json_saver</strong>：JSON数据保存功能</li>
+        </ul>
+        
+        <p>内置服务器自动使用当前Python解释器启动，无需额外配置。</p>
+    </section>
+
+    <section id="examples">
+        <h2>7. 完整示例</h2>
+        
+        <h3>创建并注册自定义工具</h3>
+        <div class="code">
+# 1. 定义工具类
+from app.tool.base import BaseTool, ToolResult
+
+class WeatherTool(BaseTool):
+    name: str = "weather"
+    description: str = "获取指定城市的天气信息。"
     parameters: dict = {
         "type": "object",
         "properties": {
-            "status": {
+            "city": {
                 "type": "string",
-                "description": "交互的完成状态",
-                "enum": ["success", "failure"],
-            }
+                "description": "城市名称，如'北京'、'上海'等",
+            },
+            "days": {
+                "type": "integer",
+                "description": "预报天数，默认为1天",
+            },
         },
-        "required": ["status"],
+        "required": ["city"],
     }
+    
+    async def execute(self, city: str, days: int = 1, **kwargs) -> ToolResult:
+        try:
+            # 实际实现会调用天气API
+            weather_info = f"{city}未来{days}天天气：晴朗，温度20-25℃，微风"
+            return ToolResult(output=weather_info)
+        except Exception as e:
+            return ToolResult(error=f"获取天气信息失败: {str(e)}")
 
-    async def execute(self, status: str) -> str:
-        return f"交互已完成，状态为: {status}"</pre>
+# 2. 注册到MCP服务器
+from app.mcp.server import MCPServer
 
-        <p>这个工具很简单，只需要接收一个状态参数，并返回一个简单的字符串结果。它不执行复杂操作，但在工作流程中起着关键作用，表示交互的结束。</p>
-    </div>
+server = MCPServer()
+server.tools["weather"] = WeatherTool()
+server.register_all_tools()
+server.run()
 
-    <div class="container">
-        <h2>7. 常见问题与调试技巧</h2>
+# 3. 在MCPAgent中使用
+from app.agent.mcp import MCPAgent
 
-        <pre class="mermaid">
-graph TD
-    A[发现问题] --> B{错误类型?}
-    B -->|工具不可见| C[检查__init__.py导入]
-    B -->|参数错误| D[检查参数定义]
-    B -->|执行超时| E[实现超时机制]
-    B -->|返回格式错误| F[使用ToolResult格式化]
-    C --> G[确认工具已添加到工具集]
-    D --> H[确保参数一致]
-    E --> I[使用多进程]
-    F --> J[检查返回类型]
-    G --> K[问题解决?]
-    H --> K
-    I --> K
-    J --> K
-    K -->|是| L[继续开发]
-    K -->|否| A
-        </pre>
-
-        <div class="alert">
-            <strong>调试技巧:</strong>
-            <ul>
-                <li>使用日志记录工具执行过程中的关键信息</li>
-                <li>单独测试工具功能，然后再集成到智能体中</li>
-                <li>检查参数类型和名称是否与定义一致</li>
-                <li>验证返回结果的格式是否正确</li>
-            </ul>
+agent = MCPAgent()
+await agent.initialize(connection_type="stdio", command="python", args=["-m", "your_mcp_server"])
+result = await agent.run("北京明天的天气怎么样？")
         </div>
-    </div>
+        
+        <h3>使用MCPClients连接多个服务器</h3>
+        <div class="code">
+# 创建MCP客户端
+from app.tool.mcp import MCPClients
+
+clients = MCPClients()
+
+# 连接内置服务器
+stdio_id = await clients.connect_stdio(
+    command="python",
+    args=["-m", "app.mcp.server"],
+    server_id="stdio_0"
+)
+
+# 连接SSE服务器
+sse_id = await clients.connect_sse(
+    server_url="http://localhost:8000/sse",
+    server_id="sse_0"
+)
+
+# 可用工具将包含所有服务器的工具，带有服务器ID前缀
+tool_names = [tool.name for tool in clients.tools]
+print(f"可用工具: {tool_names}")
+
+# 执行远程工具
+result = await clients.execute("stdio_0_bash", command="ls -la")
+print(f"执行结果: {result.output}")
+
+# 断开连接
+await clients.disconnect("stdio_0")
+await clients.disconnect("sse_0")
+        </div>
+    </section>
+
+    <section id="bestpractices">
+        <h2>8. 最佳实践</h2>
+        
+        <h3>设计原则</h3>
+        <ul>
+            <li>遵循<strong>单一职责原则</strong>，每个工具只做一件事情</li>
+            <li>提供<strong>清晰的描述和参数文档</strong>，使LLM能够正确使用工具</li>
+            <li>实现<strong>健壮的错误处理</strong>，避免因工具错误而导致整个智能体崩溃</li>
+            <li>保持<strong>异步一致性</strong>，所有工具方法使用async/await</li>
+            <li>遵循<strong>资源管理最佳实践</strong>，确保资源（如文件、连接）在不需要时被释放</li>
+        </ul>
+        
+        <h3>工具命名约定</h3>
+        <ul>
+            <li>使用清晰、描述性的名称，如<code>file_saver</code>而不是<code>fs</code></li>
+            <li>使用snake_case命名法，如<code>remote_docker_manager</code></li>
+            <li>对于MCP工具，保留服务器ID前缀，如<code>stdio_0_bash</code></li>
+        </ul>
+        
+        <h3>参数设计建议</h3>
+        <ul>
+            <li>只要求必要的参数，提供合理的默认值</li>
+            <li>使用明确的类型注解和参数描述</li>
+            <li>对于复杂输入，考虑使用嵌套对象结构</li>
+            <li>为每个参数提供清晰的用途说明</li>
+        </ul>
+        
+        <h3>安全考虑</h3>
+        <ul>
+            <li>限制工具的权限范围，避免执行危险操作</li>
+            <li>对用户输入进行验证和清理，防止注入攻击</li>
+            <li>使用沙盒执行不信任的代码</li>
+            <li>记录所有工具调用，便于审计和调试</li>
+            <li>对于MCP工具，考虑服务器认证和传输加密</li>
+        </ul>
+    </section>
 
     <footer>
-        <p>© Micro-Agent 项目团队 - 工具开发指南可视化</p>
+        <p>&copy; 2023-2024 Micro-Agent Project Team. 文档版本：1.2.0</p>
     </footer>
-
-    <script>
-        mermaid.initialize({
-            startOnLoad: true,
-            theme: 'default',
-            securityLevel: 'loose'
-        });
-    </script>
 </body>
 
 </html>

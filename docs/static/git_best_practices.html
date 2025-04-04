@@ -408,6 +408,63 @@ git push origin feature/your-feature
                 </pre>
             </div>
         </div>
+
+        <div class="card">
+            <h3>使用Git Stash保存临时工作</h3>
+            <p>
+                Git stash命令可以暂存当前工作目录的更改，使工作区回到干净状态，适合需要临时切换分支但不想提交不完整工作的情况。
+            </p>
+            <div class="code-block">
+                <pre>
+# 基本用法：保存当前更改
+git stash
+
+# 创建带说明的stash（推荐做法）
+git stash push -m "正在进行的功能X开发"
+
+# 查看所有stash
+git stash list
+
+# 应用最近的stash并保留stash
+git stash apply
+
+# 应用特定的stash
+git stash apply stash@{2}
+
+# 应用最近的stash并删除该stash
+git stash pop
+
+# 删除特定的stash
+git stash drop stash@{1}
+
+# 删除所有stash
+git stash clear
+
+# 从stash创建新分支
+git stash branch new-branch-name stash@{0}
+
+# 只stash特定文件
+git stash push -m "只保存特定文件" file1.js file2.css
+                </pre>
+            </div>
+            
+            <h4>Stash最佳实践</h4>
+            <ul>
+                <li>总是添加清晰的描述信息，便于后续识别</li>
+                <li>及时清理不再需要的stash</li>
+                <li>定期检查stash列表，避免遗忘重要更改</li>
+                <li>对于复杂更改，考虑使用分支而非stash</li>
+                <li>切换分支前先检查有无未提交的更改</li>
+            </ul>
+            
+            <h4>常见使用场景</h4>
+            <ul>
+                <li>临时切换到其他分支处理紧急问题</li>
+                <li>拉取远程更新但有本地未完成的工作</li>
+                <li>保存实验性更改而不污染提交历史</li>
+                <li>在没有互联网连接时备份工作</li>
+            </ul>
+        </div>
     </section>
 
     <section>
@@ -642,6 +699,63 @@ git revert commit-hash
 git reset --hard commit-hash
                 </pre>
             </div>
+        </div>
+
+        <div class="card">
+            <h3>使用Git Stash保存临时工作</h3>
+            <p>
+                Git stash命令可以暂存当前工作目录的更改，使工作区回到干净状态，适合需要临时切换分支但不想提交不完整工作的情况。
+            </p>
+            <div class="code-block">
+                <pre>
+# 基本用法：保存当前更改
+git stash
+
+# 创建带说明的stash（推荐做法）
+git stash push -m "正在进行的功能X开发"
+
+# 查看所有stash
+git stash list
+
+# 应用最近的stash并保留stash
+git stash apply
+
+# 应用特定的stash
+git stash apply stash@{2}
+
+# 应用最近的stash并删除该stash
+git stash pop
+
+# 删除特定的stash
+git stash drop stash@{1}
+
+# 删除所有stash
+git stash clear
+
+# 从stash创建新分支
+git stash branch new-branch-name stash@{0}
+
+# 只stash特定文件
+git stash push -m "只保存特定文件" file1.js file2.css
+                </pre>
+            </div>
+            
+            <h4>Stash最佳实践</h4>
+            <ul>
+                <li>总是添加清晰的描述信息，便于后续识别</li>
+                <li>及时清理不再需要的stash</li>
+                <li>定期检查stash列表，避免遗忘重要更改</li>
+                <li>对于复杂更改，考虑使用分支而非stash</li>
+                <li>切换分支前先检查有无未提交的更改</li>
+            </ul>
+            
+            <h4>常见使用场景</h4>
+            <ul>
+                <li>临时切换到其他分支处理紧急问题</li>
+                <li>拉取远程更新但有本地未完成的工作</li>
+                <li>保存实验性更改而不污染提交历史</li>
+                <li>在没有互联网连接时备份工作</li>
+            </ul>
         </div>
     </section>
 </body>

@@ -5,8 +5,8 @@ services:
     build: .
     container_name: micro_agent
     ports:
-      - "5010:5000"
-      - "8010:8000"
+      - "5000:5000"
+      - "8000:8000"
       - "2222:22"
     volumes:
       - .:/app

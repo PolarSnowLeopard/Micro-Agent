@@ -116,7 +116,7 @@
       <div class="mb-4">
         <h4>选择要执行的任务：</h4>
         <div class="d-flex flex-wrap">
-          <button
+          <!-- <button
             class="btn btn-primary task-button"
             data-task="code_analysis"
             data-description="分析代码结构和功能 - 最终输出function.json"
@@ -136,7 +136,7 @@
             data-description="将服务部署到远程服务器"
           >
             远程部署
-          </button>
+          </button> -->
           <button
             class="btn btn-info task-button"
             data-task="system_info"
@@ -219,18 +219,18 @@
 
         // 任务信息配置
         const taskInfo = {
-          code_analysis: {
-            description: "分析代码结构和功能 - 最终输出function.json",
-            expectedOutputs: ["function"],
-          },
-          service_packaging: {
-            description: "将代码封装为微服务",
-            expectedOutputs: [],
-          },
-          remote_deploy: {
-            description: "将服务部署到远程服务器",
-            expectedOutputs: [],
-          },
+        //   code_analysis: {
+        //     description: "分析代码结构和功能 - 最终输出function.json",
+        //     expectedOutputs: ["function"],
+        //   },
+        //   service_packaging: {
+        //     description: "将代码封装为微服务",
+        //     expectedOutputs: [],
+        //   },
+        //   remote_deploy: {
+        //     description: "将服务部署到远程服务器",
+        //     expectedOutputs: [],
+        //   },
           system_info: {
             description: "获取系统信息（CPU、内存、磁盘、网络等）",
             expectedOutputs: [],
