@@ -2,6 +2,7 @@ from run_mcp import MCPRunner
 import asyncio
 import sys
 import json
+import os
 from app.logger import logger
 from app.utils.visualize_record import save_record_to_json, generate_visualization_html
 
@@ -17,6 +18,21 @@ async def run_agent(task_name: str, prompt: str) -> None:
     runner = MCPRunner(agent_name)
     result = ""
     try:
+        # 从config.json加载服务器配置
+        servers_config = []
+        config_path = "config.json"
+        
+        if os.path.exists(config_path):
+            logger.info(f"从 {config_path} 加载服务器配置")
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+                    servers_config = config_data.get("servers", [])
+            except Exception as e:
+                logger.error(f"读取配置文件时出错: {str(e)}")
+        else:
+            logger.warning(f"配置文件 {config_path} 不存在，将使用默认服务器")
+        
         # 添加内置MCP服务器
         logger.info("添加默认内置MCP服务器")
         built_in_server_id = await runner.add_server(
@@ -26,7 +42,28 @@ async def run_agent(task_name: str, prompt: str) -> None:
             args=None,     # 使用默认的app.mcp.server模块
             server_id="stdio_built_in"  # 指定一个固定ID以便识别
         )
-        logger.info(f"使用内置MCP服务器: {built_in_server_id}")
+        logger.info(f"已添加内置MCP服务器: {built_in_server_id}")
+        
+        # 添加配置文件中的所有服务器
+        if servers_config:
+            for idx, server_config in enumerate(servers_config):
+                connection_type = server_config.get("connection_type", "stdio")
+                server_url = server_config.get("server_url")
+                command = server_config.get("command")
+                args = server_config.get("args")
+                server_id = server_config.get("server_id") or f"config_server_{idx}"
+                
+                # 只有当有足够的配置信息时才添加服务器
+                if server_url or command:
+                    logger.info(f"添加配置文件中的服务器 #{idx+1}")
+                    server_id = await runner.add_server(
+                        connection_type=connection_type,
+                        server_url=server_url,
+                        command=command,
+                        args=args,
+                        server_id=server_id
+                    )
+                    logger.info(f"已添加服务器: {server_id}, 类型: {connection_type}")
         
         # 执行智能体任务
         result = await runner.agent.run(prompt)
