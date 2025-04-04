@@ -4,25 +4,37 @@ demo_task_configs = {
         "outputs": [
             # 当前没有特定的最终输出文件，如果将来有可以在这里添加
         ],
-        "server_config": {
-            "connection_type": "stdio",  # stdio连接类型使用默认的内置MCP服务器
-            "server_url": None,
-            "command": None,  # 默认使用sys.executable
-            "args": None,     # 默认使用["-m", "app.mcp.server"]
-            "server_id": None # 自动生成ID
-        }
+        "server_config": [
+            # 可以添加多个服务器配置
+            {
+                "connection_type": "stdio",
+                "server_url": None,
+                "command": None, 
+                "args": None,    
+                "server_id": None
+            }
+        ]
     },
     "list_tools": {
         "prompt": "列出你可以使用的工具，然后直接结束",
         "outputs": [
             # 当前没有特定的最终输出文件，如果将来有可以在这里添加
         ],
-        "server_config": {
-            "connection_type": "sse",  # 使用内置MCP服务器，之前是SSE但可能导致错误
-            "server_url": "http://fdueblab.cn:25013/sse",          # SSE连接需要有效的URL，如果没有则使用stdio
-            "command": None,  # 默认使用sys.executable
-            "args": None,     # 默认使用["-m", "app.mcp.server"]
-            "server_id": None # 自动生成ID
-        }
+        "server_config": [
+            {
+                "connection_type": "sse",
+                "server_url": "http://fdueblab.cn:25013/sse", 
+                "command": None,
+                "args": None,
+                "server_id": None
+            },
+            {
+                "connection_type": "stdio",
+                "server_url": None, 
+                "command": "python",
+                "args": ["-m", "app.mcp.time_server"],
+                "server_id": None
+            }
+        ]
     }
 }
