@@ -7,7 +7,7 @@ from datetime import datetime
 from app.agent.mcp import MCPAgent
 from app.config import config
 from app.logger import logger
-from app.prompt.task import (
+from app.task.code_analysis_task import (
     CODE_ANALYSIS_PROMPT,
     SERVICE_PACKAGING_PROMPT,
     REMOTE_DEPLOY_PROMPT
