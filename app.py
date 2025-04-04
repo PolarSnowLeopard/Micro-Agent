@@ -69,34 +69,38 @@ async def create_stream_generator(task_name: str, task_config: Dict[str, Any], a
     try:
         runner = MCPRunner(agent_name)
         
-        # 从任务配置中获取服务器配置
-        server_config = task_config.get("server_config", {})
-        connection_type = server_config.get("connection_type", "stdio")
-        server_url = server_config.get("server_url")
-        command = server_config.get("command")
-        args = server_config.get("args")
-        server_id = server_config.get("server_id")
+        # 从任务配置中获取服务器配置列表
+        server_configs = task_config.get("server_config", [])
         
-        # 先添加内置的MCP服务器
+        # 先添加内置的MCP服务器（这是默认的，始终存在）
         logger.info("添加默认内置MCP服务器")
         await runner.add_server(
             connection_type="stdio",
             server_url=None,
-            command=None,  # 使用默认Python解释器
-            args=None,     # 使用默认的app.mcp.server模块
-            server_id="stdio_built_in"  # 指定一个固定ID以便识别
+            command=None,  
+            args=None,    
+            server_id="stdio_built_in"  
         )
         
-        # 如果配置了其他服务器，也添加它
-        if server_url or command:
-            logger.info("添加用户配置的MCP服务器")
-            await runner.add_server(
-                connection_type=connection_type,
-                server_url=server_url,
-                command=command,
-                args=args,
-                server_id=server_id
-            )
+        # 遍历并添加配置中的其他服务器
+        if server_configs:
+            for idx, server_config in enumerate(server_configs):
+                connection_type = server_config.get("connection_type", "stdio")
+                server_url = server_config.get("server_url")
+                command = server_config.get("command")
+                args = server_config.get("args")
+                server_id = server_config.get("server_id") or f"server_{idx}"
+                
+                # 检查是否有足够的配置信息来添加服务器
+                if server_url or command:
+                    logger.info(f"添加配置的MCP服务器 #{idx+1}")
+                    await runner.add_server(
+                        connection_type=connection_type,
+                        server_url=server_url,
+                        command=command,
+                        args=args,
+                        server_id=server_id
+                    )
         
         # 获取prompt
         prompt = task_config["prompt"]
@@ -293,13 +297,15 @@ async def code_analysis_upload(file: UploadFile = File(...)):
             "outputs": [
                 {"name": "function", "file": f"{WORKSPACE_ROOT}/temp/function.json"}
             ],
-            "server_config": {
-                "connection_type": "stdio",
-                "server_url": None,
-                "command": None,
-                "args": None,
-                "server_id": None
-            }
+            "server_config": [
+                {
+                    "connection_type": "stdio",
+                    "server_url": None,
+                    "command": None,
+                    "args": None,
+                    "server_id": None
+                }
+            ]
         }
         
         agent_name = "Code Analysis Agent"
@@ -321,29 +327,19 @@ async def code_analysis_upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
 
 class ServerConfig(BaseModel):
-    """服务器配置数据模型
-    
-    无论是否提供此配置，系统都会首先添加一个内置的MCP服务器。
-    此配置仅用于添加额外的服务器连接。
-    
-    如果指定connection_type='stdio'且不指定command和args，
-    则会使用系统默认的Python解释器启动内置MCP服务器模块。
-    
-    如果指定connection_type='sse'，则必须提供有效的server_url。
-    """
-    connection_type: str = "stdio"  # 'stdio'使用内置MCP服务器，'sse'连接远程服务器
-    server_url: Optional[str] = None  # SSE连接必须提供此项
-    command: Optional[str] = None  # stdio连接的命令，默认为sys.executable
-    args: Optional[List[str]] = None  # 命令参数，默认为["-m", "app.mcp.server"]
-    server_id: Optional[str] = None  # 服务器ID，默认自动生成
-    add_built_in: bool = True  # 是否同时添加内置服务器（默认为True）
+    """服务器配置数据模型"""
+    connection_type: str = "stdio"
+    server_url: Optional[str] = None
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    server_id: Optional[str] = None
 
 class TaskRequest(BaseModel):
     """任务请求数据模型"""
     task_name: str
-    server_config: Optional[ServerConfig] = None
-    prompt_override: Optional[str] = None
-    
+    server_config: Optional[List[ServerConfig]] = None
+    prompt_override: Optional[str]
+
 # 启动应用
 if __name__ == "__main__":
     import uvicorn
