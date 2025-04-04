@@ -1,15 +1,15 @@
-version: '3'
+version: "3"
 
 services:
   micro_agent:
     build: .
     container_name: micro_agent
     ports:
-      - "8010:5000"
-      - "18000:8000"
+      - "5010:5000"
+      - "8010:8000"
       - "2222:22"
     volumes:
       - .:/app
-    stdin_open: true  # 保持标准输入开启
-    tty: true  # 分配伪终端
+    stdin_open: true # 保持标准输入开启
+    tty: true # 分配伪终端
     restart: unless-stopped
