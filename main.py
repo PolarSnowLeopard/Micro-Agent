@@ -17,9 +17,21 @@ async def run_agent(task_name: str, prompt: str) -> None:
     runner = MCPRunner(agent_name)
     result = ""
     try:
-        await runner.initialize("stdio", None)
+        # 添加内置MCP服务器
+        logger.info("添加默认内置MCP服务器")
+        built_in_server_id = await runner.add_server(
+            connection_type="stdio",
+            server_url=None,
+            command=None,  # 使用默认Python解释器
+            args=None,     # 使用默认的app.mcp.server模块
+            server_id="stdio_built_in"  # 指定一个固定ID以便识别
+        )
+        logger.info(f"使用内置MCP服务器: {built_in_server_id}")
+        
+        # 执行智能体任务
         result = await runner.agent.run(prompt)
         result = json.dumps(result, ensure_ascii=False, indent=4)
+        
         # 保存JSON记录文件
         save_record_to_json(task_name, result)
             
@@ -45,5 +57,5 @@ if __name__ == "__main__":
     # for task, prompt in zip(task_name, prompt):
     #     asyncio.run(run_agent(task, prompt))
 
-    prompt = "我想知道当前机器的一些信息，比如cpu、内存、磁盘、网络等"
+    prompt = "请列出你可以使用的mcp工具，然后直接结束"
     asyncio.run(run_agent("system_info", prompt))
