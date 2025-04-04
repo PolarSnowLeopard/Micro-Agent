@@ -1,0 +1,18 @@
+{
+  "servers": [
+    {
+      "connection_type": "sse",
+      "server_url": "http://fdueblab.cn:25013/sse",
+      "command": null,
+      "args": null,
+      "server_id": null
+    },
+    {
+      "connection_type": "stdio",
+      "server_url": null,
+      "command": "python",
+      "args": ["-m", "app.mcp.time_server"],
+      "server_id": null
+    }
+  ]
+}
