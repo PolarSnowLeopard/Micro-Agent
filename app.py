@@ -15,10 +15,13 @@ from pydantic import BaseModel
 
 from app.config import WORKSPACE_ROOT
 
-from app.task.demo_task import demo_task_configs
+from app.task.demo import demo_task_configs
 # 导入任务提示
-from app.task.code_analysis_task import (
+from app.task.code_analysis import (
     get_code_analysis_prompt
+)
+from app.task.service_evaluation import (
+    get_service_evaluation_prompt
 )
 from app.utils.file_utils import extract_zip
 
@@ -340,7 +343,97 @@ class TaskRequest(BaseModel):
     server_config: Optional[List[ServerConfig]] = None
     prompt_override: Optional[str]
 
+# 添加在 TaskRequest 类后面
+class EvaluationRequest(BaseModel):
+    """微服务评测请求数据模型"""
+    service_name: str
+    metrics: List[str]
+
+# 添加在其他API端点后面
+@app.post("/api/agent/service_evaluation", tags=["api"])
+async def service_evaluation(
+    service_name: str = Form(...),
+    metrics: str = Form(...),  # 前端会发送JSON字符串或逗号分隔的字符串
+    data_file: UploadFile = File(...)
+):
+    """
+    上传ZIP数据文件并执行原子微服务技术评测任务
+    
+    参数:
+        service_name: 待测试服务的名称
+        metrics: 需要评测的指标(安全性、鲁棒性、隐私性、可信性中的一个或多个)，JSON字符串格式
+        data_file: ZIP格式的数据文件
+    
+    返回:
+        流式SSE响应，每个step完成后返回一个事件
+        最后一个事件包含评测结果
+    """
+    # 确保temp目录存在
+    workspace = Path(f"{WORKSPACE_ROOT}")
+    workspace.mkdir(parents=True, exist_ok=True)
+    
+    # 生成唯一的文件名
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_filename = f"{workspace}/{timestamp}_{data_file.filename}"
+    
+    try:
+        # 尝试解析metrics参数 - 处理两种可能的格式
+        try:
+            # 尝试作为JSON数组解析
+            metrics_list = json.loads(metrics)
+        except json.JSONDecodeError:
+            # 如果不是JSON，则作为逗号分隔的字符串处理
+            metrics_list = [m.strip() for m in metrics.split(',')]
+        
+        # 验证指标是否合法
+        valid_metrics = ["安全性", "鲁棒性", "隐私性", "可信性"]
+        for metric in metrics_list:
+            if metric not in valid_metrics:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"无效的评测指标: {metric}。有效指标为: {', '.join(valid_metrics)}"
+                )
+        
+        # 保存上传的文件
+        with open(zip_filename, "wb") as buffer:
+            shutil.copyfileobj(data_file.file, buffer)
+
+        # TODO: 创建评测任务的prompt
+        prompt = get_service_evaluation_prompt(service_name, metrics_list, zip_filename)
+        logger.info(f"评测任务的prompt: {prompt}")
+        # 评测任务配置
+        task_name = "service_evaluation"
+        task_config = {
+            "prompt": prompt,
+            "outputs": [
+                # TODO: 定义具体的输出文件
+                {"name": "evaluation_result", "file": f"{WORKSPACE_ROOT}/temp/evaluation_result.json"}
+            ],
+            "server_config": [
+                # TODO: 定义具体的服务器配置
+            ]
+        }
+        
+        agent_name = "服务评测Agent"
+        
+        # 设置需要清理的文件列表
+        cleanup_files = [zip_filename]
+        
+        # 使用通用生成器创建流式响应
+        stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files)
+        return create_streaming_response(stream_generator)
+    
+    except json.JSONDecodeError:
+        logger.error(f"无效的JSON格式指标: {metrics}")
+        raise HTTPException(status_code=400, detail="指标必须是有效的JSON格式数组")
+    except Exception as e:
+        logger.error(f"处理服务评测请求时出错: {str(e)}", exc_info=True)
+        # 确保清理临时文件
+        if os.path.exists(zip_filename):
+            os.remove(zip_filename)
+        raise HTTPException(status_code=500, detail=f"处理评测请求时出错: {str(e)}")
+
 # 启动应用
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000) 
+    uvicorn.run(app, host="0.0.0.0", port=8010) 
