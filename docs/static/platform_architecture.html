@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>算法智能体平台架构图</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        
+        header {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1, h2, h3 {
+            color: #1a73e8;
+        }
+        
+        section {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .architecture-image {
+            width: 100%;
+            max-width: 1000px;
+            margin: 20px auto;
+            display: block;
+            border-radius: 5px;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+        }
+        
+        .image-caption {
+            text-align: center;
+            margin-top: 10px;
+            margin-bottom: 30px;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .description {
+            background-color: #e8f0fe;
+            padding: 15px;
+            border-left: 5px solid #1a73e8;
+            margin: 15px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            color: #666;
+            font-size: 14px;
+            border-top: 1px solid #eee;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>算法智能体平台架构图</h1>
+        <p>本文档展示了算法智能体平台的当前架构和未来规划</p>
+    </header>
+    
+    <section id="current-architecture">
+        <h2>当前平台架构</h2>
+        
+        <div class="description">
+            <p>当前的算法智能体平台Agent基于Dify和Micro-Agent框架，结合REST API和MCP Server实现。</p>
+        </div>
+        
+        <img src="img/架构图_now.png" alt="当前算法智能体平台架构图" class="architecture-image">
+        <p class="image-caption">图1: 当前算法智能体平台架构</p>
+        
+        <!-- <h3>核心组件说明</h3>
+        <ul>
+            <li><strong>智能体管理</strong>：负责智能体的创建、配置和生命周期管理</li>
+            <li><strong>工具集成</strong>：集成各类工具，提供给智能体使用</li>
+            <li><strong>MCP服务器</strong>：通过Model Context Protocol提供标准化通信接口</li>
+            <li><strong>任务调度</strong>：管理智能体执行的各类任务，支持并发和异步执行</li>
+        </ul> -->
+    </section>
+    
+    <section id="future-architecture">
+        <h2>未来平台架构规划</h2>
+        
+        <div class="description">
+            <p>未来的算法智能体平台Agent能力将完全基于Micro-Agent框架和MCP Server实现。</p>
+        </div>
+        
+        <img src="img/架构图_future.png" alt="未来算法智能体平台架构图" class="architecture-image">
+        <p class="image-caption">图2: 未来算法智能体平台架构规划</p>
+        
+        <!-- <h3>升级组件说明</h3>
+        <ul>
+            <li><strong>分布式智能体</strong>：支持跨节点部署和协作的智能体系统</li>
+            <li><strong>扩展工具生态</strong>：更丰富的工具库和第三方集成能力</li>
+            <li><strong>高级安全机制</strong>：细粒度的权限控制和安全审计</li>
+            <li><strong>性能优化</strong>：针对大规模部署的性能优化和资源管理</li>
+            <li><strong>自动化测试与部署</strong>：完整的CI/CD流程支持</li>
+        </ul> -->
+    </section>
+    
+    <!-- <section id="technical-details">
+        <h2>技术实现细节</h2>
+        
+        <p>平台采用了以下关键技术实现智能体功能：</p>
+        
+        <ul>
+            <li>基于Python的异步编程模型</li>
+            <li>标准化的Model Context Protocol (MCP)通信协议</li>
+            <li>灵活的工具注册和调用机制</li>
+            <li>强大的上下文管理和记忆系统</li>
+            <li>支持多种通信方式（stdio, sse等）</li>
+        </ul>
+        
+        <p>平台遵循模块化设计原则，各组件之间松耦合，便于扩展和定制。用户可以方便地添加自定义智能体、工具和服务器，满足不同场景的需求。</p>
+    </section> -->
+    
+    <footer>
+        <p>算法智能体平台架构文档 &copy; 2023-2024</p>
+        <p>由开发团队维护和更新</p>
+    </footer>
+</body>
+</html> 
