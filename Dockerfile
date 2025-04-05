@@ -16,6 +16,10 @@ RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm main contrib
         vim-runtime \
         xauth \
         xxd \
+        curl \
+        wget \
+        unzip \
+        zip \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -32,11 +36,11 @@ WORKDIR /app
 COPY . /app 
  
 # Install any needed packages specified in requirements.txt 
-RUN pip install --no-cache-dir -r requirements.txt 
+RUN pip install -r requirements.txt 
 # -i https://pypi.tuna.tsinghua.edu.cn/simple
  
 # Make port 5000 available to the world outside this container 
-EXPOSE 5000 22 8000
+EXPOSE 8010 22 8000
  
 # 启动SSH服务并保持容器运行
 CMD service ssh start && bash
