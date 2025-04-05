@@ -39,5 +39,7 @@ jobs:
 
       - name: Build and push macro-agent Docker image
         run: |
-          docker build -t polarsnowleopard/macro-agent:latest -f deploy/Dockerfile .
+          mv deploy/Dockerfile Dockerfile
+          mv deploy/start.sh start.sh
+          docker build -t polarsnowleopard/macro-agent:latest .
           docker push polarsnowleopard/macro-agent:latest
