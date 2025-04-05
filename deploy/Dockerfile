@@ -42,5 +42,10 @@ RUN pip install -r requirements.txt
 # Make port 5000 available to the world outside this container 
 EXPOSE 8010 22 8000
 
+# 创建启动脚本
+COPY start.sh /app/start.sh
+# 或者如果没有 start.sh 文件，可以在 Dockerfile 中创建
+# RUN echo '#!/bin/bash\n/usr/sbin/sshd -D &\npython app.py' > /app/start.sh
+
 RUN chmod +x start.sh
 CMD ["./start.sh"]
