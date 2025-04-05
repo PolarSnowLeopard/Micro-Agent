@@ -73,46 +73,9 @@ def get_service_evaluation_prompt(service_name:str,
     远程服务以REST API的形式进行访问，具体API端点参见服务信息中的`apiList`字段。
 
     你需要使用评测数据，通过访问远程服务中的API端点，对服务进行评测。
+
+    不用解压评测数据，直接使用其访问远程服务的API端点。
     
-    请按照给定的输出格式将结果写入`{WORKSPACE_ROOT}/temp/evaluation_result.json`文件中。
-
-    输出格式为
-    <example>
-    输入：
-    {{
-        "model_api": "",
-        "dataset_link":"",
-        "evaluation_choices":["安全性(Security)"]
-    }}
-
-    输出：
-    {{
-        "code": 200,
-        "message": "评测完毕！",
-        "data": {{
-            "securityResult": "5.0"
-        }}
-    }}
-    </example>
-
-    输入：
-    {{
-        "model_api": "",
-        "dataset_link":"",
-        "evaluation_choices": ["全选(all)"]
-    }}
-
-    输出：
-    {{
-        "code": 200,
-        "message": "评测完毕！",
-        "data": {{
-            "securityResult": "5.0",
-            "robustnessResult": "5.0",
-            "privacyResult": "5.0",
-            "credibilityResult": "5.0"
-        }}
-    }}
-    </example>
+    请将评测结果写入`{WORKSPACE_ROOT}/temp/evaluation_result.json`文件中。
     """
     return prompt
