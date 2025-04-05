@@ -106,6 +106,24 @@
         font-style: italic;
         color: #6c757d;
       }
+      .form-card {
+        margin-bottom: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        display: none;
+      }
+      .form-header {
+        padding: 12px 15px;
+        border-bottom: 1px solid #dee2e6;
+        background-color: #f1f3f5;
+        border-radius: 8px 8px 0 0;
+        font-weight: bold;
+      }
+      .form-content {
+        padding: 15px;
+        background-color: #fff;
+        border-radius: 0 0 8px 8px;
+      }
     </style>
   </head>
   <body>
@@ -116,31 +134,11 @@
       <div class="mb-4">
         <h4>选择要执行的任务：</h4>
         <div class="d-flex flex-wrap">
-          <!-- <button
-            class="btn btn-primary task-button"
-            data-task="code_analysis"
-            data-description="分析代码结构和功能 - 最终输出function.json"
-          >
-            代码分析
-          </button>
-          <button
-            class="btn btn-success task-button"
-            data-task="service_packaging"
-            data-description="将代码封装为微服务"
-          >
-            服务封装
-          </button>
-          <button
-            class="btn btn-warning task-button"
-            data-task="remote_deploy"
-            data-description="将服务部署到远程服务器"
-          >
-            远程部署
-          </button> -->
           <button
             class="btn btn-info task-button"
             data-task="system_info"
             data-description="获取系统信息（CPU、内存、磁盘、网络等）"
+            data-has-form="false"
           >
             系统信息
           </button>
@@ -148,8 +146,36 @@
             class="btn btn-secondary task-button"
             data-task="list_tools"
             data-description="列出代理可以使用的工具"
+            data-has-form="false"
           >
             列出工具
+          </button>
+          <button
+            class="btn btn-primary task-button"
+            data-task="service_evaluation"
+            data-description="评测微服务技术指标（安全性、鲁棒性、隐私性、可信性等）"
+            data-has-form="true"
+            data-form-id="serviceEvaluationForm"
+          >
+            服务评测
+          </button>
+          <button
+            class="btn btn-success task-button"
+            data-task="meta_app_validation"
+            data-description="验证元应用数据（查全率/查准率/计算效率）"
+            data-has-form="true"
+            data-form-id="metaAppValidationForm"
+          >
+            元应用数据验证
+          </button>
+          <button
+            class="btn btn-warning task-button"
+            data-task="aml_model_evaluation"
+            data-description="评测AML模型技术指标"
+            data-has-form="true"
+            data-form-id="amlModelEvaluationForm"
+          >
+            AML模型评测
           </button>
         </div>
       </div>
@@ -160,6 +186,149 @@
         class="task-description"
         style="display: none"
       ></div>
+
+      <!-- 服务评测表单 -->
+      <div id="serviceEvaluationForm" class="form-card">
+        <div class="form-header">服务评测参数</div>
+        <div class="form-content">
+          <form id="serviceEvalForm" enctype="multipart/form-data">
+            <div class="mb-3">
+              <label for="serviceName" class="form-label">服务名称:</label>
+              <input
+                type="text"
+                class="form-control"
+                id="serviceName"
+                name="service_name"
+                required
+              />
+              <div class="form-text">输入需要评测的服务名称</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">评测指标 (可多选):</label>
+              <div class="form-check">
+                <input class="form-check-input service-metric" type="checkbox" value="安全性" id="securityMetric">
+                <label class="form-check-label" for="securityMetric">安全性</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input service-metric" type="checkbox" value="鲁棒性" id="robustnessMetric">
+                <label class="form-check-label" for="robustnessMetric">鲁棒性</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input service-metric" type="checkbox" value="隐私性" id="privacyMetric">
+                <label class="form-check-label" for="privacyMetric">隐私性</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input service-metric" type="checkbox" value="可信性" id="credibilityMetric">
+                <label class="form-check-label" for="credibilityMetric">可信性</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="allServiceMetrics">
+                <label class="form-check-label" for="allServiceMetrics">全选</label>
+              </div>
+              <input type="hidden" name="metrics" id="serviceMetricsValue">
+            </div>
+            <div class="mb-3">
+              <label for="serviceDataFile" class="form-label">数据文件:</label>
+              <input
+                type="file"
+                class="form-control"
+                id="serviceDataFile"
+                name="data_file"
+                accept=".zip"
+                required
+              />
+              <div class="form-text">上传ZIP格式的数据文件</div>
+            </div>
+            <button type="submit" class="btn btn-primary">开始评测</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- 元应用数据验证表单 -->
+      <div id="metaAppValidationForm" class="form-card">
+        <div class="form-header">元应用数据验证参数</div>
+        <div class="form-content">
+          <form id="metaAppForm" enctype="multipart/form-data">
+            <div class="mb-3">
+              <label for="metaAppApi" class="form-label">元应用API端点:</label>
+              <input
+                type="text"
+                class="form-control"
+                id="metaAppApi"
+                name="meta_app_api"
+                required
+              />
+              <div class="form-text">输入待测试的元应用API端点</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">评测指标 (可多选):</label>
+              <div class="form-check">
+                <input class="form-check-input meta-app-metric" type="checkbox" value="查全率" id="recallMetric">
+                <label class="form-check-label" for="recallMetric">查全率</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input meta-app-metric" type="checkbox" value="查准率" id="precisionMetric">
+                <label class="form-check-label" for="precisionMetric">查准率</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input meta-app-metric" type="checkbox" value="计算效率" id="efficiencyMetric">
+                <label class="form-check-label" for="efficiencyMetric">计算效率</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="allMetaAppMetrics">
+                <label class="form-check-label" for="allMetaAppMetrics">全选</label>
+              </div>
+              <input type="hidden" name="metrics" id="metaAppMetricsValue">
+            </div>
+            <div class="mb-3">
+              <label for="metaAppDataFile" class="form-label">数据文件:</label>
+              <input
+                type="file"
+                class="form-control"
+                id="metaAppDataFile"
+                name="data_file"
+                accept=".zip"
+                required
+              />
+              <div class="form-text">上传ZIP格式的数据文件</div>
+            </div>
+            <button type="submit" class="btn btn-primary">开始验证</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- AML模型评测表单 -->
+      <div id="amlModelEvaluationForm" class="form-card">
+        <div class="form-header">AML模型评测参数</div>
+        <div class="form-content">
+          <form id="amlModelForm" enctype="multipart/form-data">
+            <div class="mb-3">
+              <label for="modelName" class="form-label">模型名称:</label>
+              <input
+                type="text"
+                class="form-control"
+                id="modelName"
+                name="model_name"
+                required
+              />
+              <div class="form-text">输入需要评测的模型名称</div>
+            </div>
+            <div class="mb-3">
+              <label for="modelDataFile" class="form-label">数据集文件:</label>
+              <input
+                type="file"
+                class="form-control"
+                id="modelDataFile"
+                name="data_file"
+                accept=".zip"
+                required
+              />
+              <div class="form-text">上传ZIP格式的数据集文件</div>
+            </div>
+            <button type="submit" class="btn btn-primary">开始评测</button>
+          </form>
+        </div>
+      </div>
 
       <!-- API选择 -->
       <div class="mb-4" style="display: none">
@@ -213,24 +382,56 @@
         const finalResultContent =
           document.getElementById("finalResultContent");
         const taskDescription = document.getElementById("taskDescription");
+        const serviceEvalForm = document.getElementById("serviceEvalForm");
+        const metaAppForm = document.getElementById("metaAppForm");
+        const amlModelForm = document.getElementById("amlModelForm");
 
-        // API基础URL
-        const API_BASE_URL = "/stream/run/"; // FastAPI基础URL
+        // 设置指标全选功能
+        document.getElementById('allServiceMetrics').addEventListener('change', function() {
+          document.querySelectorAll('.service-metric').forEach(checkbox => {
+            checkbox.checked = this.checked;
+          });
+        });
+        
+        document.getElementById('allMetaAppMetrics').addEventListener('change', function() {
+          document.querySelectorAll('.meta-app-metric').forEach(checkbox => {
+            checkbox.checked = this.checked;
+          });
+        });
+        
+        // 处理单个选项变化时全选框的状态
+        document.querySelectorAll('.service-metric').forEach(checkbox => {
+          checkbox.addEventListener('change', function() {
+            const allChecked = [...document.querySelectorAll('.service-metric')].every(cb => cb.checked);
+            document.getElementById('allServiceMetrics').checked = allChecked;
+          });
+        });
+        
+        document.querySelectorAll('.meta-app-metric').forEach(checkbox => {
+          checkbox.addEventListener('change', function() {
+            const allChecked = [...document.querySelectorAll('.meta-app-metric')].every(cb => cb.checked);
+            document.getElementById('allMetaAppMetrics').checked = allChecked;
+          });
+        });
+
+        // 表单映射
+        const formMap = {
+          serviceEvaluationForm: serviceEvalForm,
+          metaAppValidationForm: metaAppForm,
+          amlModelEvaluationForm: amlModelForm,
+        };
+
+        // API路径映射
+        const apiPathMap = {
+          system_info: "/stream/run/system_info",
+          list_tools: "/stream/run/list_tools",
+          service_evaluation: "/api/agent/service_evaluation",
+          meta_app_validation: "/api/agent/meta_app_validation",
+          aml_model_evaluation: "/api/agent/aml_model_evaluation",
+        };
 
         // 任务信息配置
         const taskInfo = {
-        //   code_analysis: {
-        //     description: "分析代码结构和功能 - 最终输出function.json",
-        //     expectedOutputs: ["function"],
-        //   },
-        //   service_packaging: {
-        //     description: "将代码封装为微服务",
-        //     expectedOutputs: [],
-        //   },
-        //   remote_deploy: {
-        //     description: "将服务部署到远程服务器",
-        //     expectedOutputs: [],
-        //   },
           system_info: {
             description: "获取系统信息（CPU、内存、磁盘、网络等）",
             expectedOutputs: [],
@@ -238,6 +439,19 @@
           list_tools: {
             description: "列出代理可以使用的工具",
             expectedOutputs: [],
+          },
+          service_evaluation: {
+            description:
+              "评测微服务技术指标（安全性、鲁棒性、隐私性、可信性等）",
+            expectedOutputs: ["evaluation_result"],
+          },
+          meta_app_validation: {
+            description: "验证元应用数据（查全率/查准率/计算效率）",
+            expectedOutputs: ["validation_result"],
+          },
+          aml_model_evaluation: {
+            description: "评测AML模型技术指标",
+            expectedOutputs: ["evaluation_result"],
           },
         };
 
@@ -252,15 +466,172 @@
           button.addEventListener("click", function () {
             const taskName = this.getAttribute("data-task");
             const description = this.getAttribute("data-description");
+            const hasForm = this.getAttribute("data-has-form") === "true";
+            const formId = this.getAttribute("data-form-id");
+
+            // 隐藏所有表单
+            document.querySelectorAll(".form-card").forEach((form) => {
+              form.style.display = "none";
+            });
+
+            // 如果任务需要表单，则显示对应表单
+            if (hasForm && formId) {
+              document.getElementById(formId).style.display = "block";
+            } else {
+              // 直接启动任务
+              startTask(taskName);
+            }
 
             // 显示任务描述
             taskDescription.textContent = description;
             taskDescription.style.display = "block";
-
-            // 启动任务
-            startTask(taskName);
           });
         });
+
+        // 添加表单提交事件
+        serviceEvalForm.addEventListener("submit", function (e) {
+          e.preventDefault();
+          handleFormSubmit(this, "service_evaluation");
+        });
+
+        metaAppForm.addEventListener("submit", function (e) {
+          e.preventDefault();
+          handleFormSubmit(this, "meta_app_validation");
+        });
+
+        amlModelForm.addEventListener("submit", function (e) {
+          e.preventDefault();
+          handleFormSubmit(this, "aml_model_evaluation");
+        });
+
+        // 处理表单提交
+        function handleFormSubmit(form, taskName) {
+          // 如果是服务评测表单，准备指标数据
+          if (taskName === "service_evaluation") {
+            const selectedMetrics = [];
+            document.querySelectorAll('.service-metric:checked').forEach(checkbox => {
+              selectedMetrics.push(checkbox.value);
+            });
+            document.getElementById('serviceMetricsValue').value = JSON.stringify(selectedMetrics);
+          }
+          
+          // 如果是元应用验证表单，准备指标数据
+          if (taskName === "meta_app_validation") {
+            const selectedMetrics = [];
+            document.querySelectorAll('.meta-app-metric:checked').forEach(checkbox => {
+              selectedMetrics.push(checkbox.value);
+            });
+            document.getElementById('metaAppMetricsValue').value = JSON.stringify(selectedMetrics);
+          }
+          
+          // 重置界面
+          stepsContainer.innerHTML = "";
+          finalResultContainer.style.display = "none";
+          finalResultTabs.innerHTML = "";
+          finalResultContent.innerHTML = "";
+          stepResults = [];
+          finalResults = null;
+
+          // 显示状态栏
+          statusBar.style.display = "block";
+          statusText.textContent = `正在执行 ${taskInfo[taskName].description} 任务...`;
+
+          // 设置当前任务
+          currentTask = taskName;
+
+          // 获取API路径
+          const apiPath = apiPathMap[taskName];
+
+          // 创建FormData对象
+          const formData = new FormData(form);
+
+          // 发送请求
+          fetch(apiPath, {
+            method: "POST",
+            body: formData,
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error(`HTTP错误! 状态码: ${response.status}`);
+              }
+
+              // 处理数据流
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder("utf-8");
+              let buffer = "";
+
+              function processStream() {
+                return reader.read().then(({ done, value }) => {
+                  if (done) {
+                    return;
+                  }
+
+                  // 解码数据并添加到缓冲区
+                  buffer += decoder.decode(value, { stream: true });
+
+                  // 处理缓冲区中的每一行数据
+                  const lines = buffer.split("\n\n");
+                  buffer = lines.pop(); // 保留可能不完整的最后一行
+
+                  for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                      try {
+                        const data = JSON.parse(line.substring(6));
+
+                        // 检查是否有错误
+                        if (data.error) {
+                          addErrorStep(data.error);
+                          finishTask("失败");
+                          return;
+                        }
+
+                        // 检查是否有警告消息
+                        if (data.warning) {
+                          addWarningStep(data.warning);
+                          finishTask("完成但有警告");
+                          return;
+                        }
+
+                        // 检查是否是包含最终结果的消息
+                        if (data.is_final_result && data.final_results) {
+                          finalResults = data.final_results;
+                          displayFinalResults(finalResults);
+                          finishTask("完成");
+                          return;
+                        }
+
+                        // 添加正常步骤
+                        if (data.step) {
+                          addStep(data);
+                        }
+
+                        // 检查是否是最后一步（但没有最终结果）
+                        if (
+                          data.is_last &&
+                          !data.is_final_result &&
+                          !data.warning
+                        ) {
+                          finishTask("完成但无最终结果");
+                        }
+                      } catch (e) {
+                        console.error("解析数据失败:", e, line);
+                        addErrorStep("解析数据失败: " + e.message);
+                      }
+                    }
+                  }
+
+                  return processStream();
+                });
+              }
+
+              return processStream();
+            })
+            .catch((error) => {
+              console.error("请求错误:", error);
+              addErrorStep("请求错误: " + error.message);
+              finishTask("错误");
+            });
+        }
 
         // 开始执行任务
         function startTask(taskName) {
@@ -283,7 +654,7 @@
           )} 任务...`;
 
           // 构建API URL
-          const apiUrl = API_BASE_URL + taskName;
+          const apiUrl = apiPathMap[taskName];
 
           // 关闭已有的EventSource连接
           if (eventSource) {
