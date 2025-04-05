@@ -43,6 +43,7 @@ class _BashSession:
         )
 
         self._started = True
+        self._timed_out = False  # 重置超时状态
 
     def stop(self):
         """Terminate the bash shell."""
@@ -111,6 +112,11 @@ class _BashSession:
         self._process.stderr._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
 
         return CLIResult(output=output, error=error)
+    
+    @property
+    def timed_out(self) -> bool:
+        """返回会话是否处于超时状态"""
+        return self._timed_out
 
 
 class Bash(BaseTool):
@@ -145,6 +151,15 @@ class Bash(BaseTool):
         if self._session is None:
             self._session = _BashSession()
             await self._session.start()
+        elif self._session.timed_out:
+            # 如果会话已超时，自动重启
+            self._session.stop()
+            self._session = _BashSession()
+            await self._session.start()
+            return CLIResult(
+                system="检测到上一次会话超时，已自动重启工具。请重新运行命令。",
+                error="Previous session timed out. Session has been automatically restarted."
+            )
 
         if command is not None:
             return await self._session.run(command)
