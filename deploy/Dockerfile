@@ -42,6 +42,6 @@ RUN pip install -r requirements.txt
 # Make port 5000 available to the world outside this container 
 EXPOSE 8010 22 8000
  
-COPY deploy/start.sh /start.sh
+COPY start.sh /start.sh
 RUN chmod +x /start.sh
 CMD ["/start.sh"]
