@@ -1,3 +1,4 @@
+uv==0.6.12
 asyncssh==2.20.0
 flask
 flask-cors
@@ -21,14 +22,8 @@ httpx>=0.27.0
 boto3~=1.37.16
 
 python-multipart
-# numpy
-# datasets~=3.2.0
 fastapi~=0.115.11
-# fastapi-mcp
-# gymnasium~=1.0.0
-# pillow~=10.4.0
-# browsergym~=0.13.3
 uvicorn~=0.34.0
-# unidiff~=0.7.5
-# colorama~=0.4.6
-# tomli>=2.0.0
+
+# mysql server
+mysql-connector-python >= 9.1.0
