@@ -177,6 +177,15 @@
           >
             AML模型评测
           </button>
+          <button
+            class="btn btn-danger task-button"
+            data-task="aml_report"
+            data-description="生成反洗钱分析报告"
+            data-has-form="true"
+            data-form-id="amlReportForm"
+          >
+            AML报告生成
+          </button>
         </div>
       </div>
 
@@ -330,6 +339,28 @@
         </div>
       </div>
 
+      <!-- AML报告生成表单 -->
+      <div id="amlReportForm" class="form-card">
+        <div class="form-header">AML报告生成参数</div>
+        <div class="form-content">
+          <form id="amlReportGenForm" enctype="multipart/form-data">
+            <div class="mb-3">
+              <label for="amlReportDataFile" class="form-label">数据文件:</label>
+              <input
+                type="file"
+                class="form-control"
+                id="amlReportDataFile"
+                name="file"
+                accept=".zip"
+                required
+              />
+              <div class="form-text">上传ZIP格式的交易数据文件</div>
+            </div>
+            <button type="submit" class="btn btn-primary">开始生成报告</button>
+          </form>
+        </div>
+      </div>
+
       <!-- API选择 -->
       <div class="mb-4" style="display: none">
         <div class="form-check form-check-inline">
@@ -419,6 +450,7 @@
           serviceEvaluationForm: serviceEvalForm,
           metaAppValidationForm: metaAppForm,
           amlModelEvaluationForm: amlModelForm,
+          amlReportForm: document.getElementById("amlReportGenForm"),
         };
 
         // API路径映射
@@ -428,6 +460,7 @@
           service_evaluation: "/api/agent/service_evaluation",
           meta_app_validation: "/api/agent/meta_app_validation",
           aml_model_evaluation: "/api/agent/aml_model_evaluation",
+          aml_report: "/api/agent/aml_report",
         };
 
         // 任务信息配置
@@ -452,6 +485,10 @@
           aml_model_evaluation: {
             description: "评测AML模型技术指标",
             expectedOutputs: ["evaluation_result"],
+          },
+          aml_report: {
+            description: "生成反洗钱分析报告",
+            expectedOutputs: ["report"],
           },
         };
 
@@ -502,6 +539,11 @@
         amlModelForm.addEventListener("submit", function (e) {
           e.preventDefault();
           handleFormSubmit(this, "aml_model_evaluation");
+        });
+        
+        document.getElementById("amlReportGenForm").addEventListener("submit", function (e) {
+          e.preventDefault();
+          handleFormSubmit(this, "aml_report");
         });
 
         // 处理表单提交

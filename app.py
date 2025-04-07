@@ -29,6 +29,9 @@ from app.task.meta_app_validation import (
 from app.task.aml_model_evaluation import (
     get_aml_model_evaluation_prompt
 )
+from app.task.aml_report import (
+    get_aml_report_prompt
+)
 from app.utils.file_utils import extract_zip
 
 # 设置日志记录器
@@ -184,9 +187,10 @@ async def create_stream_generator(task_name: str, task_config: Dict[str, Any], a
                 # 使用非阻塞方式清理资源
                 logger.info("在后台启动清理过程...")
                 # 创建任务但不等待其完成
-                asyncio.create_task(runner.cleanup())
+                # asyncio.create_task(runner.cleanup())
+                runner.cleanup()
                 # 给清理任务一点时间启动
-                await asyncio.sleep(0.1)
+                # await asyncio.sleep(0.1)
                 logger.info("清理任务已在后台启动")
             except Exception as e:
                 logger.error(f"启动清理过程时出错: {str(e)}")
@@ -333,6 +337,73 @@ async def code_analysis_upload(file: UploadFile = File(...)):
             os.remove(zip_filename)
         if os.path.exists(extract_path):
             shutil.rmtree(extract_path)
+        raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
+    
+# 添加反洗钱报告生成任务的POST API端点
+@app.post("/api/agent/aml_report", tags=["aml"])
+async def aml_report_upload(file: UploadFile = File(...)):
+    """
+    上传ZIP文件并执行反洗钱报告生成任务
+    
+    参数:
+        file: ZIP格式的数据集文件
+    
+    返回:
+        流式SSE响应，每个step完成后返回一个事件
+        最后一个事件包含任务特定的最终结果
+    """
+    # 确保temp目录存在
+    workspace = Path(f"{WORKSPACE_ROOT}")
+    workspace.mkdir(parents=True, exist_ok=True)
+    
+    # 生成唯一的文件名和解压目录
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_filename = f"{workspace}/{timestamp}_{file.filename}"
+    
+    try:
+        # 保存上传的文件
+        with open(zip_filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        task_name = "aml_report"
+        task_config = {
+            "prompt": get_aml_report_prompt(workspace=workspace, 
+                                               input_dir=zip_filename),
+            "outputs": [
+                {"name": "report", "file": f"{WORKSPACE_ROOT}/temp/aml_report.md"}
+            ],
+            "server_config": [
+                {
+                    "connection_type": "stdio",
+                    "server_url": None,
+                    "command": "python",
+                    "args": ["-m", "app.mcp.aml_server.server"],
+                    "server_id": None
+                },
+                {
+                    "connection_type": "stdio",
+                    "server_url": None,
+                    "command": "python",
+                    "args": ["-m", "app.mcp.deepseek_server.server"],
+                    "server_id": None
+                }
+            ]
+        }
+        
+        agent_name = "AML Report Agent"
+        
+        # 设置需要清理的文件列表
+        cleanup_files = [zip_filename]
+        
+        # 使用通用生成器创建流式响应
+        stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files)
+        return create_streaming_response(stream_generator)
+    
+    except Exception as e:
+        logger.error(f"处理上传文件时出错: {str(e)}", exc_info=True)
+        # 确保清理临时文件
+        if os.path.exists(zip_filename):
+            os.remove(zip_filename)
         raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
 
 class ServerConfig(BaseModel):
