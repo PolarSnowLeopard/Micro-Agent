@@ -65,9 +65,9 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: Build and push macro-agent Docker image
+      - name: Build and push micro-agent Docker image
         run: |
           mv deploy/Dockerfile Dockerfile
           mv deploy/start.sh start.sh
-          docker build -t polarsnowleopard/macro-agent:latest .
-          docker push polarsnowleopard/macro-agent:latest
+          docker build -t polarsnowleopard/micro-agent:latest .
+          docker push polarsnowleopard/micro-agent:latest
