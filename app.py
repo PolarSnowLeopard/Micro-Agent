@@ -341,12 +341,19 @@ async def code_analysis_upload(file: UploadFile = File(...)):
     
 # 添加反洗钱报告生成任务的POST API端点
 @app.post("/api/agent/aml_report", tags=["aml"])
-async def aml_report_upload(file: UploadFile = File(...)):
+async def aml_report_upload(
+    file_url: str = Form(default=None),
+    file: UploadFile = File(None)
+):
     """
-    上传ZIP文件并执行反洗钱报告生成任务
+    上传ZIP文件或提供文件URL并执行反洗钱报告生成任务
     
     参数:
-        file: ZIP格式的数据集文件
+        file: ZIP格式的数据集文件（可选）
+        file_url: 数据集文件的URL地址（可选）
+        
+    注意:
+        必须提供file或file_url中的一个参数
     
     返回:
         流式SSE响应，每个step完成后返回一个事件
@@ -356,19 +363,53 @@ async def aml_report_upload(file: UploadFile = File(...)):
     workspace = Path(f"{WORKSPACE_ROOT}")
     workspace.mkdir(parents=True, exist_ok=True)
     
-    # 生成唯一的文件名和解压目录
+    # 生成唯一的文件名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    zip_filename = f"{workspace}/{timestamp}_{file.filename}"
+    
+    # 检查参数
+    has_file = file is not None and hasattr(file, "filename") and file.filename
+    has_url = file_url is not None and file_url.strip() != ""
+    
+    if not has_file and not has_url:
+        raise HTTPException(status_code=400, detail="必须提供文件上传或文件URL")
     
     try:
-        # 保存上传的文件
-        with open(zip_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # 根据提供的参数类型处理文件
+        if has_file:
+            # 直接上传文件的情况
+            zip_filename = f"{workspace}/{timestamp}_{file.filename}"
+            with open(zip_filename, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            logger.info(f"已保存上传的文件: {zip_filename}")
+        elif has_url:
+            # 从URL下载文件的情况
+            import requests
+            from urllib.parse import urlparse
+            
+            # 从URL中提取文件名
+            parsed_url = urlparse(file_url)
+            url_path = parsed_url.path
+            file_name = os.path.basename(url_path) or f"dataset_{timestamp}.zip"
+            
+            zip_filename = f"{workspace}/{timestamp}_{file_name}"
+            
+            # 下载文件
+            logger.info(f"从URL下载文件: {file_url}")
+            response = requests.get(file_url, stream=True)
+            if response.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"无法从URL下载文件，状态码: {response.status_code}")
+            
+            with open(zip_filename, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            logger.info(f"已下载文件: {zip_filename}")
+        else:
+            raise HTTPException(status_code=400, detail="无效的参数组合")
         
         task_name = "aml_report"
         task_config = {
             "prompt": get_aml_report_prompt(workspace=workspace, 
-                                               input_dir=zip_filename),
+                                           input_dir=zip_filename),
             "outputs": [
                 {"name": "report", "file": f"{WORKSPACE_ROOT}/temp/aml_report.md"}
             ],
@@ -402,7 +443,7 @@ async def aml_report_upload(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"处理上传文件时出错: {str(e)}", exc_info=True)
         # 确保清理临时文件
-        if os.path.exists(zip_filename):
+        if 'zip_filename' in locals() and os.path.exists(zip_filename):
             os.remove(zip_filename)
         raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
 
