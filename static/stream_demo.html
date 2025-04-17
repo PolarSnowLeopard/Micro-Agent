@@ -153,7 +153,7 @@
           <button
             class="btn btn-primary task-button"
             data-task="service_evaluation"
-            data-description="评测微服务技术指标（安全性、鲁棒性、隐私性、可信性等）"
+            data-description="评测微服务技术指标（privacy, safety-fingerprint, safety-watermark, fairness, robustness, explainability等）"
             data-has-form="true"
             data-form-id="serviceEvaluationForm"
           >
@@ -215,28 +215,116 @@
             <div class="mb-3">
               <label class="form-label">评测指标 (可多选):</label>
               <div class="form-check">
-                <input class="form-check-input service-metric" type="checkbox" value="安全性" id="securityMetric">
-                <label class="form-check-label" for="securityMetric">安全性</label>
+                <input
+                  class="form-check-input service-metric"
+                  type="checkbox"
+                  value="privacy"
+                  id="privacyMetric"
+                />
+                <label class="form-check-label" for="privacyMetric"
+                  >privacy</label
+                >
               </div>
               <div class="form-check">
-                <input class="form-check-input service-metric" type="checkbox" value="鲁棒性" id="robustnessMetric">
-                <label class="form-check-label" for="robustnessMetric">鲁棒性</label>
+                <input
+                  class="form-check-input service-metric"
+                  type="checkbox"
+                  value="safety-fingerprint"
+                  id="safetyFingerprintMetric"
+                />
+                <label class="form-check-label" for="safetyFingerprintMetric"
+                  >safety-fingerprint</label
+                >
               </div>
               <div class="form-check">
-                <input class="form-check-input service-metric" type="checkbox" value="隐私性" id="privacyMetric">
-                <label class="form-check-label" for="privacyMetric">隐私性</label>
+                <input
+                  class="form-check-input service-metric"
+                  type="checkbox"
+                  value="safety-watermark"
+                  id="safetyWatermarkMetric"
+                />
+                <label class="form-check-label" for="safetyWatermarkMetric"
+                  >safety-watermark</label
+                >
               </div>
               <div class="form-check">
-                <input class="form-check-input service-metric" type="checkbox" value="可信性" id="credibilityMetric">
-                <label class="form-check-label" for="credibilityMetric">可信性</label>
+                <input
+                  class="form-check-input service-metric"
+                  type="checkbox"
+                  value="fairness"
+                  id="fairnessMetric"
+                />
+                <label class="form-check-label" for="fairnessMetric"
+                  >fairness</label
+                >
               </div>
               <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="allServiceMetrics">
-                <label class="form-check-label" for="allServiceMetrics">全选</label>
+                <input
+                  class="form-check-input service-metric"
+                  type="checkbox"
+                  value="robustness"
+                  id="robustnessMetric"
+                />
+                <label class="form-check-label" for="robustnessMetric"
+                  >robustness</label
+                >
               </div>
-              <input type="hidden" name="metrics" id="serviceMetricsValue">
+              <div class="form-check">
+                <input
+                  class="form-check-input service-metric"
+                  type="checkbox"
+                  value="explainability"
+                  id="explainabilityMetric"
+                />
+                <label class="form-check-label" for="explainabilityMetric"
+                  >explainability</label
+                >
+              </div>
+              <div class="form-check">
+                <input
+                  class="form-check-input"
+                  type="checkbox"
+                  id="allServiceMetrics"
+                />
+                <label class="form-check-label" for="allServiceMetrics"
+                  >全选</label
+                >
+              </div>
+              <input type="hidden" name="metrics" id="serviceMetricsValue" />
             </div>
+
+            <!-- 添加文件来源选择 -->
             <div class="mb-3">
+              <label class="form-label">数据来源:</label>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="serviceDataSource"
+                  id="serviceFileUpload"
+                  value="upload"
+                  checked
+                />
+                <label class="form-check-label" for="serviceFileUpload"
+                  >上传文件</label
+                >
+              </div>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="serviceDataSource"
+                  id="serviceFileUrl"
+                  value="url"
+                />
+                <label class="form-check-label" for="serviceFileUrl"
+                  >文件URL</label
+                >
+              </div>
+            </div>
+
+            <!-- 文件上传区域 -->
+            <div class="mb-3" id="serviceFileUploadArea">
               <label for="serviceDataFile" class="form-label">数据文件:</label>
               <input
                 type="file"
@@ -244,10 +332,23 @@
                 id="serviceDataFile"
                 name="data_file"
                 accept=".zip"
-                required
               />
               <div class="form-text">上传ZIP格式的数据文件</div>
             </div>
+
+            <!-- 文件URL区域 -->
+            <div class="mb-3" id="serviceFileUrlArea" style="display: none">
+              <label for="serviceDataUrl" class="form-label">文件URL:</label>
+              <input
+                type="url"
+                class="form-control"
+                id="serviceDataUrl"
+                name="file_url"
+                placeholder="https://lhcos-84055-1317429791.cos.ap-shanghai.myqcloud.com/ioeb/test_dataset.zip"
+              />
+              <div class="form-text">输入ZIP格式数据文件的URL地址</div>
+            </div>
+
             <button type="submit" class="btn btn-primary">开始评测</button>
           </form>
         </div>
@@ -272,24 +373,83 @@
             <div class="mb-3">
               <label class="form-label">评测指标 (可多选):</label>
               <div class="form-check">
-                <input class="form-check-input meta-app-metric" type="checkbox" value="查全率" id="recallMetric">
-                <label class="form-check-label" for="recallMetric">查全率</label>
+                <input
+                  class="form-check-input meta-app-metric"
+                  type="checkbox"
+                  value="查全率"
+                  id="recallMetric"
+                />
+                <label class="form-check-label" for="recallMetric"
+                  >查全率</label
+                >
               </div>
               <div class="form-check">
-                <input class="form-check-input meta-app-metric" type="checkbox" value="查准率" id="precisionMetric">
-                <label class="form-check-label" for="precisionMetric">查准率</label>
+                <input
+                  class="form-check-input meta-app-metric"
+                  type="checkbox"
+                  value="查准率"
+                  id="precisionMetric"
+                />
+                <label class="form-check-label" for="precisionMetric"
+                  >查准率</label
+                >
               </div>
               <div class="form-check">
-                <input class="form-check-input meta-app-metric" type="checkbox" value="计算效率" id="efficiencyMetric">
-                <label class="form-check-label" for="efficiencyMetric">计算效率</label>
+                <input
+                  class="form-check-input meta-app-metric"
+                  type="checkbox"
+                  value="计算效率"
+                  id="efficiencyMetric"
+                />
+                <label class="form-check-label" for="efficiencyMetric"
+                  >计算效率</label
+                >
               </div>
               <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="allMetaAppMetrics">
-                <label class="form-check-label" for="allMetaAppMetrics">全选</label>
+                <input
+                  class="form-check-input"
+                  type="checkbox"
+                  id="allMetaAppMetrics"
+                />
+                <label class="form-check-label" for="allMetaAppMetrics"
+                  >全选</label
+                >
               </div>
-              <input type="hidden" name="metrics" id="metaAppMetricsValue">
+              <input type="hidden" name="metrics" id="metaAppMetricsValue" />
             </div>
+
+            <!-- 添加文件来源选择 -->
             <div class="mb-3">
+              <label class="form-label">数据来源:</label>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="metaAppDataSource"
+                  id="metaAppFileUpload"
+                  value="upload"
+                  checked
+                />
+                <label class="form-check-label" for="metaAppFileUpload"
+                  >上传文件</label
+                >
+              </div>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="metaAppDataSource"
+                  id="metaAppFileUrl"
+                  value="url"
+                />
+                <label class="form-check-label" for="metaAppFileUrl"
+                  >文件URL</label
+                >
+              </div>
+            </div>
+
+            <!-- 文件上传区域 -->
+            <div class="mb-3" id="metaAppFileUploadArea">
               <label for="metaAppDataFile" class="form-label">数据文件:</label>
               <input
                 type="file"
@@ -297,10 +457,23 @@
                 id="metaAppDataFile"
                 name="data_file"
                 accept=".zip"
-                required
               />
               <div class="form-text">上传ZIP格式的数据文件</div>
             </div>
+
+            <!-- 文件URL区域 -->
+            <div class="mb-3" id="metaAppFileUrlArea" style="display: none">
+              <label for="metaAppDataUrl" class="form-label">文件URL:</label>
+              <input
+                type="url"
+                class="form-control"
+                id="metaAppDataUrl"
+                name="file_url"
+                placeholder="https://lhcos-84055-1317429791.cos.ap-shanghai.myqcloud.com/ioeb/test_dataset.zip"
+              />
+              <div class="form-text">输入ZIP格式数据文件的URL地址</div>
+            </div>
+
             <button type="submit" class="btn btn-primary">开始验证</button>
           </form>
         </div>
@@ -322,7 +495,39 @@
               />
               <div class="form-text">输入需要评测的模型名称</div>
             </div>
+
+            <!-- 添加文件来源选择 -->
             <div class="mb-3">
+              <label class="form-label">数据来源:</label>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="amlModelDataSource"
+                  id="amlModelFileUpload"
+                  value="upload"
+                  checked
+                />
+                <label class="form-check-label" for="amlModelFileUpload"
+                  >上传文件</label
+                >
+              </div>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="amlModelDataSource"
+                  id="amlModelFileUrl"
+                  value="url"
+                />
+                <label class="form-check-label" for="amlModelFileUrl"
+                  >文件URL</label
+                >
+              </div>
+            </div>
+
+            <!-- 文件上传区域 -->
+            <div class="mb-3" id="amlModelFileUploadArea">
               <label for="modelDataFile" class="form-label">数据集文件:</label>
               <input
                 type="file"
@@ -330,10 +535,23 @@
                 id="modelDataFile"
                 name="data_file"
                 accept=".zip"
-                required
               />
               <div class="form-text">上传ZIP格式的数据集文件</div>
             </div>
+
+            <!-- 文件URL区域 -->
+            <div class="mb-3" id="amlModelFileUrlArea" style="display: none">
+              <label for="amlModelDataUrl" class="form-label">文件URL:</label>
+              <input
+                type="url"
+                class="form-control"
+                id="amlModelDataUrl"
+                name="file_url"
+                placeholder="https://lhcos-84055-1317429791.cos.ap-shanghai.myqcloud.com/ioeb/test_dataset.zip"
+              />
+              <div class="form-text">输入ZIP格式数据集文件的URL地址</div>
+            </div>
+
             <button type="submit" class="btn btn-primary">开始评测</button>
           </form>
         </div>
@@ -344,18 +562,64 @@
         <div class="form-header">AML报告生成参数</div>
         <div class="form-content">
           <form id="amlReportGenForm" enctype="multipart/form-data">
+            <!-- 添加文件来源选择 -->
             <div class="mb-3">
-              <label for="amlReportDataFile" class="form-label">数据文件:</label>
+              <label class="form-label">数据来源:</label>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="amlReportDataSource"
+                  id="amlReportFileUpload"
+                  value="upload"
+                  checked
+                />
+                <label class="form-check-label" for="amlReportFileUpload"
+                  >上传文件</label
+                >
+              </div>
+              <div class="form-check form-check-inline">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="amlReportDataSource"
+                  id="amlReportFileUrl"
+                  value="url"
+                />
+                <label class="form-check-label" for="amlReportFileUrl"
+                  >文件URL</label
+                >
+              </div>
+            </div>
+
+            <!-- 文件上传区域 -->
+            <div class="mb-3" id="amlReportFileUploadArea">
+              <label for="amlReportDataFile" class="form-label"
+                >数据文件:</label
+              >
               <input
                 type="file"
                 class="form-control"
                 id="amlReportDataFile"
                 name="file"
                 accept=".zip"
-                required
               />
               <div class="form-text">上传ZIP格式的交易数据文件</div>
             </div>
+
+            <!-- 文件URL区域 -->
+            <div class="mb-3" id="amlReportFileUrlArea" style="display: none">
+              <label for="amlReportDataUrl" class="form-label">文件URL:</label>
+              <input
+                type="url"
+                class="form-control"
+                id="amlReportDataUrl"
+                name="file_url"
+                placeholder="https://lhcos-84055-1317429791.cos.ap-shanghai.myqcloud.com/ioeb/test_dataset.zip"
+              />
+              <div class="form-text">输入ZIP格式交易数据文件的URL地址</div>
+            </div>
+
             <button type="submit" class="btn btn-primary">开始生成报告</button>
           </form>
         </div>
@@ -418,30 +682,40 @@
         const amlModelForm = document.getElementById("amlModelForm");
 
         // 设置指标全选功能
-        document.getElementById('allServiceMetrics').addEventListener('change', function() {
-          document.querySelectorAll('.service-metric').forEach(checkbox => {
-            checkbox.checked = this.checked;
+        document
+          .getElementById("allServiceMetrics")
+          .addEventListener("change", function () {
+            document.querySelectorAll(".service-metric").forEach((checkbox) => {
+              checkbox.checked = this.checked;
+            });
           });
-        });
-        
-        document.getElementById('allMetaAppMetrics').addEventListener('change', function() {
-          document.querySelectorAll('.meta-app-metric').forEach(checkbox => {
-            checkbox.checked = this.checked;
+
+        document
+          .getElementById("allMetaAppMetrics")
+          .addEventListener("change", function () {
+            document
+              .querySelectorAll(".meta-app-metric")
+              .forEach((checkbox) => {
+                checkbox.checked = this.checked;
+              });
           });
-        });
-        
+
         // 处理单个选项变化时全选框的状态
-        document.querySelectorAll('.service-metric').forEach(checkbox => {
-          checkbox.addEventListener('change', function() {
-            const allChecked = [...document.querySelectorAll('.service-metric')].every(cb => cb.checked);
-            document.getElementById('allServiceMetrics').checked = allChecked;
+        document.querySelectorAll(".service-metric").forEach((checkbox) => {
+          checkbox.addEventListener("change", function () {
+            const allChecked = [
+              ...document.querySelectorAll(".service-metric"),
+            ].every((cb) => cb.checked);
+            document.getElementById("allServiceMetrics").checked = allChecked;
           });
         });
-        
-        document.querySelectorAll('.meta-app-metric').forEach(checkbox => {
-          checkbox.addEventListener('change', function() {
-            const allChecked = [...document.querySelectorAll('.meta-app-metric')].every(cb => cb.checked);
-            document.getElementById('allMetaAppMetrics').checked = allChecked;
+
+        document.querySelectorAll(".meta-app-metric").forEach((checkbox) => {
+          checkbox.addEventListener("change", function () {
+            const allChecked = [
+              ...document.querySelectorAll(".meta-app-metric"),
+            ].every((cb) => cb.checked);
+            document.getElementById("allMetaAppMetrics").checked = allChecked;
           });
         });
 
@@ -475,7 +749,7 @@
           },
           service_evaluation: {
             description:
-              "评测微服务技术指标（安全性、鲁棒性、隐私性、可信性等）",
+              "评测微服务技术指标（privacy, safety-fingerprint, safety-watermark, fairness, robustness, explainability等）",
             expectedOutputs: ["evaluation_result"],
           },
           meta_app_validation: {
@@ -540,32 +814,40 @@
           e.preventDefault();
           handleFormSubmit(this, "aml_model_evaluation");
         });
-        
-        document.getElementById("amlReportGenForm").addEventListener("submit", function (e) {
-          e.preventDefault();
-          handleFormSubmit(this, "aml_report");
-        });
+
+        document
+          .getElementById("amlReportGenForm")
+          .addEventListener("submit", function (e) {
+            e.preventDefault();
+            handleFormSubmit(this, "aml_report");
+          });
 
         // 处理表单提交
         function handleFormSubmit(form, taskName) {
           // 如果是服务评测表单，准备指标数据
           if (taskName === "service_evaluation") {
             const selectedMetrics = [];
-            document.querySelectorAll('.service-metric:checked').forEach(checkbox => {
-              selectedMetrics.push(checkbox.value);
-            });
-            document.getElementById('serviceMetricsValue').value = JSON.stringify(selectedMetrics);
+            document
+              .querySelectorAll(".service-metric:checked")
+              .forEach((checkbox) => {
+                selectedMetrics.push(checkbox.value);
+              });
+            document.getElementById("serviceMetricsValue").value =
+              JSON.stringify(selectedMetrics);
           }
-          
+
           // 如果是元应用验证表单，准备指标数据
           if (taskName === "meta_app_validation") {
             const selectedMetrics = [];
-            document.querySelectorAll('.meta-app-metric:checked').forEach(checkbox => {
-              selectedMetrics.push(checkbox.value);
-            });
-            document.getElementById('metaAppMetricsValue').value = JSON.stringify(selectedMetrics);
+            document
+              .querySelectorAll(".meta-app-metric:checked")
+              .forEach((checkbox) => {
+                selectedMetrics.push(checkbox.value);
+              });
+            document.getElementById("metaAppMetricsValue").value =
+              JSON.stringify(selectedMetrics);
           }
-          
+
           // 重置界面
           stepsContainer.innerHTML = "";
           finalResultContainer.style.display = "none";
@@ -943,6 +1225,45 @@
             statusBar.style.display = "none";
           }, 3000);
         }
+
+        // 添加文件来源切换逻辑
+        function setupDataSourceToggle(radioName, uploadAreaId, urlAreaId) {
+          document
+            .querySelectorAll(`input[name="${radioName}"]`)
+            .forEach((radio) => {
+              radio.addEventListener("change", function () {
+                if (this.value === "upload") {
+                  document.getElementById(uploadAreaId).style.display = "block";
+                  document.getElementById(urlAreaId).style.display = "none";
+                } else {
+                  document.getElementById(uploadAreaId).style.display = "none";
+                  document.getElementById(urlAreaId).style.display = "block";
+                }
+              });
+            });
+        }
+
+        // 设置每个表单的切换逻辑
+        setupDataSourceToggle(
+          "serviceDataSource",
+          "serviceFileUploadArea",
+          "serviceFileUrlArea"
+        );
+        setupDataSourceToggle(
+          "metaAppDataSource",
+          "metaAppFileUploadArea",
+          "metaAppFileUrlArea"
+        );
+        setupDataSourceToggle(
+          "amlModelDataSource",
+          "amlModelFileUploadArea",
+          "amlModelFileUrlArea"
+        );
+        setupDataSourceToggle(
+          "amlReportDataSource",
+          "amlReportFileUploadArea",
+          "amlReportFileUrlArea"
+        );
       });
     </script>
   </body>
