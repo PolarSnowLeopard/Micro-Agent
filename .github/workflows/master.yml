@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - zfy
 
 jobs:
   # 测试阶段
@@ -48,7 +49,7 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: Build and push Project_1 Docker image
+      - name: Build and push Docs Docker image
         run: |
           docker build -t polarsnowleopard/ioeb-docs:latest ./docs
           docker push polarsnowleopard/ioeb-docs:latest

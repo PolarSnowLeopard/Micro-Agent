@@ -731,6 +731,7 @@ async def meta_app_validation(
 @app.post("/api/agent/aml_model_evaluation", tags=["api"])
 async def aml_model_evaluation(
     model_name: str = Form(...),
+    metrics: str = Form(...),  # 前端会发送JSON字符串或逗号分隔的字符串
     file_url: str = Form(default=None),
     data_file: UploadFile = File(None)
 ):
@@ -739,6 +740,7 @@ async def aml_model_evaluation(
     
     参数:
         model_name: 需要评测的模型名称
+        metrics: 需要评测的指标，privacy, safety-fingerprint, safety-watermark, fairness, robustness, explainability，JSON字符串格式
         data_file: ZIP格式的数据集文件（可选）
         file_url: 数据集文件的URL地址（可选）
         
@@ -764,6 +766,23 @@ async def aml_model_evaluation(
         raise HTTPException(status_code=400, detail="必须提供文件上传或文件URL")
     
     try:
+        # 尝试解析metrics参数 - 处理两种可能的格式
+        try:
+            # 尝试作为JSON数组解析
+            metrics_list = json.loads(metrics)
+        except json.JSONDecodeError:
+            # 如果不是JSON，则作为逗号分隔的字符串处理
+            metrics_list = [m.strip() for m in metrics.split(',')]
+        
+        # 验证指标是否合法
+        valid_metrics = ["privacy", "safety-fingerprint", "safety-watermark", "fairness", "robustness", "explainability"]
+        for metric in metrics_list:
+            if metric not in valid_metrics:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"无效的评测指标: {metric}。有效指标为: {', '.join(valid_metrics)}"
+                )
+        
         # 根据提供的参数类型处理文件
         if has_file:
             # 直接上传文件的情况
@@ -797,7 +816,7 @@ async def aml_model_evaluation(
             raise HTTPException(status_code=400, detail="无效的参数组合")
 
         # 创建评测任务的prompt
-        prompt = get_aml_model_evaluation_prompt(model_name, zip_filename)
+        prompt = get_aml_model_evaluation_prompt(model_name, zip_filename, metrics_list)
         logger.info(f"AML模型技术评测任务的prompt: {prompt}")
         
         # 评测任务配置
@@ -810,6 +829,11 @@ async def aml_model_evaluation(
             ],
             "server_config": [
                 # 如有需要可以定义具体的服务器配置
+                {
+                    "connection_type": "sse",
+                    "server_url": f"{os.getenv('PROJECT_4_MCP')}",
+                    "server_id": "project_4_mcp"
+                }
             ]
         }
         
@@ -822,6 +846,9 @@ async def aml_model_evaluation(
         stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files)
         return create_streaming_response(stream_generator)
     
+    except json.JSONDecodeError:
+        logger.error(f"无效的JSON格式指标: {metrics}")
+        raise HTTPException(status_code=400, detail="指标必须是有效的JSON格式数组")
     except Exception as e:
         logger.error(f"处理AML模型技术评测请求时出错: {str(e)}", exc_info=True)
         # 确保清理临时文件
