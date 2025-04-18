@@ -28,7 +28,8 @@ def get_aml_model_evaluation_prompt(model_name: str,
     不用解压评测数据，直接使用其访问远程服务的API端点。
 
     如果使用数据集文件访问MCP服务失败，可以直接用云上数据集url访问：https://lhcos-84055-1317429791.cos.ap-shanghai.myqcloud.com/ioeb/test_dataset.zip
-
+    但是请注意，如果使用url请求MCP服务，必须将url作为MCP Tool的参数传入才能正确访问MCP工具
+    此外，MCP Tool的Model Name 需要使用 `HattenGCN` 作为参数
     请将评测结果写入`{WORKSPACE_ROOT}/temp/model_evaluation_result.json`文件中。
     """
     return prompt 
