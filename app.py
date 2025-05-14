@@ -275,6 +275,60 @@ async def upload_demo():
     """
     return FileResponse("static/upload_demo.html")
 
+# 添加mcp测试任务的POST API端点
+@app.post("/api/agent/mcp_test", tags=["api"])
+async def mcp_test_upload(message: str = Form(...), server_url: str = Form(...)):
+    """
+    上传URL并执行mcp测试任务
+    
+    参数:
+        message: 需要测试的mcp服务URL
+        server_url: 需要测试的mcp服务URL
+    
+    返回:
+        流式SSE响应，每个step完成后返回一个事件
+        最后一个事件包含任务特定的最终结果
+    """
+    
+    try:
+        
+        # 使用与code_analysis任务相同的配置
+        task_name = "mcp_test"
+        task_config = {
+            "prompt": "请列出除了内置mcp server外的所有你可以使用的mcp server，"
+            + "并介绍他们的功能，以及每个server下的各tool的详细信息"
+            + f"并将这些内容写入{WORKSPACE_ROOT}/temp/mcp_server_list.md文件中",
+            "outputs": [
+                {"name": "mcp_server_list", "file": f"{WORKSPACE_ROOT}/temp/mcp_server_list.md"}
+            ],
+            "server_config": [
+                {
+                    "connection_type": "sse",
+                    "server_url": server_url,
+                    "command": None,
+                    "args": None,
+                    "server_id": None
+                }
+            ]
+        }
+        
+        agent_name = "MCP Test Agent"
+        
+        # 设置需要清理的文件列表
+        cleanup_files = [f"{WORKSPACE_ROOT}/temp/mcp_server_list.md"]
+        
+        # 使用通用生成器创建流式响应
+        stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files)
+        return create_streaming_response(stream_generator)
+    
+    except Exception as e:
+        logger.error(f"处理上传文件时出错: {str(e)}", exc_info=True)
+        # 确保清理临时文件
+        if os.path.exists(f"{WORKSPACE_ROOT}/temp/mcp_server_list.md"):
+            os.remove(f"{WORKSPACE_ROOT}/temp/mcp_server_list.md")
+        raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
+    
+
 # 添加代码分析任务的POST API端点
 @app.post("/api/agent/code_analysis", tags=["api"])
 async def code_analysis_upload(file: UploadFile = File(...)):
