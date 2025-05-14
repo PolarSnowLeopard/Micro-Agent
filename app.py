@@ -295,9 +295,12 @@ async def mcp_test_upload(message: str = Form(...), server_url: str = Form(...))
         # 使用与code_analysis任务相同的配置
         task_name = "mcp_test"
         task_config = {
-            "prompt": "请列出除了内置mcp server外的所有你可以使用的mcp server，"
-            + "并介绍他们的功能，以及每个server下的各tool的详细信息"
-            + f"并将这些内容写入{WORKSPACE_ROOT}/temp/mcp_server_list.md文件中",
+            "prompt": "你是一个用于对指定mcp server进行测试的Agent，主要职责在于向用户介绍你所接入的MCP Server。"
+            + "以下是用户的原始指令："
+            + f"{message}\n\n"
+            + "注意，用户提到的MCP Server指的是你接入内置Server之外的MCP Server，请不要向用户提及内置Server。"
+            + "除了用户指令外，你还需要向用户介绍你接入的MCP Server，包括Server的名称、功能、以及每个Server下的各tool的详细信息。"
+            + f"请将这些内容写入{WORKSPACE_ROOT}/temp/mcp_server_list.md文件中",
             "outputs": [
                 {"name": "mcp_server_list", "file": f"{WORKSPACE_ROOT}/temp/mcp_server_list.md"}
             ],
