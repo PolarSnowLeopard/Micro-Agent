@@ -14,7 +14,7 @@ def get_code_analysis_prompt(workspace: str = WORKSPACE,
                              main_code: str = "main.py", 
                              temp_dir: str = 'temp', 
                              function_info_path: str = 'function.json'):
-    return f"""`{workspace}`路径下有一个`{input_dir}`文件夹，内有`{main_code}`和`requirements.txt`两个文件。`{main_code}`当中包含待封装为REST API的功能函数，`requirements.txt`则是对应的依赖环境。请你分析`{main_code}`当中的代码逻辑，解析其中功能函数的相关信息和依赖关系，并在`{temp_dir}`文件夹下创建一个`{function_info_path}`文件。该文件的格式类似以下示例：
+    return f"""`{workspace}`路径下有一个`{input_dir}`文件夹，内有`{main_code}`和`requirements.txt`两个文件(如果requirements.txt不存在，则忽略)。`{main_code}`当中包含待封装为REST API的功能函数，`requirements.txt`则是对应的依赖环境。请你分析`{main_code}`当中的代码逻辑，解析其中功能函数的相关信息和依赖关系，并在`{temp_dir}`文件夹下创建一个`{function_info_path}`文件。该文件的格式类似以下示例：
 
 ```json
 {{

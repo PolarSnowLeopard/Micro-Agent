@@ -36,6 +36,9 @@ from app.task.aml_model_evaluation import (
 from app.task.aml_report import (
     get_aml_report_prompt
 )
+from app.task.service_packaging import (
+    get_service_packaging_prompt
+)
 from app.utils.file_utils import extract_zip
 
 # 设置日志记录器
@@ -65,7 +68,7 @@ if static_dir.exists():
 
 # 辅助函数：创建流式响应生成器
 async def create_stream_generator(task_name: str, task_config: Dict[str, Any], agent_name: str, 
-                                  cleanup_files: List[str] = None):
+                                  cleanup_files: List[str] = None, zip_extract_path: str = None):
     """
     创建通用的流式响应生成器
     
@@ -74,6 +77,7 @@ async def create_stream_generator(task_name: str, task_config: Dict[str, Any], a
         task_config: 任务配置
         agent_name: Agent名称
         cleanup_files: 任务完成后需要清理的文件列表
+        zip_extract_path: 如果指定，将此目录压缩成zip文件并返回（用于service_packaging等任务）
         
     返回:
         异步生成器，产生SSE格式的事件流
@@ -141,24 +145,62 @@ async def create_stream_generator(task_name: str, task_config: Dict[str, Any], a
                 # 读取任务特定的最终输出文件
                 final_results = {}
                 
-                # 按照任务配置读取输出文件
-                for output_config in task_config.get("outputs", []):
-                    output_name = output_config["name"]
-                    output_file = output_config["file"]
-                    
+                # 如果指定了zip_extract_path，则压缩目录并返回
+                if zip_extract_path and os.path.exists(zip_extract_path):
                     try:
-                        file_path = Path(output_file)
-                        if file_path.exists():
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                try:
-                                    final_results[output_name] = json.loads(content)
-                                except json.JSONDecodeError:
-                                    final_results[output_name] = content
-                        else:
-                            logger.warning(f"输出文件不存在: {output_file}")
+                        # 生成唯一的zip文件名
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        zip_filename = f"{WORKSPACE_ROOT}/{timestamp}_service_package.zip"
+                        
+                        # 压缩目录
+                        import zipfile
+                        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                            for root, dirs, files in os.walk(zip_extract_path):
+                                for file in files:
+                                    file_path = os.path.join(root, file)
+                                    arcname = os.path.relpath(file_path, zip_extract_path)
+                                    zipf.write(file_path, arcname)
+                        
+                        logger.info(f"已创建压缩包: {zip_filename}")
+                        
+                        # 读取压缩文件并转换为base64
+                        import base64
+                        with open(zip_filename, 'rb') as f:
+                            zip_content = base64.b64encode(f.read()).decode('utf-8')
+                        
+                        final_results["service_package"] = {
+                            "filename": os.path.basename(zip_filename),
+                            "content": zip_content,
+                            "type": "zip"
+                        }
+                        
+                        # 清理临时zip文件
+                        if os.path.exists(zip_filename):
+                            os.remove(zip_filename)
+                            
                     except Exception as e:
-                        logger.warning(f"无法读取输出文件 {output_file}: {str(e)}")
+                        logger.error(f"压缩目录失败: {str(e)}")
+                        final_results["error"] = f"压缩目录失败: {str(e)}"
+                
+                # 按照任务配置读取输出文件（仅当未指定zip_extract_path时）
+                if not zip_extract_path:
+                    for output_config in task_config.get("outputs", []):
+                        output_name = output_config["name"]
+                        output_file = output_config["file"]
+                        
+                        try:
+                            file_path = Path(output_file)
+                            if file_path.exists():
+                                with open(file_path, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                    try:
+                                        final_results[output_name] = json.loads(content)
+                                    except json.JSONDecodeError:
+                                        final_results[output_name] = content
+                            else:
+                                logger.warning(f"输出文件不存在: {output_file}")
+                        except Exception as e:
+                            logger.warning(f"无法读取输出文件 {output_file}: {str(e)}")
                 
                 # 调试日志，查看最终结果
                 logger.info(f"最终结果文件状态: {final_results}")
@@ -331,15 +373,15 @@ async def mcp_test_upload(message: str = Form(...), server_url: str = Form(...))
             os.remove(f"{WORKSPACE_ROOT}/temp/mcp_server_list.md")
         raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
     
-
+    
 # 添加代码分析任务的POST API端点
 @app.post("/api/agent/code_analysis", tags=["api"])
 async def code_analysis_upload(file: UploadFile = File(...)):
     """
-    上传ZIP文件并执行代码分析任务
+    上传ZIP或PY文件并执行代码分析任务
     
     参数:
-        file: ZIP格式的代码文件
+        file: ZIP格式的代码文件或单个Python文件
     
     返回:
         流式SSE响应，每个step完成后返回一个事件
@@ -351,22 +393,38 @@ async def code_analysis_upload(file: UploadFile = File(...)):
     
     # 生成唯一的文件名和解压目录
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    zip_filename = f"{workspace}/{timestamp}_{file.filename}"
+    original_filename = f"{workspace}/{timestamp}_{file.filename}"
     extract_path = f"{workspace}/{timestamp}_extracted"
     
     try:
         # 保存上传的文件
-        with open(zip_filename, "wb") as buffer:
+        with open(original_filename, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # 解压文件
-        logger.info(f"解压文件到: {extract_path}")
-        extract_zip(zip_filename, extract_path)
+        # 获取文件扩展名
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        
+        if file_ext == '.zip':
+            # ZIP文件：解压处理
+            logger.info(f"检测到ZIP文件，解压到: {extract_path}")
+            extract_zip(original_filename, extract_path)
+        elif file_ext == '.py':
+            # PY文件：创建目录并拷贝文件
+            logger.info(f"检测到Python文件，创建目录并拷贝到: {extract_path}")
+            os.makedirs(extract_path, exist_ok=True)
+            destination_file = os.path.join(extract_path, file.filename)
+            shutil.copy2(original_filename, destination_file)
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"不支持的文件类型: {file_ext}。只支持 .zip 和 .py 文件"
+            )
         
         # 使用与code_analysis任务相同的配置
         task_name = "code_analysis"
         task_config = {
             "prompt": get_code_analysis_prompt(workspace=workspace, 
+                                               main_code=file.filename,
                                                input_dir=extract_path),
             "outputs": [
                 {"name": "function", "file": f"{WORKSPACE_ROOT}/temp/function.json"}
@@ -385,7 +443,7 @@ async def code_analysis_upload(file: UploadFile = File(...)):
         agent_name = "Code Analysis Agent"
         
         # 设置需要清理的文件列表
-        cleanup_files = [zip_filename, extract_path]
+        cleanup_files = [original_filename, extract_path]
         
         # 使用通用生成器创建流式响应
         stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files)
@@ -394,12 +452,94 @@ async def code_analysis_upload(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"处理上传文件时出错: {str(e)}", exc_info=True)
         # 确保清理临时文件
-        if os.path.exists(zip_filename):
-            os.remove(zip_filename)
+        if os.path.exists(original_filename):
+            os.remove(original_filename)
         if os.path.exists(extract_path):
             shutil.rmtree(extract_path)
         raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
     
+# 添加服务封装任务的POST API端点
+@app.post("/api/agent/service_packaging", tags=["api"])
+async def service_packaging_upload(file: UploadFile = File(...)):
+    """
+    上传ZIP或PY文件并执行服务封装任务
+    
+    参数:
+        file: ZIP格式的代码文件或单个Python文件
+    
+    返回:
+        流式SSE响应，每个step完成后返回一个事件
+        最后一个事件包含任务特定的最终结果
+    """
+    # 确保temp目录存在
+    workspace = Path(f"{WORKSPACE_ROOT}")
+    workspace.mkdir(parents=True, exist_ok=True)
+    
+    # 生成唯一的文件名和解压目录
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    original_filename = f"{workspace}/{timestamp}_{file.filename}"
+    extract_path = f"{workspace}/{timestamp}_extracted"
+    
+    try:
+        # 保存上传的文件
+        with open(original_filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # 获取文件扩展名
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        
+        if file_ext == '.zip':
+            # ZIP文件：解压处理
+            logger.info(f"检测到ZIP文件，解压到: {extract_path}")
+            extract_zip(original_filename, extract_path)
+        elif file_ext == '.py':
+            # PY文件：创建目录并拷贝文件
+            logger.info(f"检测到Python文件，创建目录并拷贝到: {extract_path}")
+            os.makedirs(extract_path, exist_ok=True)
+            destination_file = os.path.join(extract_path, file.filename)
+            shutil.copy2(original_filename, destination_file)
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"不支持的文件类型: {file_ext}。只支持 .zip 和 .py 文件"
+            )
+        
+        # Agent配置
+        task_name = "service_packaging"
+        task_config = {
+            "prompt": get_service_packaging_prompt(workspace=workspace, 
+                                               main_code=file.filename,
+                                               input_dir=extract_path),
+            "outputs": [],  # 清空outputs，因为我们将直接返回压缩的zip文件
+            "server_config": [
+                {
+                    "connection_type": "stdio",
+                    "server_url": None,
+                    "command": None,
+                    "args": None,
+                    "server_id": None
+                }
+            ]
+        }
+        
+        agent_name = "Service Packaging Agent"
+        
+        # 设置需要清理的文件列表（不包括extract_path，因为它会在压缩后被清理）
+        cleanup_files = [original_filename, extract_path]
+        
+        # 使用通用生成器创建流式响应，传入zip_extract_path启用zip压缩功能
+        stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files, zip_extract_path=extract_path)
+        return create_streaming_response(stream_generator)
+    
+    except Exception as e:
+        logger.error(f"处理上传文件时出错: {str(e)}", exc_info=True)
+        # 确保清理临时文件
+        if os.path.exists(original_filename):
+            os.remove(original_filename)
+        if os.path.exists(extract_path):
+            shutil.rmtree(extract_path)
+        raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
+
 # 添加反洗钱报告生成任务的POST API端点
 @app.post("/api/agent/aml_report", tags=["aml"])
 async def aml_report_upload(
