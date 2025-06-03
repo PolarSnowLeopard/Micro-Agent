@@ -49,8 +49,8 @@ class MCPServer:
 
         self.tools["terminate"] = Terminate()
 
-        self.tools["remote_docker_manager"] = RemoteDockerManager()
-        self.tools["file_transfer"] = FileTransfer()
+        # self.tools["remote_docker_manager"] = RemoteDockerManager()
+        # self.tools["file_transfer"] = FileTransfer()
         self.tools["file_saver"] = FileSaver()
         self.tools["json_saver"] = JsonSaver()
         # self.tools["python_execute"] = PythonExecute()
