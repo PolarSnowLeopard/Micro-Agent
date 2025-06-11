@@ -11,7 +11,7 @@
       "connection_type": "stdio",
       "server_url": null,
       "command": "python",
-      "args": ["-m", "app.mcp.time_server"],
+      "args": ["-m", "app.mcp.aml_server.server"],
       "server_id": null
     }
   ]
