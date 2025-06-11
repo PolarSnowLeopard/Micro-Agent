@@ -86,13 +86,6 @@ async def run_agent(task_name: str, prompt: str) -> None:
         await runner.cleanup()
 
 if __name__ == "__main__":
-    # from app.prompt.task import CODE_ANALYSIS_PROMPT, SERVICE_PACKAGING_PROMPT, REMOTE_DEPLOY_PROMPT
-
-    # task_name = ["code_analysis", "service_packaging", "remote_deploy"]
-    # prompt = [CODE_ANALYSIS_PROMPT, SERVICE_PACKAGING_PROMPT, REMOTE_DEPLOY_PROMPT]
-
-    # for task, prompt in zip(task_name, prompt):
-    #     asyncio.run(run_agent(task, prompt))
-
-    prompt = "请列出你可以使用的mcp工具，然后直接结束"
-    asyncio.run(run_agent("system_info", prompt))
+    agent_name = "aml_agent"
+    prompt = "你是一个金融风险监测智能体，请使用图神经网络模型帮助我进行监测金融风险。数据集在https://ioeb-1317429791.cos.ap-shanghai.myqcloud.com/datasets/test_dataset.zip"
+    asyncio.run(run_agent(agent_name, prompt))
