@@ -1,7 +1,9 @@
-# Micro-Agent 智能体框架
-
 <div align="center">
 
+# Micro-Agent 智能体框架
+
+![GitHub Stars](https://img.shields.io/github/stars/PolarSnowLeopard/Micro-Agent?style=flat&logo=github)
+![GitHub Forks](https://img.shields.io/github/forks/PolarSnowLeopard/Micro-Agent?style=flat&logo=github)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
@@ -12,13 +14,17 @@ Micro-Agent 是一个灵活、可扩展的智能体框架，专为构建各种�
 
 ## 📌 特性概览
 
-- **现代智能体架构**：基于大语言模型构建的灵活智能代理系统
-- **模型上下文协议 (MCP) 支持**：集成 MCP 协议，提供标准化工具调用机制
-- **多服务器连接**：支持同时连接多个 MCP 服务器，灵活扩展工具生态
-- **强大的内置工具集**：包含文件操作、命令执行、远程部署等常用工具
-- **流式处理**：支持实时流式输出，提升交互体验
-- **可视化界面**：提供基于 Web 的执行过程可视化
-- **任务模板系统**：支持预定义任务模板，快速创建特定功能的智能体
+- **自主智能体架构 (Autonomous Agent Architecture)**：采用 ReAct 框架构建自主决策的智能体系统，有别于传统的工作流 (Workflow) 模式，智能体能够自主思考、规划和执行任务
+- **MCP 协议支持**：使用模型上下文协议 (MCP) 为智能体集成工具，支持连接多个 MCP 服务器，灵活扩展工具生态系统
+- **内置 Shell 交互环境**：为智能体提供完整的 Shell 交互环境，使其能够感知和操作系统环境，执行文件操作、命令调用等任务
+- **标准化智能体调用接口**：Micro-Agent 专注于构建面向任务的智能体供上层应用调用，而非对话式聊天助手，提供封装完善的流式处理接口和标准化调用方式
+- **执行过程可视化**：提供基于 Web 的智能体执行过程可视化界面，实时展示思考过程、行动步骤和执行结果
+
+## 🔮 路线图
+
+- **多智能体强化学习框架**：正在开发支持多个智能体协作和强化学习的框架，提升智能体的学习和适应能力
+- **A2A 标准化协议集成**：计划集成 Agent-to-Agent (A2A) 等标准化智能体交互协议，实现智能体间的高效通信和协作
+- **增强型可视化界面**：开发更加易用和功能丰富的可视化界面，提供智能体管理、任务配置和结果分析等功能
 
 ## 🚀 快速开始
 
@@ -100,16 +106,25 @@ python app.py  # 访问 http://localhost:8010
 }
 ```
 
-**两种连接类型：**
+**MCP 服务器配置说明：**
 
-- **SSE (Server-Sent Events)**：通过 HTTP/SSE 连接远程 MCP 服务器
-  - `server_url`: MCP 服务器的 SSE 端点 URL
-  - `command` 和 `args`: 设为 null
+- `connection_type`: 连接类型，支持 `"sse"` 和 `"stdio"`
+- `server_url`: SSE 服务器 URL（仅用于 SSE 类型）
+- `command`: 启动命令（仅用于 stdio 类型）
+- `args`: 命令参数（仅用于 stdio 类型）
+- `server_id`: 服务器标识符（可选，自动生成）
 
-- **Stdio (子进程)**：通过标准输入输出启动本地 MCP 服务器
-  - `command`: 启动命令（如 "python"）
-  - `args`: 命令参数列表
-  - `server_url`: 设为 null
+**连接类型详解：**
+
+1. **SSE 连接**：适用于远程 MCP 服务器
+   - 通过 HTTP/SSE 协议连接
+   - 需要提供 `server_url`
+   - 适合连接部署在其他服务器上的 MCP 服务
+
+2. **Stdio 连接**：适用于本地 MCP 服务器
+   - 通过子进程启动 MCP 服务器
+   - 需要提供 `command` 和 `args`
+   - 适合运行本地 Python 模块作为 MCP 服务
 
 #### 2. 编写提示词和配置智能体
 
@@ -141,12 +156,6 @@ if __name__ == "__main__":
 - `prompt`: 任务提示词，定义智能体的角色和任务
 - `task_name`（第一个参数）: 用于生成保存文件的名称
 
-**提示词编写建议：**
-- 明确角色定义：告诉智能体它是什么角色
-- 具体任务描述：详细说明要完成的任务
-- 步骤化指引：提供清晰的执行步骤
-- 输出格式要求：指定期望的输出格式
-
 #### 3. 智能体执行流程
 
 智能体会自动：
@@ -174,41 +183,6 @@ python -m http.server 8000
 # 在浏览器中访问
 # http://localhost:8000/{task_name}.html
 ```
-
-**示例：**
-```bash
-# 执行代码分析任务后
-cd visualization
-python -m http.server 8000
-# 访问 http://localhost:8000/code_analysis.html 查看可视化结果
-```
-
-可视化报告包含：
-- 步骤导航和进度指示
-- 每步的思考过程、执行行动和结果
-- Token 使用统计
-- 交互式步骤折叠/展开功能
-
-
-**MCP 服务器配置说明：**
-
-- `connection_type`: 连接类型，支持 `"sse"` 和 `"stdio"`
-- `server_url`: SSE 服务器 URL（仅用于 SSE 类型）
-- `command`: 启动命令（仅用于 stdio 类型）
-- `args`: 命令参数（仅用于 stdio 类型）
-- `server_id`: 服务器标识符（可选，自动生成）
-
-**连接类型详解：**
-
-1. **SSE 连接**：适用于远程 MCP 服务器
-   - 通过 HTTP/SSE 协议连接
-   - 需要提供 `server_url`
-   - 适合连接部署在其他服务器上的 MCP 服务
-
-2. **Stdio 连接**：适用于本地 MCP 服务器
-   - 通过子进程启动 MCP 服务器
-   - 需要提供 `command` 和 `args`
-   - 适合运行本地 Python 模块作为 MCP 服务
 
 ## 📚 文档
 
