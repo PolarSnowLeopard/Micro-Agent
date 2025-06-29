@@ -39,6 +39,9 @@ from app.task.aml_report import (
 from app.task.service_packaging import (
     get_service_packaging_prompt
 )
+from app.task.mcp_service_recommendation import (
+    get_mcp_service_recommendation_prompt
+)
 from app.utils.file_utils import extract_zip
 
 # 设置日志记录器
@@ -1052,6 +1055,63 @@ async def aml_model_evaluation(
         if 'zip_filename' in locals() and os.path.exists(zip_filename):
             os.remove(zip_filename)
         raise HTTPException(status_code=500, detail=f"处理AML模型技术评测请求时出错: {str(e)}")
+
+# MCP服务推荐
+@app.post("/api/agent/mcp_service_recommendation", tags=["api"])
+async def mcp_service_recommendation(
+    message: str = Form(...),
+    service_type: str = Form(...)
+):
+    """
+    根据用户需求推荐合适的MCP服务
+    
+    参数:
+        message: 用户的需求描述
+        service_type: 服务类型，用于过滤domain字段
+    
+    返回:
+        流式SSE响应，每个step完成后返回一个事件
+        最后一个事件包含推荐结果
+    """
+    try:
+        # 创建推荐任务的prompt
+        prompt = get_mcp_service_recommendation_prompt(message, service_type)
+        logger.info(f"MCP服务推荐任务的prompt: {prompt}")
+        
+        # 任务配置
+        task_name = "mcp_service_recommendation"
+        output_file = f"{WORKSPACE_ROOT}/temp/mcp_recommendation_result.json"
+        task_config = {
+            "prompt": prompt,
+            "outputs": [
+                {"name": "recommendation_result", "file": output_file}
+            ],
+            "server_config": [
+                {
+                    "connection_type": "stdio",
+                    "server_url": None,
+                    "command": "python",
+                    "args": ["-m", "app.mcp.mysql_server.server"],
+                    "server_id": "mysql_server"
+                }
+            ]
+        }
+        
+        agent_name = "MCP服务推荐Agent"
+        
+        # 设置需要清理的文件列表
+        cleanup_files = [output_file]
+        
+        # 使用通用生成器创建流式响应
+        stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files)
+        return create_streaming_response(stream_generator)
+    
+    except Exception as e:
+        logger.error(f"处理MCP服务推荐请求时出错: {str(e)}", exc_info=True)
+        # 确保清理临时文件
+        if 'output_file' in locals() and os.path.exists(output_file):
+            os.remove(output_file)
+        raise HTTPException(status_code=500, detail=f"处理推荐请求时出错: {str(e)}")
 
 # 启动应用
 if __name__ == "__main__":
