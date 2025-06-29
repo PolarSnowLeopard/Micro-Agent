@@ -55,8 +55,6 @@ def get_mcp_service_recommendation_prompt(message: str, service_type: str):
     "preName": "根据用户需求生成的元应用名称",
     "preInputName": "根据用户需求生成的输入数据名称",
     "preOutputName": "根据用户需求生成的输出数据名称", 
-    "inputType": 2,
-    "outputType": 1,
     "nodeList": [
       {{
         "id": "数据库中services表的实际ID",
@@ -91,7 +89,6 @@ def get_mcp_service_recommendation_prompt(message: str, service_type: str):
 请注意：
 - 所有的服务和工具信息都必须来源于数据库的真实数据
 - preName、preInputName、preOutputName要根据用户需求生成合适的名称
-- inputType固定为2，outputType固定为1
 - 字段映射关系：
   * 服务基本信息来自services表：id, name, attribute, type, domain, industry, scenario, technology, status, number, deleted
   * API信息来自service_apis表：url, method, des, parameter_type, response_type, is_fake
