@@ -43,6 +43,7 @@ from app.task.mcp_service_recommendation import (
     get_mcp_service_recommendation_prompt
 )
 from app.utils.file_utils import extract_zip
+from run_meta_app import MetaAppRunner
 
 # 设置日志记录器
 logger = logging.getLogger(__name__)
@@ -319,6 +320,14 @@ async def upload_demo():
     返回文件上传演示页面
     """
     return FileResponse("static/upload_demo.html")
+
+# 元应用演示页面路由
+@app.get("/meta_app_demo", tags=["demo"])
+async def meta_app_demo():
+    """
+    返回元应用智能体演示页面
+    """
+    return FileResponse("static/meta_app_demo.html")
 
 # 添加mcp测试任务的POST API端点
 @app.post("/api/agent/mcp_test", tags=["api"])
@@ -1112,6 +1121,138 @@ async def mcp_service_recommendation(
         if 'output_file' in locals() and os.path.exists(output_file):
             os.remove(output_file)
         raise HTTPException(status_code=500, detail=f"处理推荐请求时出错: {str(e)}")
+
+# 兼容前端FormData流式调用模式：/api/agent/meta_app/run
+@app.post("/api/agent/meta_app/run", tags=["api"])
+async def meta_app_run_form(
+    message: str = Form(...),
+    app_config: str = Form(...),
+    use_sim_only: Optional[str] = Form(default=None),
+):
+    """根据FormData参数运行元应用智能体（流式SSE）。"""
+    try:
+        # 解析配置
+        try:
+            config = json.loads(app_config)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"app_config 非法JSON: {str(e)}")
+
+        # 解析模拟开关，默认True
+        use_sim = True
+        if use_sim_only is not None:
+            val = str(use_sim_only).strip().lower()
+            use_sim = val in ["1", "true", "yes", "on"]
+
+        # 创建Runner
+        runner = MetaAppRunner("Meta App Agent")
+        await runner.initialize(config, use_sim_only=use_sim)
+
+        async def stream_generator():
+            try:
+                yield f"data: {json.dumps({'status': 'start'}, ensure_ascii=False)}\n\n"
+                # 记录执行过程中的结果，供最终汇总
+                import re
+                last_thought = None
+                last_action_result = None  # 任意最后结果
+                preferred_action_result = None  # 更符合业务的结果（如生成报告）
+                preferred_visualization = None
+                finalized_payload = None  # 若Agent调用 finalize_meta_result，记录其payload
+                info_cfg = config.get("info") or config.get("meta") or {}
+                allow_viz = info_cfg.get("outputVisualization")
+                if allow_viz is None:
+                    allow_viz = False
+                async for step in runner.run_stream(message):
+                    if isinstance(step, dict):
+                        if step.get("thought"):
+                            last_thought = step.get("thought")
+                        if step.get("action_result"):
+                            ar = step.get("action_result") or ""
+                            # 解析工具名：Observed output of cmd `TOOL` executed:\n...
+                            m = re.search(r"cmd\s+`([^`]+)`\s+executed:", ar)
+                            tool_name = (m.group(1) if m else "").lower()
+                            # 捕获 finalize_meta_result 的payload
+                            if tool_name == "finalize_meta_result":
+                                try:
+                                    parts = ar.split("\n", 1)
+                                    if len(parts) == 2:
+                                        obj = json.loads(parts[1])
+                                        if isinstance(obj, dict) and (
+                                            "text_result" in obj and "visualization_data" in obj and "file_result" in obj
+                                        ):
+                                            finalized_payload = obj
+                                except Exception:
+                                    pass
+                            # 过滤无意义的终止/健康检查结果
+                            if tool_name in ("terminate",) or tool_name.endswith("_terminate"):
+                                pass
+                            elif "healthcheck" in tool_name:
+                                # 只在没有其他结果时作为兜底
+                                if not last_action_result:
+                                    last_action_result = ar
+                            else:
+                                # 业务相关结果
+                                last_action_result = ar
+                                # 优先级：报告类/生成类
+                                if any(k in tool_name for k in ["generatereport", "report"]):
+                                    preferred_action_result = ar
+                                elif any(k in tool_name for k in ["analy", "compute"]):
+                                    # 次优先级：分析/计算
+                                    if not preferred_action_result:
+                                        preferred_action_result = ar
+
+                                # 提取可视化候选（从结果JSON中的“模拟数据”）
+                                if allow_viz:
+                                    try:
+                                        parts = ar.split("\n", 1)
+                                        if len(parts) == 2:
+                                            obj = json.loads(parts[1])
+                                            viz = obj.get("模拟数据") if isinstance(obj, dict) else None
+                                            if viz is not None:
+                                                preferred_visualization = viz
+                                    except Exception:
+                                        pass
+                    json_result = json.dumps(step, ensure_ascii=False)
+                    yield f"data: {json_result}\n\n"
+
+                # 构造最终结果三字段（英文键名）
+                if finalized_payload is not None:
+                    text_result = finalized_payload.get("text_result")
+                    visualization_data = finalized_payload.get("visualization_data") if allow_viz else None
+                    file_result = finalized_payload.get("file_result")
+                else:
+                    text_result = preferred_action_result or last_action_result or last_thought or None
+                    visualization_data = preferred_visualization if (allow_viz and preferred_visualization is not None) else None
+                    file_result = None
+
+                final_event = {
+                    "success": True,
+                    "result": {
+                        "text_result": text_result,
+                        "visualization_data": visualization_data,
+                        "file_result": file_result,
+                    },
+                }
+                yield f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
+            finally:
+                try:
+                    await runner.cleanup()
+                except Exception:
+                    pass
+
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"运行元应用(FormData)时出错: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"运行元应用时出错: {str(e)}")
 
 # 启动应用
 if __name__ == "__main__":
