@@ -1225,8 +1225,8 @@ async def meta_app_run_form(
                     file_result = None
 
                 final_event = {
-                    "success": True,
-                    "result": {
+                    "is_final_result": True,
+                    "final_results": {
                         "text_result": text_result,
                         "visualization_data": visualization_data,
                         "file_result": file_result,

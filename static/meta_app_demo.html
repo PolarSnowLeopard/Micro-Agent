@@ -204,9 +204,12 @@
                                 onError(event.error);
                                 return;
                             }
-                            // 最终结果
-                            if (event && typeof event === 'object' && event.success) {
-                                onFinalResult(event);
+                            if (
+                                event && typeof event === 'object' &&
+                                event.is_final_result === true &&
+                                event.final_results && typeof event.final_results === 'object'
+                            ) {
+                                onFinalResult(event.final_results);
                                 onComplete();
                                 return;
                             }
