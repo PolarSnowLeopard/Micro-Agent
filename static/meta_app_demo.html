@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>元应用智能体演示</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f7f8fa;
+            color: #222;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 24px auto;
+            padding: 0 16px;
+        }
+        h1 {
+            font-size: 20px;
+            margin: 0 0 16px 0;
+        }
+        .card {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        }
+        .row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        label {
+            font-size: 13px;
+            color: #666;
+            display: block;
+            margin-bottom: 6px;
+        }
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 13px;
+            background: #fafafa;
+            resize: vertical;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+        button {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        button.secondary { background: #6b7280; }
+        button:disabled { background: #9ca3af; cursor: not-allowed; }
+        .status { font-size: 13px; color: #555; margin-top: 6px; }
+        .steps {
+            max-height: 360px;
+            overflow: auto;
+            background: #0b1021;
+            color: #c7d2fe;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+        .final {
+            white-space: pre-wrap;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .hint {
+            font-size: 12px;
+            color: #6b7280;
+        }
+        .sim-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #374151;
+        }
+    </style>
+    <!-- 允许宽松 JSON（支持未加引号的 key） -->
+    <script src="https://cdn.jsdelivr.net/npm/json5@2/dist/index.min.js"></script>
+    <script>
+    function exampleConfig() {
+        return JSON.stringify({
+        "info": {
+            "name": "金融欺诈检测推理元应用",
+            "url": "https://myApiServer.com/aml/fraud-detection/metaApp",
+            "method": "post",
+            "des": "基于大模型智能体的元应用，专门用于金融欺诈检测和风险评估",
+            "parameterType": 3,
+            "responseType": 1,
+            "isFake": true,
+            "parameters": null,
+            "subtitle": "基于大模型智能体的智能反欺诈应用实例",
+            "inputName": "交易数据",
+            "outputName": "欺诈风险评估报告",
+            "outputVisualization": true,
+            "submitButtonText": "开始检测",
+            "tools": null,
+            "exampleMsg": null
+        },
+        "services": [{
+            "id": "c48aad98-4a7b-4498-a4d5-ac2f991d1c0d",
+            "name": "基于多智能体协作的金融欺诈检测推理MCP服务",
+            "apiList": [{
+                "name": "多智能体欺诈检测MCP Server",
+                "url": "http://fdueblab.cn:8778/sse",
+                "method": "sse",
+                "des": "基于多智能体协作的金融欺诈检测推理服务",
+                "tools": [
+                    { "name": "healthCheck", "description": "判断微服务状态是否正常可用" },
+                    { "name": "analyzeTransaction", "description": "单笔交易风险分析" },
+                    { "name": "batchAnalyzeTransactions", "description": "批量交易风险分析" },
+                    { "name": "getAgentsStatus", "description": "获取各智能体状态" },
+                    { "name": "getModelInfo", "description": "获取模型信息" }
+                ]}
+            ]},
+            {
+            "id": "02a951d1-09b1-4d65-9f6c-cf048e5f620f",
+            "name": "样例报告生成MCP服务",
+            "apiList": [{
+                "name": "样例报告生成MCP Server",
+                "url": "https://myMcpServer.com/report-generation/sse",
+                "method": "sse",
+                "des": "用于功能演示的报告生成服务",
+                "tools": [
+                    { "name": "healthCheck", "description": "判断样例报告生成MCP服务状态是否正常可用" },
+                    { "name": "generateReport", "description": "基于输入数据生成分析报告" }
+                ]}
+            ]}
+        ]}, null, 2);
+    }
+
+    function streamAgent(url, formData, handlers) {
+        const noop = () => {};
+        const {
+            onStart = noop,
+            onStep = noop,
+            onError = noop,
+            onWarning = noop,
+            onFinalResult = noop,
+            onComplete = noop,
+            onDataProcessError = noop
+        } = handlers || {};
+
+        (async () => {
+            try {
+                onStart();
+                const resp = await fetch(url, { method: 'POST', body: formData });
+                if (!resp.ok) {
+                    const txt = await resp.text();
+                    onError(new Error('HTTP ' + resp.status + ': ' + txt));
+                    return;
+                }
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    let idx;
+                    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                        const raw = buffer.slice(0, idx);
+                        buffer = buffer.slice(idx + 2);
+                        if (!raw.startsWith('data:')) continue;
+                        const jsonStr = raw.slice(5).trim();
+                        if (!jsonStr) continue;
+
+                        try {
+                            const event = JSON.parse(jsonStr);
+                            if (event && typeof event === 'object' && 'warning' in event) {
+                                onWarning(event.warning);
+                                continue;
+                            }
+                            if (event && event.error) {
+                                onError(event.error);
+                                return;
+                            }
+                            // 最终结果
+                            if (event && typeof event === 'object' && event.success) {
+                                onFinalResult(event);
+                                onComplete();
+                                return;
+                            }
+                            // 普通步骤
+                            onStep(event);
+                        } catch (e) {
+                            onDataProcessError(e);
+                        }
+                    }
+                }
+                onComplete();
+            } catch (e) {
+                onError(e);
+            }
+        })();
+    }
+
+    async function startRun() {
+        const message = document.getElementById('message').value.trim();
+        const appConfig = document.getElementById('app_config').value.trim();
+        const btn = document.getElementById('btnStart');
+        const status = document.getElementById('status');
+        const steps = document.getElementById('steps');
+        const finalBox = document.getElementById('final');
+
+        steps.textContent = '';
+        finalBox.textContent = '';
+
+        if (!message || !appConfig) {
+            alert('请填写 message 与 app_config');
+            return;
+        }
+
+        let parsed;
+        try {
+            parsed = JSON5.parse(appConfig);
+        } catch (e) {
+            alert('app_config 不是合法 JSON/JSON5：' + e);
+            return;
+        }
+
+        btn.disabled = true;
+        status.textContent = '运行中...';
+
+        const form = new FormData();
+        form.append('message', message);
+        form.append('app_config', JSON.stringify(parsed));
+        form.append('use_sim_only', document.getElementById('use_sim_only').checked ? 'true' : 'false');
+
+        streamAgent('/api/agent/meta_app/run', form, {
+            onStart: () => {
+                appendStep(steps, '[start] 开始执行\n');
+            },
+            onStep: (event) => {
+                const stepNo = event && event.step ? ('\nstep ' + event.step + '\n') : '';
+                const thought = event && event.thought ? (event.thought + '\n') : '';
+                const action = event && event.action ? (event.action + '\n') : '';
+                const result = event && event.action_result ? (event.action_result + '\n') : '';
+                appendStep(steps, stepNo + thought + action + result + '\n');
+            },
+            onError: (error) => {
+                appendStep(steps, '[error] ' + (error?.message || error) + '\n');
+                status.textContent = '失败';
+                btn.disabled = false;
+            },
+            onWarning: (warning) => {
+                appendStep(steps, '[warn] ' + warning + '\n');
+            },
+            onFinalResult: (results) => {
+                finalBox.textContent = JSON.stringify(results, null, 2);
+                status.textContent = '完成';
+            },
+            onComplete: () => {
+                appendStep(steps, '[complete] 执行结束\n');
+                btn.disabled = false;
+            },
+            onDataProcessError: (error) => {
+                appendStep(steps, '[error] 数据处理错误: ' + (error?.message || error) + '\n');
+                status.textContent = '失败';
+                btn.disabled = false;
+            }
+        });
+    }
+
+    function appendStep(container, text) {
+        container.textContent += text;
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function fillExample() {
+        document.getElementById('app_config').value = exampleConfig();
+        document.getElementById('message').value = '请启动多方安全计算，联合分析商户M003789在银行A、支付机构B、信用卡公司C的跨境交易数据，识别潜在洗钱网络，然后生成风险评估报告';
+    }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>元应用智能体演示</h1>
+
+        <div class="card">
+            <div class="row">
+                <div>
+                    <label>Message（用户需求）</label>
+                    <textarea id="message" placeholder="例如：请获取指定数据并进行风险识别分析"></textarea>
+                </div>
+                <div>
+                    <label>app_config（JSON）<span class="hint">（可直接粘贴 mcp 推荐结果原始结构）</span></label>
+                    <textarea id="app_config" placeholder="粘贴 app_config 或点击下方示例"></textarea>
+                </div>
+            </div>
+            <div class="actions">
+                <label class="sim-toggle">
+                    <input id="use_sim_only" type="checkbox" checked />
+                    仅使用本地模拟MCP服务（use_sim_only）
+                </label>
+                <button type="button" class="secondary" onclick="fillExample()">填入示例配置</button>
+                <button id="btnStart" type="button" onclick="startRun()">开始执行</button>
+                <div class="status" id="status">待开始</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <label>执行步骤（SSE 流）</label>
+            <div id="steps" class="steps"></div>
+        </div>
+
+        <div class="card">
+            <label>最终结果（final_results）</label>
+            <div id="final" class="final"></div>
+        </div>
+    </div>
+</body>
+</html>
+
+
