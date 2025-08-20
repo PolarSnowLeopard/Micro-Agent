@@ -80,7 +80,7 @@ class ToolCallAgent(ReActAgent):
         )
         content = response.content if response and response.content else ""
 
-        thought = f"{self.name}'s thoughts: {content}"
+        thought = f"{content}"
 
         # Log response info
         logger.info(f"✨ {self.name}'s thoughts: {content}")
@@ -122,9 +122,9 @@ class ToolCallAgent(ReActAgent):
             # For 'auto' mode, continue with content if no commands but content exists
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
                 if content:
-                    thought = f"{self.name}'s thoughts: {content}"
+                    thought = f"{content}"
                 else:
-                    thought = f"{self.name}'s thoughts: LLM没有返回任何内容"
+                    thought = f"大语言模型没有返回任何内容"
                 return bool(content), thought, action, token_usage
 
             if self.tool_calls:
