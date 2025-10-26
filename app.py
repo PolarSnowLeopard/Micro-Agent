@@ -548,12 +548,21 @@ async def service_packaging_upload(file: UploadFile = File(...)):
             
             # 检测实际的项目根路径（处理zip中有顶层文件夹的情况）
             items = os.listdir(extract_path)
-            # 如果解压后只有一个文件夹，那这个文件夹就是项目根目录
-            if len(items) == 1 and os.path.isdir(os.path.join(extract_path, items[0])):
-                actual_project_path = os.path.join(extract_path, items[0])
+            # 过滤掉隐藏文件和特殊文件夹
+            ignore_items = {'.git', '__MACOSX', '.DS_Store', '.gitignore', '.gitattributes', 
+                           'Thumbs.db', 'desktop.ini'}
+            visible_items = [item for item in items 
+                           if not item.startswith('.') and item not in ignore_items]
+            
+            logger.info(f"解压后的内容（过滤后）: {visible_items}")
+            
+            # 如果过滤后只有一个文件夹，那这个文件夹就是项目根目录
+            if len(visible_items) == 1 and os.path.isdir(os.path.join(extract_path, visible_items[0])):
+                actual_project_path = os.path.join(extract_path, visible_items[0])
                 logger.info(f"检测到项目根路径: {actual_project_path}")
             else:
                 actual_project_path = extract_path
+                logger.info(f"使用解压路径作为项目根路径: {actual_project_path}")
                 
         elif file_ext == '.py':
             # PY文件：创建项目目录结构
