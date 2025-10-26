@@ -159,16 +159,20 @@ async def create_stream_generator(task_name: str, task_config: Dict[str, Any], a
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         zip_filename = f"{WORKSPACE_ROOT}/{timestamp}_service_package.zip"
                         
-                        # 压缩目录
+                        # 获取项目文件夹名称（保留目录结构）
+                        project_folder_name = os.path.basename(zip_extract_path)
+                        
+                        # 压缩目录，保留顶层文件夹结构
                         import zipfile
                         with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
                             for root, dirs, files in os.walk(zip_extract_path):
                                 for file in files:
                                     file_path = os.path.join(root, file)
-                                    arcname = os.path.relpath(file_path, zip_extract_path)
-                                    zipf.write(file_path, arcname)
+                                    # 保留项目文件夹名称作为zip中的顶层目录
+                                    rel_path = os.path.relpath(file_path, os.path.dirname(zip_extract_path))
+                                    zipf.write(file_path, rel_path)
                         
-                        logger.info(f"已创建压缩包: {zip_filename}")
+                        logger.info(f"已创建压缩包: {zip_filename}，顶层文件夹: {project_folder_name}")
                         
                         # 读取压缩文件并转换为base64
                         import base64
@@ -264,6 +268,42 @@ async def create_stream_generator(task_name: str, task_config: Dict[str, Any], a
                                 os.remove(file_path)
             except Exception as e:
                 logger.warning(f"清理临时文件失败: {str(e)}")
+
+# 辅助函数：查找项目主入口文件
+def find_project_main_file(project_root: str) -> str:
+    """
+    在项目根目录中查找主入口文件
+    
+    参数:
+        project_root: 项目根目录路径
+    
+    返回:
+        主入口文件的文件名（相对于项目根目录），如果没有找到则返回空字符串
+    """
+    try:
+        # 只查找根目录下的.py文件（不递归）
+        py_files = [f for f in os.listdir(project_root) 
+                    if f.endswith('.py') and os.path.isfile(os.path.join(project_root, f))]
+        
+        if not py_files:
+            return ""
+        
+        # 如果只有一个.py文件，直接返回
+        if len(py_files) == 1:
+            return py_files[0]
+        
+        # 如果有多个.py文件，按优先级查找
+        priority_names = ['main.py', 'app.py', 'server.py', 'run.py', 'start.py', '__main__.py']
+        for name in priority_names:
+            if name in py_files:
+                return name
+        
+        # 如果没有匹配的优先名称，返回第一个
+        return py_files[0]
+    
+    except Exception as e:
+        logger.warning(f"查找主入口文件时出错: {str(e)}")
+        return ""
 
 # 创建通用流式响应
 def create_streaming_response(generator):
@@ -498,15 +538,31 @@ async def service_packaging_upload(file: UploadFile = File(...)):
         # 获取文件扩展名
         file_ext = os.path.splitext(file.filename)[1].lower()
         
+        # 实际的项目根路径
+        actual_project_path = extract_path
+        
         if file_ext == '.zip':
             # ZIP文件：解压处理
             logger.info(f"检测到ZIP文件，解压到: {extract_path}")
             extract_zip(original_filename, extract_path)
+            
+            # 检测实际的项目根路径（处理zip中有顶层文件夹的情况）
+            items = os.listdir(extract_path)
+            # 如果解压后只有一个文件夹，那这个文件夹就是项目根目录
+            if len(items) == 1 and os.path.isdir(os.path.join(extract_path, items[0])):
+                actual_project_path = os.path.join(extract_path, items[0])
+                logger.info(f"检测到项目根路径: {actual_project_path}")
+            else:
+                actual_project_path = extract_path
+                
         elif file_ext == '.py':
-            # PY文件：创建目录并拷贝文件
+            # PY文件：创建项目目录结构
             logger.info(f"检测到Python文件，创建目录并拷贝到: {extract_path}")
-            os.makedirs(extract_path, exist_ok=True)
-            destination_file = os.path.join(extract_path, file.filename)
+            # 创建一个以文件名命名的项目文件夹
+            project_name = os.path.splitext(file.filename)[0]
+            actual_project_path = os.path.join(extract_path, project_name)
+            os.makedirs(actual_project_path, exist_ok=True)
+            destination_file = os.path.join(actual_project_path, file.filename)
             shutil.copy2(original_filename, destination_file)
         else:
             raise HTTPException(
@@ -514,12 +570,19 @@ async def service_packaging_upload(file: UploadFile = File(...)):
                 detail=f"不支持的文件类型: {file_ext}。只支持 .zip 和 .py 文件"
             )
         
-        # Agent配置
+        # 查找项目的主入口文件
+        main_code = find_project_main_file(actual_project_path)
+        if main_code:
+            logger.info(f"找到主入口文件: {main_code}")
+        else:
+            logger.warning("未在项目根目录中找到.py文件")
+        
+        # Agent配置，使用实际的项目根路径和找到的主入口文件
         task_name = "service_packaging"
         task_config = {
             "prompt": get_service_packaging_prompt(workspace=workspace, 
-                                               main_code=file.filename,
-                                               input_dir=extract_path),
+                                               main_code=main_code,
+                                               input_dir=actual_project_path),
             "outputs": [],  # 清空outputs，因为我们将直接返回压缩的zip文件
             "server_config": [
                 {
@@ -538,7 +601,8 @@ async def service_packaging_upload(file: UploadFile = File(...)):
         cleanup_files = [original_filename, extract_path]
         
         # 使用通用生成器创建流式响应，传入zip_extract_path启用zip压缩功能
-        stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files, zip_extract_path=extract_path)
+        # 传入actual_project_path作为需要压缩的路径
+        stream_generator = create_stream_generator(task_name, task_config, agent_name, cleanup_files, zip_extract_path=actual_project_path)
         return create_streaming_response(stream_generator)
     
     except Exception as e:
