@@ -454,15 +454,40 @@ async def code_analysis_upload(file: UploadFile = File(...)):
         # 获取文件扩展名
         file_ext = os.path.splitext(file.filename)[1].lower()
         
+        # 实际的项目根路径
+        actual_project_path = extract_path
+        
         if file_ext == '.zip':
             # ZIP文件：解压处理
             logger.info(f"检测到ZIP文件，解压到: {extract_path}")
             extract_zip(original_filename, extract_path)
+            
+            # 检测实际的项目根路径（处理zip中有顶层文件夹的情况）
+            items = os.listdir(extract_path)
+            # 过滤掉隐藏文件和特殊文件夹
+            ignore_items = {'.git', '__MACOSX', '.DS_Store', '.gitignore', '.gitattributes', 
+                           'Thumbs.db', 'desktop.ini'}
+            visible_items = [item for item in items 
+                           if not item.startswith('.') and item not in ignore_items]
+            
+            logger.info(f"解压后的内容（过滤后）: {visible_items}")
+            
+            # 如果过滤后只有一个文件夹，那这个文件夹就是项目根目录
+            if len(visible_items) == 1 and os.path.isdir(os.path.join(extract_path, visible_items[0])):
+                actual_project_path = os.path.join(extract_path, visible_items[0])
+                logger.info(f"检测到项目根路径: {actual_project_path}")
+            else:
+                actual_project_path = extract_path
+                logger.info(f"使用解压路径作为项目根路径: {actual_project_path}")
+                
         elif file_ext == '.py':
-            # PY文件：创建目录并拷贝文件
+            # PY文件：创建项目目录结构
             logger.info(f"检测到Python文件，创建目录并拷贝到: {extract_path}")
-            os.makedirs(extract_path, exist_ok=True)
-            destination_file = os.path.join(extract_path, file.filename)
+            # 创建一个以文件名命名的项目文件夹
+            project_name = os.path.splitext(file.filename)[0]
+            actual_project_path = os.path.join(extract_path, project_name)
+            os.makedirs(actual_project_path, exist_ok=True)
+            destination_file = os.path.join(actual_project_path, file.filename)
             shutil.copy2(original_filename, destination_file)
         else:
             raise HTTPException(
@@ -470,12 +495,19 @@ async def code_analysis_upload(file: UploadFile = File(...)):
                 detail=f"不支持的文件类型: {file_ext}。只支持 .zip 和 .py 文件"
             )
         
-        # 使用与code_analysis任务相同的配置
+        # 查找项目的主入口文件
+        main_code = find_project_main_file(actual_project_path)
+        if main_code:
+            logger.info(f"找到主入口文件: {main_code}")
+        else:
+            logger.warning("未在项目根目录中找到.py文件")
+        
+        # 使用与code_analysis任务相同的配置，使用实际的项目根路径和找到的主入口文件
         task_name = "code_analysis"
         task_config = {
             "prompt": get_code_analysis_prompt(workspace=workspace, 
-                                               main_code=file.filename,
-                                               input_dir=extract_path),
+                                               main_code=main_code,
+                                               input_dir=actual_project_path),
             "outputs": [
                 {"name": "function", "file": f"{WORKSPACE_ROOT}/temp/function.json"}
             ],
