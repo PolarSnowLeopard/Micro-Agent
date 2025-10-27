@@ -91,21 +91,23 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     - docker-compose.yml
     - README.md
 
-    Dockerfile参考示例（使用国内镜像源加速构建）：
+    Dockerfile参考示例（使用国内镜像源加速构建）。尽量避免安装无用的系统依赖：
     ```dockerfile
     FROM python:3.10-slim
 
     # 配置阿里云APT镜像源（自动适配Debian版本）
-    RUN . /etc/os-release && \\
-        echo "deb https://mirrors.aliyun.com/debian/ $VERSION_CODENAME main contrib non-free" > /etc/apt/sources.list && \\
-        echo "deb https://mirrors.aliyun.com/debian/ $VERSION_CODENAME-updates main contrib non-free" >> /etc/apt/sources.list && \\
-        echo "deb https://mirrors.aliyun.com/debian-security $VERSION_CODENAME-security main contrib non-free" >> /etc/apt/sources.list
+    # 生成时默认注释掉，需要时再取消注释
+    # RUN . /etc/os-release && \\
+    #    echo "deb https://mirrors.aliyun.com/debian/ $VERSION_CODENAME main contrib non-free" > /etc/apt/sources.list && \\
+    #    echo "deb https://mirrors.aliyun.com/debian/ $VERSION_CODENAME-updates main contrib non-free" >> /etc/apt/sources.list && \\
+    #    echo "deb https://mirrors.aliyun.com/debian-security $VERSION_CODENAME-security main contrib non-free" >> /etc/apt/sources.list
 
     # 安装系统依赖
-    RUN apt-get update && apt-get install -y --no-install-recommends \\
-        build-essential \\
-        && apt-get clean \\
-        && rm -rf /var/lib/apt/lists/*
+    # 生成时默认注释掉，需要时再取消注释
+    # RUN apt-get update && apt-get install -y --no-install-recommends \\
+    #     build-essential \\
+    #     && apt-get clean \\
+    #     && rm -rf /var/lib/apt/lists/*
 
     # 设置工作目录
     WORKDIR /app
