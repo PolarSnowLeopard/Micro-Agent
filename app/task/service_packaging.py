@@ -52,6 +52,9 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     3. 容器化准备：
        - 创建生产级Dockerfile，要求：
          * 使用python:3.10-slim基础镜像
+         * 配置国内镜像源以加速构建：
+           - Debian/Ubuntu APT源：使用阿里云镜像源
+           - Python pip源：使用清华大学镜像源
          * 正确安装相关依赖
          * 暴露8000端口
          * 配置合适的启动命令
@@ -87,6 +90,43 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     - Dockerfile
     - docker-compose.yml
     - README.md
+
+    Dockerfile参考示例（使用国内镜像源加速构建）。尽量避免安装无用的系统依赖：
+    ```dockerfile
+    FROM python:3.10-slim
+
+    # 配置阿里云APT镜像源（自动适配Debian版本）
+    # 生成时默认注释掉，需要时再取消注释
+    # RUN . /etc/os-release && \\
+    #    echo "deb https://mirrors.aliyun.com/debian/ $VERSION_CODENAME main contrib non-free" > /etc/apt/sources.list && \\
+    #    echo "deb https://mirrors.aliyun.com/debian/ $VERSION_CODENAME-updates main contrib non-free" >> /etc/apt/sources.list && \\
+    #    echo "deb https://mirrors.aliyun.com/debian-security $VERSION_CODENAME-security main contrib non-free" >> /etc/apt/sources.list
+
+    # 安装系统依赖
+    # 生成时默认注释掉，需要时再取消注释
+    # RUN apt-get update && apt-get install -y --no-install-recommends \\
+    #     build-essential \\
+    #     && apt-get clean \\
+    #     && rm -rf /var/lib/apt/lists/*
+
+    # 设置工作目录
+    WORKDIR /app
+
+    # 复制依赖文件
+    COPY requirements.txt .
+
+    # 安装Python依赖（使用清华源）
+    RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+
+    # 复制项目文件
+    COPY . .
+
+    # 暴露端口
+    EXPOSE 8000
+
+    # 启动命令
+    CMD ["python", "server.py"]
+    ```
 
     技术栈参考示例：
     ```python
@@ -183,4 +223,5 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     - 保持代码风格一致(PEP 8)和完整的类型注解
     - 确保所有MCP工具都有清晰的描述和参数说明
     - 如果原requirements.txt不存在，请基于{main_code}的导入语句推断依赖并添加MCP相关依赖
+    - Dockerfile必须配置国内镜像源（阿里云APT源 + 清华pip源）以加速构建
     """
