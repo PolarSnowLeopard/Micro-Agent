@@ -60,7 +60,7 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
          * 配置合适的启动命令
 
        - 创建docker-compose.yml，要求：
-         * service的构建的镜像名称命名为{{input_dir}}-mcp-service
+         * service的构建的镜像名称命名为<name>-mcp-service，其中<name>是项目根目录的名称
          * 配置MCP服务容器
          * 端口映射(8000:8000)
          * 环境变量支持
