@@ -541,10 +541,10 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     # 先删除 requirements.txt 中的 dgl（如果有的话）
     RUN sed -i '/^dgl/d' requirements.txt
 
-    # 安装其他 Python 依赖
+    # 安装其他 Python 依赖（使用清华镜像）
     RUN pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-    # 单独安装 DGL
+    # 单独安装 DGL（使用清华镜像）
     RUN pip install dgl==2.1.0 -i https://pypi.tuna.tsinghua.edu.cn/simple
 
     # 复制项目文件
@@ -552,11 +552,14 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     COPY server.py .
     COPY app.py .
     COPY methods/ ./methods/
+    COPY data/ ./data/
 
-    # 创建checkpoint目录
+    # 创建checkpoint目录（用于存放模型文件）
     RUN mkdir -p checkpoint
 
     # 复制模型文件（如果存在）
+    # 如果模型文件较大，建议在运行时通过volume挂载
+    # 注意：如果checkpoint目录不存在或为空，请注释掉下面这行
     COPY checkpoint/ ./checkpoint/
 
     # 暴露端口
@@ -575,7 +578,7 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
         OUT_FEATS=3
 
     # 启动命令
-    CMD ["sh", "-c", "python server.py --host ${{HOST}} --port ${{PORT}} --model ${{MODEL_PATH}} --in-feats ${{IN_FEATS}} --h-feats ${{H_FEATS}} --out-feats ${{OUT_FEATS}}"]
+    CMD ["sh", "-c", "python server.py --host ${{{{HOST}}}} --port ${{{{PORT}}}} --model ${{{{MODEL_PATH}}}} --in-feats ${{{{IN_FEATS}}}} --h-feats ${{{{H_FEATS}}}} --out-feats ${{{{OUT_FEATS}}}}"]
     ```
 
     MCP Server代码示例（包含文件上传、深度学习、多工具）：
@@ -588,6 +591,7 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     import io
     import base64
     import tempfile
+    import asyncio
     from typing import Optional, Dict, Any
     from mcp.server.fastmcp import FastMCP
     from starlette.applications import Starlette
@@ -612,139 +616,253 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
     # 创建MCP服务器
     mcp = FastMCP("图神经网络风险检测服务器")
 
+
     def get_inference_model() -> InferenceModel:
         \"\"\"获取推理模型实例\"\"\"
         global inference_model
         if inference_model is None:
             raise RuntimeError("推理模型未初始化")
+        if inference_model.model is None:
+            raise RuntimeError("模型文件未正确加载，请检查模型文件路径是否正确")
         return inference_model
+
 
     @mcp.tool(description="上传数据集ZIP文件并进行图神经网络推理预测")
     async def predict_from_dataset(
         file_base64: str,
         filename: str = "dataset.zip"
     ) -> Dict[str, Any]:
-        \"\"\"上传数据集并进行推理\"\"\"
-        try:
-            logger.info(f"开始处理数据集推理: {{filename}}")
+        \"\"\"
+        上传数据集并进行推理
+        
+        Args:
+            file_base64: Base64编码的ZIP文件内容
+            filename: 文件名（默认dataset.zip）
             
-            # 验证文件类型
-            if not filename.endswith('.zip'):
-                return {{
-                    'success': False,
-                    'error': '文件必须是ZIP格式'
-                }}
+        Returns:
+            dict: 包含推理结果的字典
             
-            # 解码Base64文件内容
+        示例：
+            file_base64: "UEsDBBQAAAAIAC..."
+            filename: "test_dataset.zip"
+        \"\"\"
+        def _process():
+            \"\"\"同步处理函数，在线程中执行\"\"\"
             try:
-                file_bytes = base64.b64decode(file_base64)
+                logger.info(f"开始处理数据集推理: {{{{filename}}}}")
+                
+                # 验证文件类型
+                if not filename.endswith('.zip'):
+                    return {{{{
+                        'success': False,
+                        'error': '文件必须是ZIP格式'
+                    }}}}
+                
+                # 解码Base64文件内容
+                try:
+                    file_bytes = base64.b64decode(file_base64)
+                except Exception as e:
+                    return {{{{
+                        'success': False,
+                        'error': f'Base64解码失败: {{{{str(e)}}}}'
+                    }}}}
+                
+                # 创建临时文件对象
+                file_obj = io.BytesIO(file_bytes)
+                
+                # 获取推理模型
+                model = get_inference_model()
+                
+                # 处理数据集
+                dataset_path = model.process_uploaded_dataset(file_obj)
+                logger.info(f"数据集处理完成: {{{{dataset_path}}}}")
+                
+                # 进行推理
+                result = model.infer(dataset_path)
+                logger.info("推理完成")
+                
+                return {{{{
+                    'success': True,
+                    'result': result,
+                    'filename': filename
+                }}}}
+                
             except Exception as e:
-                return {{
+                logger.exception("推理过程出错")
+                return {{{{
                     'success': False,
-                    'error': f'Base64解码失败: {{str(e)}}'
-                }}
-            
-            # 创建临时文件对象
-            file_obj = io.BytesIO(file_bytes)
-            
-            # 获取推理模型
-            model = get_inference_model()
-            
-            # 处理数据集
-            dataset_path = model.process_uploaded_dataset(file_obj)
-            logger.info(f"数据集处理完成: {{dataset_path}}")
-            
-            # 进行推理
-            result = model.infer(dataset_path)
-            logger.info("推理完成")
-            
-            return {{
-                'success': True,
-                'result': result,
-                'filename': filename
-            }}
-            
-        except Exception as e:
-            logger.exception("推理过程出错")
-            return {{
-                'success': False,
-                'error': f"推理过程出错: {{str(e)}}"
-            }}
+                    'error': f"推理过程出错: {{{{str(e)}}}}"
+                }}}}
+        
+        # 在线程池中执行阻塞操作
+        return await asyncio.to_thread(_process)
+
 
     @mcp.tool(description="从指定路径加载数据集并进行推理")
     async def predict_from_path(
         dataset_path: str
     ) -> Dict[str, Any]:
-        \"\"\"从指定路径加载数据集并进行推理\"\"\"
-        try:
-            logger.info(f"从路径加载数据集: {{dataset_path}}")
+        \"\"\"
+        从指定路径加载数据集并进行推理
+        
+        Args:
+            dataset_path: 数据集目录路径（包含meta.yaml等文件）
             
-            # 验证路径存在
-            if not os.path.exists(dataset_path):
-                return {{
+        Returns:
+            dict: 包含推理结果的字典
+        \"\"\"
+        def _process():
+            \"\"\"同步处理函数，在线程中执行\"\"\"
+            try:
+                logger.info(f"从路径加载数据集: {{{{dataset_path}}}}")
+                
+                # 验证路径存在
+                if not os.path.exists(dataset_path):
+                    return {{{{
+                        'success': False,
+                        'error': f'数据集路径不存在: {{{{dataset_path}}}}'
+                    }}}}
+                
+                # 获取推理模型
+                model = get_inference_model()
+                
+                # 进行推理
+                result = model.infer(dataset_path)
+                logger.info("推理完成")
+                
+                return {{{{
+                    'success': True,
+                    'result': result,
+                    'dataset_path': dataset_path
+                }}}}
+                
+            except Exception as e:
+                logger.exception("推理过程出错")
+                return {{{{
                     'success': False,
-                    'error': f'数据集路径不存在: {{dataset_path}}'
-                }}
-            
-            # 获取推理模型
-            model = get_inference_model()
-            
-            # 进行推理
-            result = model.infer(dataset_path)
-            logger.info("推理完成")
-            
-            return {{
-                'success': True,
-                'result': result,
-                'dataset_path': dataset_path
-            }}
-            
-        except Exception as e:
-            logger.exception("推理过程出错")
-            return {{
-                'success': False,
-                'error': f"推理过程出错: {{str(e)}}"
-            }}
+                    'error': f"推理过程出错: {{{{str(e)}}}}"
+                }}}}
+        
+        # 在线程池中执行阻塞操作
+        return await asyncio.to_thread(_process)
+
 
     @mcp.tool(description="获取当前加载的模型信息")
     async def get_model_info() -> Dict[str, Any]:
-        \"\"\"获取模型信息\"\"\"
+        \"\"\"
+        获取模型信息
+        
+        Returns:
+            dict: 包含模型配置和状态的字典
+        \"\"\"
         try:
             model = get_inference_model()
             
-            return {{
+            return {{{{
                 'success': True,
                 'model_path': model.model_path,
                 'device': str(model.device),
                 'model_loaded': model.model is not None,
                 'model_type': 'GNN Risk Detection Model'
-            }}
+            }}}}
             
         except Exception as e:
-            return {{
+            return {{{{
                 'success': False,
-                'error': f"获取模型信息失败: {{str(e)}}"
-            }}
+                'error': f"获取模型信息失败: {{{{str(e)}}}}"
+            }}}}
+
 
     @mcp.tool(description="检查服务健康状态")
     async def health_check() -> Dict[str, Any]:
-        \"\"\"健康检查\"\"\"
+        \"\"\"
+        健康检查
+        
+        Returns:
+            dict: 服务健康状态信息
+        \"\"\"
         try:
             model = get_inference_model()
             
-            return {{
+            return {{{{
                 'status': 'healthy',
                 'service': 'gnn-risk-detection-mcp-server',
                 'model_loaded': model.model is not None,
                 'device': str(model.device),
                 'cuda_available': torch.cuda.is_available()
-            }}
+            }}}}
             
         except Exception as e:
-            return {{
+            return {{{{
                 'status': 'unhealthy',
                 'error': str(e)
-            }}
+            }}}}
+
+
+    @mcp.tool(description="列出所有可用的数据集")
+    async def list_datasets(
+        data_dir: str = "/app/data"
+    ) -> Dict[str, Any]:
+        \"\"\"
+        列出指定目录下所有可用的数据集
+        
+        Args:
+            data_dir: 数据集根目录（默认: /app/data）
+            
+        Returns:
+            dict: 包含数据集列表的字典
+        \"\"\"
+        def _process():
+            \"\"\"同步处理函数，在线程中执行\"\"\"
+            try:
+                logger.info(f"列出数据集目录: {{{{data_dir}}}}")
+                
+                # 验证目录存在
+                if not os.path.exists(data_dir):
+                    return {{{{
+                        'success': False,
+                        'error': f'数据集目录不存在: {{{{data_dir}}}}'
+                    }}}}
+                
+                if not os.path.isdir(data_dir):
+                    return {{{{
+                        'success': False,
+                        'error': f'路径不是目录: {{{{data_dir}}}}'
+                    }}}}
+                
+                # 获取所有子文件夹
+                datasets = []
+                for item in os.listdir(data_dir):
+                    item_path = os.path.join(data_dir, item)
+                    if os.path.isdir(item_path):
+                        # 检查是否包含 meta.yaml 文件
+                        has_meta = os.path.exists(os.path.join(item_path, 'meta.yaml'))
+                        datasets.append({{{{
+                            'name': item,
+                            'path': item_path,
+                            'has_meta': has_meta
+                        }}}})
+                
+                # 按名称排序
+                datasets.sort(key=lambda x: x['name'])
+                
+                return {{{{
+                    'success': True,
+                    'data_dir': data_dir,
+                    'total': len(datasets),
+                    'datasets': datasets
+                }}}}
+                
+            except Exception as e:
+                logger.exception("列出数据集时出错")
+                return {{{{
+                    'success': False,
+                    'error': f"列出数据集时出错: {{{{str(e)}}}}"
+                }}}}
+        
+        # 在线程池中执行阻塞操作
+        return await asyncio.to_thread(_process)
+
 
     def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
         \"\"\"创建支持SSE传输和健康检查的Starlette应用\"\"\"
@@ -762,54 +880,61 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
                     write_stream,
                     mcp_server.create_initialization_options()
                 )
+            # 返回空响应（连接已由SSE传输处理）
+            from starlette.responses import Response
+            return Response()
         
         async def health_endpoint(request: Request):
             \"\"\"健康检查端点\"\"\"
             try:
                 model = get_inference_model()
-                return JSONResponse({{
+                return JSONResponse({{{{
                     "status": "healthy",
                     "service": "gnn-risk-detection-mcp-server",
                     "model_loaded": model.model is not None,
                     "device": str(model.device)
-                }})
+                }}}})
             except Exception as e:
                 return JSONResponse(
-                    {{"status": "unhealthy", "error": str(e)}},
+                    {{{{"status": "unhealthy", "error": str(e)}}}},
                     status_code=503
                 )
         
         async def root_info(request: Request):
             \"\"\"根路径信息\"\"\"
-            return JSONResponse({{
+            return JSONResponse({{{{
                 "service": "图神经网络风险检测MCP服务器",
                 "version": "1.0.0",
                 "description": "基于GNN的风险检测推理服务",
-                "endpoints": {{
+                "endpoints": {{{{
                     "root": "/",
                     "health": "/health",
                     "sse": "/sse",
                     "messages": "/messages/"
-                }},
+                }}}},
                 "tools": [
-                    {{
+                    {{{{
                         "name": "predict_from_dataset",
                         "description": "上传数据集ZIP文件并进行推理"
-                    }},
-                    {{
+                    }}}},
+                    {{{{
                         "name": "predict_from_path",
                         "description": "从指定路径加载数据集并进行推理"
-                    }},
-                    {{
+                    }}}},
+                    {{{{
+                        "name": "list_datasets",
+                        "description": "列出所有可用的数据集"
+                    }}}},
+                    {{{{
                         "name": "get_model_info",
                         "description": "获取模型信息"
-                    }},
-                    {{
+                    }}}},
+                    {{{{
                         "name": "health_check",
                         "description": "检查服务健康状态"
-                    }}
+                    }}}}
                 ]
-            }})
+            }}}})
         
         return Starlette(
             debug=debug,
@@ -820,6 +945,7 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
                 Mount("/messages", app=sse.handle_post_message),
             ],
         )
+
 
     def initialize_model(
         model_path: str = 'checkpoint/model.pt',
@@ -835,33 +961,26 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
-        logger.info(f"初始化模型: {{model_path}}")
-        logger.info(f"使用设备: {{device}}")
+        logger.info(f"初始化模型: {{{{model_path}}}}")
+        logger.info(f"使用设备: {{{{device}}}}")
         
-        try:
-            # 验证模型文件是否存在
-            if not os.path.exists(model_path):
-                logger.warning(f"模型文件不存在: {{model_path}}")
-                logger.warning("服务将启动但模型未加载，推理功能将不可用")
-                inference_model = InferenceModel(model_path=model_path, device=device)
-                return
-            
-            # 创建推理模型实例
-            inference_model = InferenceModel(model_path=model_path, device=device)
-            
-            # 加载模型
-            inference_model.load_model(
-                in_feats=in_feats,
-                h_feats=h_feats,
-                out_feats=out_feats
-            )
-            
-            logger.info("✓ 模型加载成功")
-            
-        except Exception as e:
-            logger.error(f"✗ 模型加载失败: {{str(e)}}")
-            # 创建未加载模型的实例，允许服务启动
-            inference_model = InferenceModel(model_path=model_path, device=device)
+        # 验证模型文件是否存在
+        if not os.path.exists(model_path):
+            logger.error(f"模型文件不存在: {{{{model_path}}}}")
+            raise FileNotFoundError(f"模型文件不存在: {{{{model_path}}}}")
+        
+        # 创建推理模型实例
+        inference_model = InferenceModel(model_path=model_path, device=device)
+        
+        # 加载模型
+        inference_model.load_model(
+            in_feats=in_feats,
+            h_feats=h_feats,
+            out_feats=out_feats
+        )
+        
+        logger.info("✓ 模型加载成功")
+
 
     if __name__ == "__main__":
         import argparse
@@ -931,9 +1050,9 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
         print("=" * 60)
         print("图神经网络风险检测MCP服务器")
         print("=" * 60)
-        print(f"服务地址: http://{{args.host}}:{{args.port}}")
-        print(f"模型路径: {{args.model}}")
-        print(f"计算设备: {{args.device or '自动检测'}}")
+        print(f"服务地址: http://{{{{args.host}}}}:{{{{args.port}}}}")
+        print(f"模型路径: {{{{args.model}}}}")
+        print(f"计算设备: {{{{args.device or '自动检测'}}}}")
         print()
         print("可用端点:")
         print(f"  - GET  /          服务信息")
@@ -944,6 +1063,7 @@ def get_service_packaging_prompt(workspace: str = WORKSPACE,
         print("MCP工具:")
         print("  - predict_from_dataset  上传ZIP数据集并推理")
         print("  - predict_from_path     从路径加载数据集并推理")
+        print("  - list_datasets         列出所有可用数据集")
         print("  - get_model_info        获取模型信息")
         print("  - health_check          健康检查")
         print("=" * 60)
