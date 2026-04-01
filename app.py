@@ -1357,6 +1357,144 @@ async def meta_app_run_form(
         logger.error(f"运行元应用(FormData)时出错: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"运行元应用时出错: {str(e)}")
 
+# ========== 能力描述翻译 & 引导式问答 ==========
+
+@app.post("/api/agent/capability_describe", tags=["api"])
+async def capability_describe(
+    capabilities: str = Form(...),
+    context: str = Form(default=""),
+):
+    """
+    使用LLM将代码分析识别出的能力描述转换为业务友好的中文描述
+    """
+    from app.llm import LLM
+    from app.schema import Message
+
+    llm = LLM("default")
+
+    prompt = f"""你是一个技术到业务的翻译专家。以下是从代码中自动识别出的服务能力列表。
+请将每个能力的技术描述转换为普通业务人员能够理解的中文描述。
+
+服务信息：{context}
+
+原始能力列表：
+{capabilities}
+
+请严格以JSON数组格式返回，每个元素包含：
+- "name": 原始能力名称（不要修改，用于前端关联）
+- "friendlyName": 简洁的中文能力名称（2-6个字，不含任何英文或技术术语）
+- "friendlyDesc": 一句话中文说明这个能力能做什么（面向完全不懂技术的业务人员）
+- "friendlyInput": 用通俗中文描述需要提供什么（如"待分析的数据"）
+- "friendlyOutput": 用通俗中文描述会得到什么结果（如"分析报告"）
+
+重要：
+1. 绝对不要使用任何英文单词、代码术语、变量名
+2. 描述要像产品说明书一样通俗易懂
+3. 只返回JSON数组，不要包含markdown代码块标记或其他内容"""
+
+    try:
+        response = await llm.ask(
+            [Message.user_message(prompt)],
+            stream=False,
+            temperature=0.3,
+        )
+
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines)
+
+        result = json.loads(text)
+        return JSONResponse(content={"success": True, "data": result})
+    except json.JSONDecodeError:
+        return JSONResponse(content={"success": True, "data": response})
+    except Exception as e:
+        logger.error(f"能力描述翻译失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/capability_chat", tags=["api"])
+async def capability_chat(
+    capabilities: str = Form(...),
+    history: str = Form(default="[]"),
+    context: str = Form(default=""),
+):
+    """
+    LLM引导式问答，帮助业务用户优化服务能力配置。
+    以SSE流式返回LLM回复。
+    """
+    from app.llm import LLM
+
+    llm = LLM("default")
+
+    system_prompt = f"""你是一个友好的服务配置助手，正在帮助一位不懂技术的业务用户优化他们的服务能力配置。
+
+当前服务信息：{context}
+
+已识别的服务能力：
+{capabilities}
+
+你的任务是通过简单易懂的问答帮助用户明确需求。请严格遵循以下规则：
+1. 每次只问一个问题，问题要简短
+2. 优先使用选择题（给出A/B/C选项）或者是/否问题，让用户轻松作答
+3. 完全不要使用任何技术术语、英文单词或代码概念
+4. 用日常用语描述功能，比如"自动整理数据""生成分析报告"
+5. 问3-4个关键问题后，给出明确的调整建议总结，使用以下格式：
+
+【优化建议】
+✅ 建议保留：xxx、xxx（原因）
+➕ 建议新增：xxx（原因）
+❌ 建议移除：xxx（原因）
+📝 建议调整：将"xxx"改为"xxx"（原因）
+
+现在请开始向用户提出第一个问题。"""
+
+    try:
+        chat_history = json.loads(history)
+    except json.JSONDecodeError:
+        chat_history = []
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in chat_history:
+        messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+    if not chat_history:
+        messages.append({"role": "user", "content": "你好，请帮我看看这些服务能力是否合理。"})
+
+    async def stream_generator():
+        try:
+            params = {
+                "model": llm.model,
+                "messages": messages,
+                "max_tokens": llm.max_tokens,
+                "temperature": 0.7,
+                "stream": True,
+            }
+            response = await llm.client.chat.completions.create(**params)
+
+            async for chunk in response:
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    data = json.dumps({"type": "text", "content": delta}, ensure_ascii=False)
+                    yield f"data: {data}\n\n"
+
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"能力问答流式响应失败: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # 启动应用
 if __name__ == "__main__":
     import uvicorn
