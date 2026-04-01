@@ -1435,25 +1435,35 @@ async def capability_chat(
 已识别的服务能力：
 {capabilities}
 
-你的任务是通过简单易懂的问答帮助用户明确需求。请严格遵循以下规则：
+你只有3轮对话机会来帮助用户优化服务能力，请严格遵循以下规则：
 1. 每次只问一个问题，问题要简短
 2. 优先使用选择题（给出A/B/C选项）或者是/否问题，让用户轻松作答
 3. 完全不要使用任何技术术语、英文单词或代码概念
 4. 用日常用语描述功能，比如"自动整理数据""生成分析报告"
-5. 问3-4个关键问题后，给出明确的调整建议总结，使用以下格式：
+
+对话节奏严格按以下执行：
+- 第1轮：问一个最关键的问题
+- 第2轮：根据用户回答，问第二个关键问题
+- 第3轮：不再提问，直接给出最终优化建议总结，格式如下：
 
 【优化建议】
 ✅ 建议保留：xxx、xxx（原因）
 ➕ 建议新增：xxx（原因）
 ❌ 建议移除：xxx（原因）
-📝 建议调整：将"xxx"改为"xxx"（原因）
-
-现在请开始向用户提出第一个问题。"""
+📝 建议调整：将"xxx"改为"xxx"（原因）"""
 
     try:
         chat_history = json.loads(history)
     except json.JSONDecodeError:
         chat_history = []
+
+    user_msgs = [m for m in chat_history if m.get("role") == "user"]
+    current_round = len(user_msgs) + 1
+
+    if current_round >= 3:
+        system_prompt += "\n\n【重要】这是第3轮（最后一轮），请不要再提问，直接根据之前的对话给出最终优化建议总结。"
+    else:
+        system_prompt += f"\n\n当前是第{current_round}轮对话。请提出你的问题。"
 
     messages = [{"role": "system", "content": system_prompt}]
     for msg in chat_history:
