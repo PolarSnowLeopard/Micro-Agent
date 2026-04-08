@@ -3,7 +3,7 @@ import json
 
 import aiofiles
 
-from app.config import PROJECT_ROOT
+from app.config import PROJECT_ROOT, WORKSPACE_ROOT
 from app.tool.base import BaseTool, ToolResult
 
 
@@ -55,12 +55,20 @@ class JsonSaver(BaseTool):
             
             # 处理绝对路径和相对路径
             if os.path.isabs(file_path):
-                # 如果是绝对路径，直接使用该路径
                 full_path = file_path
             else:
-                # 如果是相对路径，将其与PROJECT_ROOT组合
-                path_components = [p for p in file_path.replace('\\', '/').split('/') if p]
-                full_path = os.path.normpath(os.path.join(PROJECT_ROOT, *path_components))
+                normalized = file_path.replace('\\', '/').strip('/')
+                while normalized.startswith('./'):
+                    normalized = normalized[2:]
+                path_components = [p for p in normalized.split('/') if p]
+                if path_components and path_components[0] == 'temp':
+                    full_path = os.path.normpath(
+                        os.path.join(str(WORKSPACE_ROOT), *path_components)
+                    )
+                else:
+                    full_path = os.path.normpath(
+                        os.path.join(str(PROJECT_ROOT), *path_components)
+                    )
 
             # 确保路径规范化
             full_path = os.path.normpath(full_path)

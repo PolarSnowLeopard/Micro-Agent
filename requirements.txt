@@ -27,3 +27,12 @@ uvicorn~=0.34.0
 
 # mysql server
 mysql-connector-python >= 9.1.0
+
+# 数据处理库（数据适配功能需要）
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.28.0
+
+# 文件内容提取（算法模型想定式开发）
+PyPDF2>=3.0.0
+python-docx>=1.0.0

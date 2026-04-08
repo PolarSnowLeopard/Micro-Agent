@@ -47,22 +47,25 @@ class Logger:
         
         return self._logger
     
-    def info(self, message):
+    def info(self, message, **kwargs):
         self._logger.info(message)
         
-    def debug(self, message):
+    def debug(self, message, **kwargs):
         self._logger.debug(message)
         
-    def warning(self, message):
+    def warning(self, message, **kwargs):
         self._logger.warning(message)
         
-    def error(self, message):
-        self._logger.error(message)
+    def error(self, message, exc_info=False, **kwargs):
+        if exc_info:
+            self._logger.opt(exception=True).error(message)
+        else:
+            self._logger.error(message)
         
-    def critical(self, message):
+    def critical(self, message, **kwargs):
         self._logger.critical(message)
         
-    def exception(self, message):
+    def exception(self, message, **kwargs):
         self._logger.exception(message)
 
 
