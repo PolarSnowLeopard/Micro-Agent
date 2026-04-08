@@ -9,6 +9,11 @@ from app.tool.file_saver import FileSaver
 from app.tool.remote_docker_manager import RemoteDockerManager
 from app.tool.cmd import Cmd
 from app.tool.terminal import Terminal
+# 数据适配工具
+from app.tool.data_analyzer import DataAnalyzer
+from app.tool.service_schema_getter import ServiceSchemaGetter
+from app.tool.schema_mapper import SchemaMapper
+from app.tool.transform_code_generator import DataTransformCodeGenerator
 
 __all__ = [
     "BaseTool",
@@ -22,4 +27,9 @@ __all__ = [
     "RemoteDockerManager",
     "Cmd",
     "Terminal",
+    # 数据适配工具
+    "DataAnalyzer",
+    "ServiceSchemaGetter",
+    "SchemaMapper",
+    "DataTransformCodeGenerator",
 ]

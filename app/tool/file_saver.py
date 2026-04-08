@@ -2,7 +2,7 @@ import os
 
 import aiofiles
 
-from app.config import PROJECT_ROOT
+from app.config import PROJECT_ROOT, WORKSPACE_ROOT
 from app.tool.base import BaseTool, ToolResult
 
 
@@ -53,13 +53,21 @@ The tool accepts content and a file path, and saves the content to that location
             
             # 处理绝对路径和相对路径
             if os.path.isabs(file_path):
-                # 如果是绝对路径，直接使用该路径
                 full_path = file_path
             else:
-                # 如果是相对路径，将其与WORKSPACE_ROOT组合
-                # 确保file_path不包含系统无关的路径分隔符问题
-                path_components = [p for p in file_path.replace('\\', '/').split('/') if p]
-                full_path = os.path.normpath(os.path.join(PROJECT_ROOT, *path_components))
+                normalized = file_path.replace('\\', '/').strip('/')
+                while normalized.startswith('./'):
+                    normalized = normalized[2:]
+                path_components = [p for p in normalized.split('/') if p]
+                # temp/xxx 约定为 workspace/temp/xxx，与后端读取任务输出路径一致
+                if path_components and path_components[0] == 'temp':
+                    full_path = os.path.normpath(
+                        os.path.join(str(WORKSPACE_ROOT), *path_components)
+                    )
+                else:
+                    full_path = os.path.normpath(
+                        os.path.join(str(PROJECT_ROOT), *path_components)
+                    )
 
             # 确保路径规范化
             full_path = os.path.normpath(full_path)
