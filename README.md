@@ -1,10 +1,8 @@
 <div align="center">
 
-# Micro-Agent
+<img src="docs/banner.png" alt="Micro-Agent" width="100%">
 
-**面向垂域应用的轻量级 AI Agent 框架**
-
-通过组合 Skills、RAG、MCP 等可插拔组件，快速构建面向特定行业场景的专业智能体。
+<br>
 
 [![Python](https://img.shields.io/badge/Python-≥3.11-blue?logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -27,30 +25,21 @@
 
 ## 架构
 
-```
-                        ┌─────────────────────────────────┐
-                        │          FastAPI + SSE           │
-                        │    /api/tasks  /api/agent/...    │
-                        └──────────────┬──────────────────┘
-                                       │
-                        ┌──────────────▼──────────────────┐
-                        │         Agent (ReAct Loop)       │
-                        │    Think → Act → Observe → ...   │
-                        └──┬───────┬───────┬──────────┬───┘
-                           │       │       │          │
-                    ┌──────▼──┐ ┌──▼───┐ ┌─▼────┐ ┌──▼─────┐
-                    │  Skills  │ │ RAG  │ │ MCP  │ │ Memory │
-                    │ 领域知识  │ │ 检索  │ │ 工具  │ │  记忆   │
-                    │  注入    │ │ 增强  │ │ 协议  │ │  持久化  │
-                    └─────────┘ └──────┘ └──────┘ └────────┘
-```
+<div align="center">
+<img src="docs/architecture.png" alt="Architecture" width="100%">
+</div>
 
-**垂域组件**说明：
+<br>
 
+**核心组件：**
+
+- **LLM Layer** — 通过 [litellm](https://github.com/BerriAI/litellm) 统一接口，一套代码切换 OpenAI / DeepSeek / Claude / Ollama 等任意模型
+- **Agent Core** — ReAct 执行引擎（Think → Act → Observe 循环），支持 SubAgent 子任务分发与 REPL 沙箱执行
+- **Memory** — 会话记忆系统，支持短期记忆、文件持久化、跨会话恢复
 - **Skills** — 将领域规范、编码标准等知识注入 Agent 的 system prompt，使其具备专业能力
 - **RAG** — 从领域知识库中检索相关文档，为推理提供上下文
-- **MCP** — 通过 [Model Context Protocol](https://modelcontextprotocol.io) 连接外部工具和数据源
-- **Memory** — 跨会话的对话记忆，支持多轮迭代优化
+- **Knowledge Graph** — 基于图结构的领域知识表示与关联推理
+- **MCP / Tools** — 通过 [Model Context Protocol](https://modelcontextprotocol.io) 连接外部工具和数据源
 
 ## 快速开始
 
