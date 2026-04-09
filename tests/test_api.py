@@ -1,7 +1,7 @@
 """Phase 3 测试：TaskManager + API 路由。
 
 运行方式：
-    cd micro-agent-v2
+    cd Micro-Agent
     python -m tests.test_api
 """
 
