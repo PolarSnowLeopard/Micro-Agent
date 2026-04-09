@@ -1,7 +1,7 @@
 """FastAPI 应用入口。
 
 启动方式：
-    cd micro-agent-v2
+    cd Micro-Agent
     uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
 """
 
