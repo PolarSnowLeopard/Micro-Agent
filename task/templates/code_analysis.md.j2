@@ -1,0 +1,21 @@
+`{{ workspace }}` 路径下有一个 `{{ input_dir }}` 文件夹，内有 `{{ main_code }}` 和 `requirements.txt` 两个文件（如果 requirements.txt 不存在则忽略）。
+
+`{{ main_code }}` 中包含待封装为 REST API 的功能函数，`requirements.txt` 是对应的依赖环境。
+
+请你分析 `{{ main_code }}` 中的代码逻辑，解析其中功能函数的相关信息和依赖关系，并在 `{{ temp_dir }}` 文件夹下创建一个 `{{ function_info_path }}` 文件。
+
+该文件的格式类似以下示例：
+
+```json
+{
+    "nodes": [
+        { "id": "9001", "x": 0, "y": 150, "label": "datasets", "size": 50, "input": "rawData", "output": "processedData", "environment": "", "process": "", "apiType": 0, "methodType": 0, "inputType": 2, "outputType": 2 },
+        { "id": "9002", "x": 150, "y": 150, "label": "preprocess", "size": 50, "input": "processedData", "output": "cleanedData", "environment": "", "process": "", "apiType": 0, "methodType": 1, "inputType": 2, "outputType": 2 },
+        { "id": "9003", "x": 300, "y": 150, "label": "train", "size": 50, "input": "cleanedData", "output": "trainedModel", "environment": "", "process": "", "apiType": 2, "methodType": 1, "inputType": 2, "outputType": 2 }
+    ],
+    "edges": [
+        { "sourceID": "9001", "targetID": "9002" },
+        { "sourceID": "9002", "targetID": "9003" }
+    ]
+}
+```

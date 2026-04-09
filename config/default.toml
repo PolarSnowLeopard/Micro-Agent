@@ -1,0 +1,38 @@
+# 多 LLM Profile 支持
+# 用法: config.get_llm("fast") / build_agent(..., llm_profile="fast")
+
+[llm.default]
+model = "openrouter/qwen/qwen3-coder-flash"
+temperature = 0.0
+max_tokens = 8192
+timeout = 60
+num_retries = 3
+
+[llm.fast]
+model = "openrouter/qwen/qwen3-coder-flash"
+temperature = 0.0
+max_tokens = 4096
+timeout = 30
+num_retries = 2
+
+[llm.reasoning]
+model = "openrouter/qwen/qwen3-coder-flash"
+temperature = 0.0
+max_tokens = 16384
+timeout = 120
+num_retries = 3
+
+[agent]
+max_steps = 30
+max_observe = 10000
+duplicate_threshold = 2
+
+[memory]
+storage_dir = "data/memory"
+
+[rag]
+embedding_model = "openrouter/openai/text-embedding-3-small"
+chunk_size = 500
+
+[skills]
+directory = "skills"
