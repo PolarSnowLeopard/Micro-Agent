@@ -1,0 +1,40 @@
+任务：将 Python 代码封装为 MCP（Model Context Protocol）服务并完成容器化部署准备
+
+项目结构：
+- 工作目录: {{ workspace }}
+- 输入目录: {{ input_dir }}/
+    ├── {{ main_code }} (主程序文件)
+    └── requirements.txt (依赖文件，可选)
+
+具体要求：
+
+1. MCP 服务封装要求：
+   - 分析 {{ main_code }} 中的功能函数，识别适合作为 MCP 工具的函数
+   - 使用 FastMCP + Starlette 创建 server.py 文件，要求：
+     * 使用 FastMCP 创建服务器实例
+     * 为每个功能函数使用 @mcp.tool 装饰器创建工具
+     * 提供清晰的工具名称、描述和类型注解
+     * 实现 create_starlette_app 函数配置 SSE 连接
+     * 设置路由：/sse 端点和 /messages/ 挂载点
+
+2. 容器化部署要求：
+   - 在输出目录创建 Dockerfile，基于 python:3.10-slim
+   - Python 依赖安装使用清华源: https://pypi.tuna.tsinghua.edu.cn/simple
+   - 创建 docker-compose.yml 文件
+
+3. 输出目录: {{ output_dir }}/
+   应包含以下文件：
+   ├── {{ main_code }}（从输入目录复制）
+   ├── requirements.txt（补充 MCP 相关依赖）
+   ├── server.py（MCP 服务入口）
+   ├── Dockerfile
+   └── docker-compose.yml
+
+{% if function_info_path %}
+你之前已经分析过代码逻辑。如果需要回顾，可以阅读 `{{ temp_dir }}/{{ function_info_path }}` 文件。
+{% endif %}
+
+注意事项：
+- 只需生成上述文件，不要实际执行 docker build、docker-compose up、pip install 等耗时操作
+- 用 bash 工具来读取源代码、创建目录和写入文件即可
+- 完成所有文件创建后，调用 terminate 工具结束任务

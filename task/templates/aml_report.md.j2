@@ -1,0 +1,6 @@
+使用`aml_server`中的`gnn_predict_url`工具，对输入数据集进行AML风险预测。得到预测结果后，
+使用`deepseek_server`工具，对预测结果进行解释，并生成AML报告。
+
+输入数据集位于: {{ input_dir }}
+
+请将AML报告写入 `{{ workspace }}/temp/aml_report.md` 文件中。
