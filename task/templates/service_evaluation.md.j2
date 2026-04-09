@@ -1,0 +1,12 @@
+对远程服务 '{{ service_name }}' 进行以下指标的评测: {{ metrics_list | join(', ') }}。
+
+评测数据位于: {{ zip_filename }}
+
+服务的信息如下所示，注意所有 API 端点都是相对路径，其 base_url 为 `{{ base_url }}`。
+{{ service_info }}
+
+远程服务以 REST API 的形式进行访问，具体 API 端点参见服务信息中的 `apiList` 字段。
+
+不用解压评测数据，直接使用其访问远程服务的 API 端点。
+
+请将评测结果写入 `{{ workspace }}/temp/evaluation_result.json` 文件中。

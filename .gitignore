@@ -1,11 +1,32 @@
-**/.DS_Store
-**/.env
-**/.venv
-**/__pycache__
-**/log
-**/logs
-**/.log
-**/visualization
-**/workspace
-**/meta_app
-**/.idea
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 环境
+.env
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# pytest
+.pytest_cache/
+
+# 运行时产生的临时文件
+workspace/data/memory/*.json
+workspace/app-demo-output/
+workspace/temp/
+
+# 调试用脚本与 demo
+tests/e2e_demo.py
+tests/bench_rag_quality.py
+tests/fixtures/
+demo/
