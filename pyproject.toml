@@ -1,7 +1,7 @@
 [project]
-name = "micro-agent-v2"
-version = "0.1.0"
-description = "IoEB 众智工场垂域大模型 Agent 框架"
+name = "micro-agent"
+version = "2.0.0"
+description = "面向垂域应用的轻量级 AI Agent 框架"
 requires-python = ">=3.11"
 dependencies = [
     "litellm>=1.50.0",
