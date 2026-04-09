@@ -1,7 +1,7 @@
 """Phase 2 测试：MCP 连接管理 + MCPAgent + Bash 工具。
 
 运行方式：
-    cd micro-agent-v2
+    cd Micro-Agent
     python -m tests.test_mcp
 """
 

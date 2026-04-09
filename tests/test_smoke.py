@@ -1,7 +1,7 @@
 """Phase 1 冒烟测试：验证 Agent + Terminate 工具能跑通完整 loop。
 
 运行方式：
-    cd micro-agent-v2
+    cd Micro-Agent
     python -m tests.test_smoke
 
 需要配置 .env 中的 LLM_API_KEY。
