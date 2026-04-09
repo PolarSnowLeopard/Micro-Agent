@@ -15,15 +15,28 @@
 
 ## 为什么选择 Micro-Agent
 
-| | Micro-Agent | LangGraph | AutoGen | OpenClaw |
-|---|---|---|---|---|
-| **定位** | 垂域 Agent 服务 | 通用工作流编排 | 多智能体协作 | 个人自治助手 |
-| **架构** | ReAct Loop + 可插拔组件 | 有向图状态机 | 会话驱动消息传递 | 3 层技能 + 持久自治 |
-| **部署** | Docker 一键启动，API 即用 | 需自行搭建服务层 | 需自行搭建服务层 | 独立进程，24/7 常驻 |
-| **体量** | 核心 <3000 行，依赖精简 | 依赖 LangChain 全家桶 | 中等，微软维护 | 插件生态庞大但安全隐患多 |
-| **模型** | litellm 统一接口，一行切换 | 依赖 LangChain 适配层 | 原生多模型支持 | 多模型支持 |
-| **垂域能力** | Skills + RAG + KG 原生支持 | 需自行组装 | 需自行组装 | 通用自动化，非垂域 |
-| **适合场景** | 行业知识驱动的专业 Agent | 复杂多步工作流 | 多角色协作 | 个人效率自动化 |
+> **一句话**：如果你需要为特定行业快速构建一个专业 Agent 并以 API 服务形式交付，Micro-Agent 是最短路径。
+
+| 能力 | Micro-Agent | LangGraph | AutoGen | OpenClaw |
+|:-----|:---:|:---:|:---:|:---:|
+| 开箱即用 API 服务 | **Yes** | No | No | No |
+| 垂域知识注入 (Skills) | **Yes** | No | No | No |
+| 内置 RAG | **Yes** | No | No | No |
+| 知识图谱增强 | **Yes** | No | No | No |
+| MCP 工具协议 | **Yes** | Plugin | Plugin | Plugin |
+| 流式 SSE 输出 | **Yes** | Yes | Limited | No |
+| 多模型一键切换 | **Yes** | Adapter | Yes | Yes |
+| 多智能体协作 | SubAgent | Yes | **Yes** | Yes |
+| 有向图工作流 | No | **Yes** | No | No |
+| 24/7 自治运行 | No | No | No | **Yes** |
+| 核心代码量 | **<3K 行** | ~15K 行 | ~20K 行 | ~30K 行 |
+
+**各框架适用场景：**
+
+- **Micro-Agent** — 行业知识驱动的垂域专业 Agent，以 API 服务形式对外交付
+- **LangGraph** — 需要精确控制执行流程的复杂多步工作流
+- **AutoGen** — 多角色 Agent 对话协作，快速原型验证
+- **OpenClaw** — 个人效率自动化，跨平台消息处理
 
 ## 架构
 
