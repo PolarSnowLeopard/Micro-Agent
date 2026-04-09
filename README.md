@@ -1,128 +1,217 @@
-# Micro-Agent V2
+<div align="center">
 
-IoEB 众智工场垂域大模型 Agent 框架。
+<img src="docs/banner.png" alt="Micro-Agent" width="100%">
+
+<br>
+
+[![Python](https://img.shields.io/badge/Python-≥3.11-blue?logo=python&logoColor=white)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![LiteLLM](https://img.shields.io/badge/LLM-litellm-orange)](https://github.com/BerriAI/litellm)
+[![MCP](https://img.shields.io/badge/Tool-MCP-purple)](https://modelcontextprotocol.io)
+
+</div>
+
+---
+
+## 为什么选择 Micro-Agent
+
+| | Micro-Agent | LangChain / CrewAI |
+|---|---|---|
+| **定位** | 垂域 Agent 服务 | 通用 LLM 应用框架 |
+| **部署** | Docker 一键启动，API 即用 | 需自行搭建服务层 |
+| **体量** | 核心 <3000 行，依赖精简 | 依赖树庞大 |
+| **模型** | litellm 统一接口，一套代码切换任意模型 | 各 provider 分别适配 |
+| **垂域能力** | Skills + RAG + MCP 原生支持 | 需组装多个第三方库 |
+
+## 架构
+
+<div align="center">
+<img src="docs/architecture.png" alt="Architecture" width="100%">
+</div>
+
+<br>
+
+**核心组件：**
+
+- **LLM Layer** — 通过 [litellm](https://github.com/BerriAI/litellm) 统一接口，一套代码切换 OpenAI / DeepSeek / Claude / Ollama 等任意模型
+- **Agent Core** — ReAct 执行引擎（Think → Act → Observe 循环），支持 SubAgent 子任务分发与 REPL 沙箱执行
+- **Memory** — 会话记忆系统，支持短期记忆、文件持久化、跨会话恢复
+- **Skills** — 将领域规范、编码标准等知识注入 Agent 的 system prompt，使其具备专业能力
+- **RAG** — 从领域知识库中检索相关文档，为推理提供上下文
+- **Knowledge Graph** — 基于图结构的领域知识表示与关联推理
+- **MCP / Tools** — 通过 [Model Context Protocol](https://modelcontextprotocol.io) 连接外部工具和数据源
 
 ## 快速开始
 
-```bash
-# 环境要求：Python >= 3.11
-conda create -n micro-agent-v2 python=3.12 -y
-conda activate micro-agent-v2
+### 环境要求
 
-# 安装
-cd micro-agent-v2
+- Python ≥ 3.11
+- 任意 LLM API Key（OpenAI / DeepSeek / Claude / Ollama / OpenRouter 等）
+
+### 安装
+
+```bash
+git clone https://github.com/fdueblab/Micro-Agent.git
+cd Micro-Agent
+
 pip install -e ".[dev]"
-
-# 配置
-cp .env.example .env
-# 编辑 .env，填入 LLM_API_KEY
-
-# 验证
-python -m pytest tests/ -v
-
-# 启动服务
-uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## 项目结构
+### 配置
 
-```
-core/           Agent 核心（agent、llm、config、memory、skill、rag）
-tool/           工具层（Tool ABC、ToolRegistry、MCP、Bash）
-task/           任务定义（TaskConfig、Jinja2 模板、内置任务注册）
-api/            FastAPI 服务（路由、SSE 流、前端兼容接口）
-tests/          测试（51 个，覆盖全部 5 个阶段）
-config/         TOML 配置文件
-```
-
-## 多 LLM Profile
-
-`config/default.toml` 支持多命名模型 profile：
-
-```toml
-[llm.default]
-model = "deepseek/deepseek-chat"
-
-[llm.fast]
-model = "deepseek/deepseek-chat"
-max_tokens = 4096
-
-[llm.reasoning]
-model = "openai/o1-mini"
-```
-
-通过环境变量覆盖 default profile：
 ```bash
-LLM_MODEL=openai/gpt-4o
+cp .env.example .env
+```
+
+编辑 `.env`，填入 API Key：
+
+```bash
+LLM_MODEL=deepseek/deepseek-chat
 LLM_API_KEY=sk-xxx
 ```
 
-## API 端点
+> 支持任何 [litellm 兼容的模型格式](https://docs.litellm.ai/docs/providers)，如 `openai/gpt-4o`、`ollama/qwen2.5`、`openrouter/qwen/qwen3-coder-flash` 等。
 
-### 新版接口（JSON body）
+### 启动
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/agent/{task_name}` | 执行预定义任务，返回 SSE 流 |
-| POST | `/api/agent/custom` | 执行自定义 prompt 任务 |
-| GET  | `/api/agent/tasks` | 列出可用预定义任务 |
-| POST | `/api/tasks` | 提交通用任务 |
-| GET  | `/api/tasks/{id}/stream` | SSE 流（支持断线续传） |
-| POST | `/api/tasks/{id}/cancel` | 取消任务 |
-
-### 兼容接口（Form/File，对齐旧版前端）
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/agent/code_analysis` | 代码分析（文件上传） |
-| POST | `/api/agent/service_packaging` | 服务封装（文件上传） |
-| POST | `/api/agent/mcp_test` | MCP 服务测试 |
-| POST | `/api/agent/service_evaluation` | 服务评测 |
-| POST | `/api/agent/meta_app/run` | 元应用执行 |
-| POST | `/api/agent/capability_describe` | 能力描述翻译 |
-| POST | `/api/agent/capability_chat` | 引导式问答 |
-
-## 构建新 Agent
-
-以"软著说明书生成"为例：
-
-**1. 创建 Prompt 模板** `task/templates/software_copyright.md.j2`：
-```jinja2
-请根据以下项目信息生成软著说明书：
-项目名称：{{ project_name }}
-...
+```bash
+uvicorn api.app:app --host 0.0.0.0 --port 8010 --reload
 ```
 
-**2. 注册任务**（在 `task/builtin.py` 中追加）：
+访问 `http://localhost:8010/docs` 查看 API 文档。
+
+### Docker 部署
+
+```bash
+docker-compose up -d
+```
+
+## 定义垂域任务
+
+只需三步，即可将通用 Agent 转化为面向特定领域的专业智能体：
+
+### 1. 编写 Prompt 模板
+
+```jinja2
+{# task/templates/code_review.md.j2 #}
+请对以下代码进行审查，重点关注安全性和性能：
+
+代码路径: {{ code_path }}
+审查标准: {{ standards }}
+```
+
+### 2. 注册任务
+
 ```python
+# task/builtin.py
 register_task(TaskConfig(
-    name="software_copyright",
-    prompt_template="software_copyright.md.j2",
-    system_prompt="你是软著文档撰写专家。",
+    name="code_review",
+    prompt_template="code_review.md.j2",
+    system_prompt="你是一名资深代码审查工程师。",
     llm_profile="reasoning",
     max_steps=20,
 ))
 ```
 
-**3. 调用**：
+### 3. 调用
+
 ```bash
-curl -X POST http://localhost:8000/api/agent/software_copyright \
+curl -X POST http://localhost:8010/api/tasks \
   -H "Content-Type: application/json" \
-  -d '{"params": {"project_name": "IoEB 众智工场"}}'
+  -d '{"prompt": "审查 src/main.py", "agent_name": "code_review"}'
 ```
+
+## 多 LLM Profile
+
+为不同场景配置不同的模型策略：
+
+```toml
+# config/config.toml
+
+[llm.default]
+model = "deepseek/deepseek-chat"
+temperature = 0.0
+max_tokens = 8192
+
+[llm.fast]
+model = "deepseek/deepseek-chat"
+max_tokens = 4096
+timeout = 30
+
+[llm.reasoning]
+model = "openai/o1-mini"
+max_tokens = 16384
+timeout = 120
+```
+
+任务中通过 `llm_profile` 指定：
+
+```python
+register_task(TaskConfig(
+    name="my_task",
+    llm_profile="reasoning",  # 使用推理模型
+    ...
+))
+```
+
+## 内置示例任务
+
+项目内置了多个真实场景的 Agent 任务作为参考实现：
+
+| 任务 | 说明 | 垂域组件 |
+|------|------|----------|
+| 代码分析 | 上传代码 → 自动分析函数结构 | Tools |
+| 服务封装 | 上传代码 → 自动生成 Docker + MCP 服务 | Skills + RAG + Memory |
+| 算法模型生成 | 描述需求 → 生成算法模型代码 | Skills + RAG + Memory |
+| MCP 服务测试 | 连接 MCP 服务器 → 自动发现并测试工具 | MCP |
+| 服务评测 | 上传数据 → 自动执行评测并输出报告 | Tools |
+| AML 模型评测 | 上传数据 → 多指标安全评测（支持数据适配） | MCP + Tools |
+
+> 这些任务展示了如何通过组合 Skills、RAG、MCP 等组件，将通用 Agent 打造为垂域专业智能体。你可以参考它们的实现来构建自己的任务。
 
 ## 扩展点
 
-| 扩展 | 接口 | 当前实现 | 可选实现 |
-|------|------|----------|----------|
+| 组件 | 接口 | 内置实现 | 可扩展方向 |
+|------|------|----------|------------|
+| 模型 | litellm | OpenAI, DeepSeek, Claude | Ollama, vLLM, 任意 OpenAI 兼容 API |
+| 工具 | `Tool` ABC | Bash, MCP, Terminate | 任意自定义工具 |
 | 记忆 | `MemoryProvider` | ShortTermMemory, FileMemory | Redis, 向量数据库 |
-| 检索 | `Retriever` | SimpleRetriever (关键词) | FAISS, ChromaDB, Milvus |
-| 技能 | `Skill` + `SkillRegistry` | 目录发现 (SKILL.md) | 远程技能市场 |
-| 工具 | `Tool` ABC | Bash, MCP, Simulated | 任意自定义工具 |
-| 模型 | litellm | DeepSeek, OpenAI | Claude, Ollama, vLLM |
+| 检索 | `Retriever` | EmbeddingRetriever | FAISS, ChromaDB, Milvus |
+| 技能 | `Skill` + `SkillRegistry` | SKILL.md 目录发现 | 远程技能市场 |
 
-## 与旧版的关系
+## 项目结构
 
-`Micro-Agent/`（旧版）继续运行支撑线上业务。`micro-agent-v2/` 独立开发，验证通过后切换。
+```
+Micro-Agent/
+├── core/                 # Agent 核心引擎
+│   ├── agent.py          # ReAct 循环执行引擎
+│   ├── llm.py            # LLM 统一调用层 (litellm)
+│   ├── config.py         # 配置管理 (TOML + 环境变量)
+│   ├── memory/           # 记忆系统 (短期 / 持久化)
+│   ├── rag/              # 检索增强 (Embedding)
+│   ├── skill/            # 技能系统 (注册 / 发现 / 注入)
+│   └── schema.py         # 数据模型 (Event / Message / ToolCall)
+├── tool/                 # 工具层
+│   ├── base.py           # Tool 抽象接口
+│   ├── bash.py           # Bash 命令执行
+│   ├── mcp/              # MCP 工具 (stdio / SSE)
+│   └── registry.py       # 工具注册表
+├── task/                 # 任务定义
+│   ├── base.py           # TaskConfig + 模板渲染
+│   ├── builtin.py        # 内置任务注册
+│   └── templates/        # Jinja2 Prompt 模板
+├── api/                  # API 服务层
+│   ├── app.py            # FastAPI 入口
+│   ├── routes/           # 路由 (任务管理 / Agent 端点)
+│   └── services/         # SSE 流 / 文件处理
+├── workspace/            # 工作区
+│   ├── knowledge/        # RAG 知识库文档
+│   └── skills/           # Skill 定义 (SKILL.md)
+├── config/               # 配置文件
+├── tests/                # 测试
+└── deploy/               # Docker 部署
+```
 
-详细的架构决策、开发阶段和交接规范见 [ROADMAP.md](ROADMAP.md)。
+## 许可
+
+[MIT](LICENSE)
