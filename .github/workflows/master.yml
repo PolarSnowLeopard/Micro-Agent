@@ -1,20 +1,19 @@
-name: Deploy to Server
+name: CI
 
 on:
   push:
-    branches:
-      - master
-      - zfy
+    branches: [master]
+  pull_request:
+    branches: [master]
 
 jobs:
   test:
-    name: Run Tests
+    name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -23,27 +22,40 @@ jobs:
           python -m pip install --upgrade pip
           pip install ".[dev]"
 
-      - name: Test with pytest
-        run: |
-          pytest tests/ -x -q --ignore=tests/e2e_demo.py --ignore=tests/bench_rag_quality.py
+      - name: Run tests
+        run: pytest tests/ -x -q --ignore=tests/e2e_demo.py --ignore=tests/bench_rag_quality.py
 
   build:
-    name: Build & Push Docker Image
+    name: Build & Push Image
     needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
+      - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push
         run: |
           mv deploy/Dockerfile Dockerfile
           mv deploy/start.sh start.sh
-          docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest .
-          docker push ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest
+          SHORT_SHA=${GITHUB_SHA::7}
+          docker build \
+            -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest \
+            -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${SHORT_SHA} .
+          docker push ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent --all-tags
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger deploy webhook
+        run: |
+          curl -sf -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}" \
+            -H "X-Deploy-Token: ${{ secrets.DEPLOY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"service":"agent","image":"${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest"}'
