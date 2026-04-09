@@ -7,36 +7,29 @@ on:
       - zfy
 
 jobs:
-  # 测试阶段
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
-        # with:
-        #   python-version: ${{ env.PYTHON_VERSION }}
+        with:
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-cov
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install ".[dev]"
 
       - name: Test with pytest
         run: |
-          pytest tests --cov=app --cov-report=xml
+          pytest tests/ -x -q --ignore=tests/e2e_demo.py --ignore=tests/bench_rag_quality.py
 
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
-
-  build-Agent:
+  build:
+    name: Build & Push Docker Image
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -48,9 +41,9 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: Build and push micro-agent Docker image
+      - name: Build and push Docker image
         run: |
           mv deploy/Dockerfile Dockerfile
           mv deploy/start.sh start.sh
-          docker build -t polarsnowleopard/micro-agent:latest .
-          docker push polarsnowleopard/micro-agent:latest
+          docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest .
+          docker push ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest
