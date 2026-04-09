@@ -15,28 +15,24 @@
 
 ## 为什么选择 Micro-Agent
 
-> **一句话**：如果你需要为特定行业快速构建一个专业 Agent 并以 API 服务形式交付，Micro-Agent 是最短路径。
+> 如果你需要为特定行业快速构建一个专业 Agent 并以 API 服务形式交付，Micro-Agent 是最短路径。
+
+<div align="center">
 
 | 能力 | Micro-Agent | LangGraph | AutoGen | OpenClaw |
 |:-----|:---:|:---:|:---:|:---:|
-| 开箱即用 API 服务 | **Yes** | No | No | No |
-| 垂域知识注入 (Skills) | **Yes** | No | No | No |
-| 内置 RAG | **Yes** | No | No | No |
-| 知识图谱增强 | **Yes** | No | No | No |
-| MCP 工具协议 | **Yes** | Plugin | Plugin | Plugin |
-| 流式 SSE 输出 | **Yes** | Yes | Limited | No |
-| 多模型一键切换 | **Yes** | Adapter | Yes | Yes |
-| 多智能体协作 | SubAgent | Yes | **Yes** | Yes |
-| 有向图工作流 | No | **Yes** | No | No |
-| 24/7 自治运行 | No | No | No | **Yes** |
-| 核心代码量 | **<3K 行** | ~15K 行 | ~20K 行 | ~30K 行 |
+| 开箱即用 API 服务 | ✅ | ❌ | ❌ | ❌ |
+| 垂域知识注入 (Skills) | ✅ | ❌ | ❌ | ❌ |
+| 内置 RAG 检索增强 | ✅ | ❌ | ❌ | ❌ |
+| 知识图谱增强 | ✅ | ❌ | ❌ | ❌ |
+| MCP 原生集成 | ✅ | 第三方 | 第三方 | 第三方 |
+| 流式 SSE 输出 | ✅ | ✅ | ❌ | ❌ |
+| 多 LLM Profile 配置 | ✅ | ❌ | ❌ | ❌ |
+| 轻量（核心 <3K 行） | ✅ | ❌ | ❌ | ❌ |
 
-**各框架适用场景：**
+</div>
 
-- **Micro-Agent** — 行业知识驱动的垂域专业 Agent，以 API 服务形式对外交付
-- **LangGraph** — 需要精确控制执行流程的复杂多步工作流
-- **AutoGen** — 多角色 Agent 对话协作，快速原型验证
-- **OpenClaw** — 个人效率自动化，跨平台消息处理
+**各框架定位：** Micro-Agent 面向垂域专业 Agent 服务交付 · LangGraph 面向复杂多步工作流编排 · AutoGen 面向多角色智能体协作 · OpenClaw 面向个人效率自动化
 
 ## 架构
 
