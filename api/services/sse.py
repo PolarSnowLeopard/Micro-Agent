@@ -9,8 +9,8 @@ from typing import Any, Callable, Optional, Sequence
 
 from fastapi.responses import StreamingResponse
 
-from core.schema import AgentEvent
-from core.task import TaskContext
+from micro_agent.core.schema import AgentEvent
+from micro_agent.core.task import TaskContext
 
 
 def event_to_legacy(event: AgentEvent) -> dict:

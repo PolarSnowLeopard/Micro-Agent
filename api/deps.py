@@ -8,17 +8,17 @@ from typing import Optional
 
 from loguru import logger
 
-from core.config import config
-from core.llm import LLM
-from core.agent import Agent
-from core.mcp_agent import MCPAgent
-from core.memory.persistent import FileMemory
-from core.rag.base import Retriever
-from core.skill import SkillRegistry
-from core.task import TaskManager
-from tool.registry import ToolRegistry
-from tool.terminate import Terminate
-from tool.bash import Bash
+from micro_agent.core.config import config
+from micro_agent.core.llm import LLM
+from micro_agent.core.agent import Agent
+from micro_agent.core.mcp_agent import MCPAgent
+from micro_agent.core.memory.persistent import FileMemory
+from micro_agent.core.rag.base import Retriever
+from micro_agent.core.skill import SkillRegistry
+from micro_agent.core.task import TaskManager
+from micro_agent.tool.registry import ToolRegistry
+from micro_agent.tool.terminate import Terminate
+from micro_agent.tool.bash import Bash
 
 task_manager = TaskManager()
 
