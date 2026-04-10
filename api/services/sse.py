@@ -77,8 +77,31 @@ async def sse_response(
             if components_meta:
                 yield _sse_line({"status": "components", **components_meta})
 
+            pending_step: dict[str, Any] = {}
+            pending_step_num: int | None = None
+
             async for event in ctx.subscribe():
-                yield _sse_line(event_to_legacy(event))
+                if event.type in ("error", "done"):
+                    if pending_step:
+                        yield _sse_line(pending_step)
+                        pending_step = {}
+                        pending_step_num = None
+                    yield _sse_line(event_to_legacy(event))
+                    continue
+
+                if event.step != pending_step_num:
+                    if pending_step:
+                        yield _sse_line(pending_step)
+                    pending_step = {"step": event.step}
+                    pending_step_num = event.step
+
+                legacy = event_to_legacy(event)
+                for k, v in legacy.items():
+                    if k != "step":
+                        pending_step[k] = v
+
+            if pending_step:
+                yield _sse_line(pending_step)
 
             final: dict[str, Any] = {"is_last": True, "is_final_result": True}
             final_results: dict[str, Any] = {}
