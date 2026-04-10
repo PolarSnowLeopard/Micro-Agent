@@ -1,5 +1,5 @@
 [project]
-name = "micro-agent-ai"
+name = "fdu-micro-agent"
 version = "2.0.0"
 description = "A lightweight AI Agent framework for vertical domain applications"
 readme = "README.md"
@@ -36,9 +36,9 @@ api = [
 ]
 mcp = ["mcp>=1.4.0"]
 rag = ["PyPDF2>=3.0.0", "python-docx>=1.0.0"]
-all = ["micro-agent-ai[api,mcp,rag]"]
+all = ["fdu-micro-agent[api,mcp,rag]"]
 dev = [
-    "micro-agent-ai[all]",
+    "fdu-micro-agent[all]",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.25.0",
 ]
