@@ -33,4 +33,4 @@ build-backend = "setuptools.build_meta"
 asyncio_mode = "auto"
 
 [tool.setuptools.packages.find]
-include = ["core*", "tool*", "api*", "task*"]
+include = ["micro_agent*", "api*", "tasks*"]

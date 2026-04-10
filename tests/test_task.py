@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from task.base import TaskConfig, render_prompt, register_task, get_task, list_tasks
-from core.schema import AgentEvent
+from micro_agent.task.base import TaskConfig, render_prompt, register_task, get_task, list_tasks
+from micro_agent.core.schema import AgentEvent
 
 
 # === 1. TaskConfig 基础功能 ===
@@ -106,7 +106,7 @@ def test_get_nonexistent():
 
 
 def test_builtin_tasks_registered():
-    import task.builtin  # noqa: F401
+    import tasks.builtin  # noqa: F401
     names = list_tasks()
     assert "code_analysis" in names
     assert "service_packaging" in names

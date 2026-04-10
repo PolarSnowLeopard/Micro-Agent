@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.deps import build_agent, task_manager
-from tool.mcp.connection import ServerConfig
+from micro_agent.tool.mcp.connection import ServerConfig
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -48,7 +48,7 @@ async def submit_task(req: TaskSubmitRequest):
 
     # 如果是 MCP agent 且提供了服务器配置，先连接
     if req.use_mcp and req.mcp_servers:
-        from core.mcp_agent import MCPAgent
+        from micro_agent.core.mcp_agent import MCPAgent
 
         assert isinstance(agent, MCPAgent)
         for srv in req.mcp_servers:

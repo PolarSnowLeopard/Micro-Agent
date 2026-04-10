@@ -14,8 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 async def test_task_context():
     """测试 TaskContext 的事件存储和订阅。"""
-    from core.task import TaskContext
-    from core.schema import AgentEvent
+    from micro_agent.core.task import TaskContext
+    from micro_agent.core.schema import AgentEvent
 
     ctx = TaskContext(task_id="test1")
     assert ctx.status == "running"
@@ -45,12 +45,12 @@ async def test_task_context():
 
 async def test_task_manager_cancel():
     """测试 TaskManager 的提交和取消。"""
-    from core.task import TaskManager
-    from core.agent import Agent
-    from core.llm import LLM
-    from core.config import LLMConfig
-    from tool.registry import ToolRegistry
-    from tool.terminate import Terminate
+    from micro_agent.core.task import TaskManager
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.config import LLMConfig
+    from micro_agent.tool.registry import ToolRegistry
+    from micro_agent.tool.terminate import Terminate
 
     mgr = TaskManager()
     llm = LLM(LLMConfig())
@@ -83,8 +83,8 @@ async def test_task_manager_cancel():
 
 async def test_task_manager_subscribe_realtime():
     """测试实时订阅：后台产生事件，前台实时收到。"""
-    from core.task import TaskContext
-    from core.schema import AgentEvent
+    from micro_agent.core.task import TaskContext
+    from micro_agent.core.schema import AgentEvent
 
     ctx = TaskContext(task_id="rt_test")
     received = []

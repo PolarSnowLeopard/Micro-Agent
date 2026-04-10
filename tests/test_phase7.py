@@ -5,19 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from core.schema import Message, Role
+from micro_agent.core.schema import Message, Role
 
 # ── EmbeddingRetriever 基础 ──
 
 def test_embedding_retriever_import():
-    from core.rag.embedding import EmbeddingRetriever
+    from micro_agent.core.rag.embedding import EmbeddingRetriever
     r = EmbeddingRetriever(model="test-model")
     assert r.model == "test-model"
     assert r._docs == []
 
 
 def test_embedding_retriever_split_text():
-    from core.rag.embedding import EmbeddingRetriever
+    from micro_agent.core.rag.embedding import EmbeddingRetriever
     r = EmbeddingRetriever(chunk_size=50, chunk_overlap=10)
     chunks = r._split_text(
         "第一段内容比较短。\n\n第二段内容也很短。\n\n第三段内容同样很短。",
@@ -31,19 +31,19 @@ def test_embedding_retriever_split_text():
 # ── Config 新字段 ──
 
 def test_config_memory_field():
-    from core.config import config
+    from micro_agent.core.config import config
     assert hasattr(config, "memory")
     assert hasattr(config.memory, "storage_dir")
 
 
 def test_config_rag_field():
-    from core.config import config
+    from micro_agent.core.config import config
     assert hasattr(config, "rag")
     assert config.rag.embedding_model == "openrouter/openai/text-embedding-3-small"
 
 
 def test_config_skills_field():
-    from core.config import config
+    from micro_agent.core.config import config
     assert hasattr(config, "skills")
     assert config.skills.directory == "skills"
 
@@ -51,7 +51,7 @@ def test_config_skills_field():
 # ── Skill 发现 ──
 
 def test_skill_discover_from_workspace(tmp_path):
-    from core.skill import SkillRegistry, Skill
+    from micro_agent.core.skill import SkillRegistry, Skill
     SkillRegistry.clear()
 
     skill_dir = tmp_path / "test_skill"
@@ -67,8 +67,8 @@ def test_skill_discover_from_workspace(tmp_path):
 
 
 def test_skill_discover_real_skills():
-    from core.skill import SkillRegistry
-    from core.config import config
+    from micro_agent.core.skill import SkillRegistry
+    from micro_agent.core.config import config
     SkillRegistry.clear()
 
     skills_dir = Path(config.workspace) / config.skills.directory
@@ -84,8 +84,8 @@ def test_skill_discover_real_skills():
 # ── Session Memory（FileMemory） ──
 
 async def test_file_memory_persist_and_load(tmp_path):
-    from core.memory.persistent import FileMemory
-    from core.schema import Message
+    from micro_agent.core.memory.persistent import FileMemory
+    from micro_agent.core.schema import Message
 
     mem = FileMemory(tmp_path)
     await mem.load("sess_001")
@@ -114,13 +114,13 @@ async def test_build_agent_with_session(tmp_path, monkeypatch):
     assert sid is not None
     assert len(sid) == 12
 
-    from core.memory.persistent import FileMemory
+    from micro_agent.core.memory.persistent import FileMemory
     assert isinstance(agent.memory, FileMemory)
 
 
 async def test_build_agent_with_existing_session(tmp_path, monkeypatch):
-    from core.memory.persistent import FileMemory
-    from core.schema import Message
+    from micro_agent.core.memory.persistent import FileMemory
+    from micro_agent.core.schema import Message
 
     mem = FileMemory(tmp_path)
     await mem.load("existing_session")
@@ -141,12 +141,12 @@ async def test_build_agent_without_session():
     agent, sid = await build_agent(name="test")
     assert sid is None
 
-    from core.memory.short_term import ShortTermMemory
+    from micro_agent.core.memory.short_term import ShortTermMemory
     assert isinstance(agent.memory, ShortTermMemory)
 
 
 async def test_build_agent_with_skills(tmp_path):
-    from core.skill import SkillRegistry, Skill
+    from micro_agent.core.skill import SkillRegistry, Skill
     SkillRegistry.clear()
     SkillRegistry.register(Skill(
         name="test_skill",
@@ -163,10 +163,10 @@ async def test_build_agent_with_skills(tmp_path):
 
 async def test_task_manager_persists_memory(tmp_path):
     from unittest.mock import AsyncMock, MagicMock
-    from core.task import TaskManager
-    from core.agent import Agent
-    from core.memory.persistent import FileMemory
-    from core.schema import AgentEvent
+    from micro_agent.core.task import TaskManager
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.memory.persistent import FileMemory
+    from micro_agent.core.schema import AgentEvent
 
     mem = FileMemory(tmp_path)
     await mem.load("persist_test")
@@ -199,7 +199,7 @@ async def test_task_manager_persists_memory(tmp_path):
 # ── Knowledge directory existence ──
 
 def test_knowledge_directory_exists():
-    from core.config import config
+    from micro_agent.core.config import config
     knowledge_dir = Path(config.workspace) / "knowledge" / "service_packaging"
     assert knowledge_dir.exists()
     md_files = list(knowledge_dir.glob("*.md"))
