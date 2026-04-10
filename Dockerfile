@@ -7,10 +7,10 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir . 2>/dev/null || true
+RUN pip install --no-cache-dir ".[all]" 2>/dev/null || true
 
 COPY . .
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e ".[all]"
 
 EXPOSE 8010 22 8000
 
