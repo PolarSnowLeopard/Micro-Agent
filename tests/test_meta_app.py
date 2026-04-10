@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from tool.simulated_mcp import SimulatedMCPTool
-from tool.finalize import FinalizeResult
-from tool.base import ToolResult
-from core.schema import AgentEvent
+from micro_agent.tool.simulated_mcp import SimulatedMCPTool
+from micro_agent.tool.finalize import FinalizeResult
+from micro_agent.tool.base import ToolResult
+from micro_agent.core.schema import AgentEvent
 
 
 # === 1. SimulatedMCPTool ===
@@ -74,9 +74,9 @@ async def test_finalize_result():
 # === 3. MetaAppAgent ===
 
 def test_meta_app_agent_init():
-    from core.config import config
-    from core.llm import LLM
-    from core.meta_app_agent import MetaAppAgent
+    from micro_agent.core.config import config
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.meta_app_agent import MetaAppAgent
 
     llm = LLM(config.llm)
     agent = MetaAppAgent(llm=llm)
@@ -87,9 +87,9 @@ def test_meta_app_agent_init():
 
 @pytest.mark.asyncio
 async def test_meta_app_agent_sim_init():
-    from core.config import config
-    from core.llm import LLM
-    from core.meta_app_agent import MetaAppAgent
+    from micro_agent.core.config import config
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.meta_app_agent import MetaAppAgent
 
     llm = LLM(config.llm)
     agent = MetaAppAgent(llm=llm)
@@ -143,9 +143,9 @@ async def test_meta_app_agent_sim_init():
 
 
 def test_meta_app_agent_no_nodes():
-    from core.config import config
-    from core.llm import LLM
-    from core.meta_app_agent import MetaAppAgent
+    from micro_agent.core.config import config
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.meta_app_agent import MetaAppAgent
 
     llm = LLM(config.llm)
     agent = MetaAppAgent(llm=llm)
@@ -160,7 +160,7 @@ def test_meta_app_agent_no_nodes():
 # === 4. 模板 ===
 
 def test_meta_app_validation_template():
-    from task.base import render_prompt
+    from micro_agent.task.base import render_prompt
     result = render_prompt(
         "meta_app_validation.md.j2",
         meta_app_api="http://example.com/sse",
@@ -173,8 +173,8 @@ def test_meta_app_validation_template():
 
 
 def test_builtin_includes_meta_app_validation():
-    import task.builtin  # noqa: F401
-    from task.base import get_task
+    import tasks.builtin  # noqa: F401
+    from micro_agent.task.base import get_task
     assert get_task("meta_app_validation") is not None
 
 
@@ -193,7 +193,7 @@ def test_agent_router_endpoints():
 
 def test_event_to_legacy():
     from api.services.sse import event_to_legacy
-    from core.schema import AgentEvent
+    from micro_agent.core.schema import AgentEvent
 
     e = AgentEvent(type="think", step=1, data={"thought": "我在思考"})
     legacy = event_to_legacy(e)

@@ -40,14 +40,14 @@ from api.services.files import (
     save_upload,
 )
 from api.services.sse import sse_response, event_to_legacy, _sse_line
-from core.config import config
-from core.llm import LLM
-from core.mcp_agent import MCPAgent
-from core.meta_app_agent import MetaAppAgent
-from task.base import get_task, list_tasks, render_prompt
-from tool.mcp.connection import ServerConfig
+from micro_agent.core.config import config
+from micro_agent.core.llm import LLM
+from micro_agent.core.mcp_agent import MCPAgent
+from micro_agent.core.meta_app_agent import MetaAppAgent
+from micro_agent.task.base import get_task, list_tasks, render_prompt
+from micro_agent.tool.mcp.connection import ServerConfig
 
-import task.builtin  # noqa: F401
+import tasks.builtin  # noqa: F401
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -96,7 +96,7 @@ async def _get_packaging_retriever():
     if not knowledge_dir.exists():
         return None
 
-    from core.rag.embedding import EmbeddingRetriever
+    from micro_agent.core.rag.embedding import EmbeddingRetriever
     _packaging_retriever = EmbeddingRetriever(
         model=config.rag.embedding_model,
         chunk_size=config.rag.chunk_size,
@@ -343,7 +343,7 @@ async def aml_model_evaluation(
     use_adaptation = enable_adaptation.lower() == "true"
 
     if use_adaptation:
-        from task.aml_model_evaluation import build_aml_evaluation_prompt_with_adaptation
+        from tasks.aml_model_evaluation import build_aml_evaluation_prompt_with_adaptation
         prompt = build_aml_evaluation_prompt_with_adaptation(
             model_name=model_name,
             data_info={
@@ -421,7 +421,7 @@ async def _get_aml_retriever():
         logger.warning(f"aml_auto_generate 知识库目录不存在: {knowledge_dir}")
         return None
 
-    from core.rag.embedding import EmbeddingRetriever
+    from micro_agent.core.rag.embedding import EmbeddingRetriever
     _aml_retriever = EmbeddingRetriever(
         model=config.rag.embedding_model,
         chunk_size=250,
@@ -441,7 +441,7 @@ async def aml_auto_generate(
     file: UploadFile = File(None),
     session_id: Optional[str] = Form(default=None),
 ):
-    from task.aml_auto_generate import build_aml_auto_generate_prompt
+    from tasks.aml_auto_generate import build_aml_auto_generate_prompt
 
     cleanup_files: list[str] = []
     paper_content = ""

@@ -13,11 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.agent import Agent
-from core.config import config
-from core.llm import LLM
-from tool.registry import ToolRegistry
-from tool.terminate import Terminate
+from micro_agent.core.agent import Agent
+from micro_agent.core.config import config
+from micro_agent.core.llm import LLM
+from micro_agent.tool.registry import ToolRegistry
+from micro_agent.tool.terminate import Terminate
 
 
 async def main():
