@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 async def test_bash_tool():
     """测试 Bash 工具基本功能。"""
-    from tool.bash import Bash
+    from micro_agent.tool.bash import Bash
 
     bash = Bash(timeout=10)
     result = await bash.execute(command="echo hello && echo world")
@@ -32,9 +32,9 @@ async def test_bash_tool():
 
 async def test_tool_registry_namespace():
     """测试 ToolRegistry 的 namespace 注册/注销。"""
-    from tool.registry import ToolRegistry
-    from tool.terminate import Terminate
-    from tool.bash import Bash
+    from micro_agent.tool.registry import ToolRegistry
+    from micro_agent.tool.terminate import Terminate
+    from micro_agent.tool.bash import Bash
 
     reg = ToolRegistry()
     reg.register(Terminate())
@@ -60,7 +60,7 @@ async def test_tool_registry_namespace():
 
 async def test_mcp_connection_manager_init():
     """测试 MCPConnectionManager 基础功能（不连接真实服务器）。"""
-    from tool.mcp.connection import MCPConnectionManager, ServerConfig
+    from micro_agent.tool.mcp.connection import MCPConnectionManager, ServerConfig
 
     mgr = MCPConnectionManager()
     assert mgr.server_ids() == []
@@ -74,9 +74,9 @@ async def test_mcp_connection_manager_init():
 
 async def test_mcp_agent_init():
     """测试 MCPAgent 初始化（不连接真实服务器）。"""
-    from core.mcp_agent import MCPAgent
-    from core.llm import LLM
-    from core.config import LLMConfig
+    from micro_agent.core.mcp_agent import MCPAgent
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.config import LLMConfig
 
     llm = LLM(LLMConfig())
 
@@ -90,11 +90,11 @@ async def test_mcp_agent_init():
 
 async def test_agent_cancel():
     """测试 Agent 的 cancel / reset 机制。"""
-    from core.agent import Agent
-    from core.llm import LLM
-    from core.config import LLMConfig
-    from tool.registry import ToolRegistry
-    from tool.terminate import Terminate
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.config import LLMConfig
+    from micro_agent.tool.registry import ToolRegistry
+    from micro_agent.tool.terminate import Terminate
 
     llm = LLM(LLMConfig())
     tools = ToolRegistry()

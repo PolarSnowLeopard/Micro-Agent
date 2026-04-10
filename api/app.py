@@ -15,8 +15,8 @@ from loguru import logger
 
 from api.routes.task import router as task_router
 from api.routes.agent import router as agent_router
-from core.config import config
-from core.skill import SkillRegistry
+from micro_agent.core.config import config
+from micro_agent.core.skill import SkillRegistry
 
 DEMO_HTML = Path(__file__).parent.parent / "demo" / "index.html"
 

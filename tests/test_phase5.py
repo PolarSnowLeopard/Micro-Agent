@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from core.config import AppConfig, LLMConfig
+from micro_agent.core.config import AppConfig, LLMConfig
 
 
 # === 1. 多 LLM Profile ===
@@ -41,7 +41,7 @@ async def test_build_agent_with_profile():
 
 
 def test_task_config_llm_profile():
-    from task.base import TaskConfig
+    from micro_agent.task.base import TaskConfig
     tc = TaskConfig(name="test", llm_profile="reasoning")
     assert tc.llm_profile == "reasoning"
 
@@ -49,8 +49,8 @@ def test_task_config_llm_profile():
 # === 2. Memory ===
 
 def test_short_term_memory():
-    from core.memory import ShortTermMemory
-    from core.schema import Message
+    from micro_agent.core.memory import ShortTermMemory
+    from micro_agent.core.schema import Message
 
     mem = ShortTermMemory(max_messages=5)
     for i in range(8):
@@ -60,8 +60,8 @@ def test_short_term_memory():
 
 
 def test_short_term_preserves_system():
-    from core.memory import ShortTermMemory
-    from core.schema import Message
+    from micro_agent.core.memory import ShortTermMemory
+    from micro_agent.core.schema import Message
 
     mem = ShortTermMemory(max_messages=3)
     mem.add(Message.system("system"))
@@ -73,8 +73,8 @@ def test_short_term_preserves_system():
 
 @pytest.mark.asyncio
 async def test_file_memory_persist_load():
-    from core.memory import FileMemory
-    from core.schema import Message
+    from micro_agent.core.memory import FileMemory
+    from micro_agent.core.schema import Message
 
     with tempfile.TemporaryDirectory() as tmpdir:
         mem = FileMemory(Path(tmpdir))
@@ -91,10 +91,10 @@ async def test_file_memory_persist_load():
 
 
 def test_agent_accepts_memory():
-    from core.config import config
-    from core.llm import LLM
-    from core.agent import Agent
-    from core.memory import ShortTermMemory
+    from micro_agent.core.config import config
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.memory import ShortTermMemory
 
     llm = LLM(config.llm)
     mem = ShortTermMemory(max_messages=10)
@@ -103,8 +103,8 @@ def test_agent_accepts_memory():
 
 
 def test_memory_provider_interface():
-    from core.memory.base import MemoryProvider
-    from core.memory import ShortTermMemory, FileMemory
+    from micro_agent.core.memory.base import MemoryProvider
+    from micro_agent.core.memory import ShortTermMemory, FileMemory
     assert issubclass(ShortTermMemory, MemoryProvider)
     assert issubclass(FileMemory, MemoryProvider)
 
@@ -112,7 +112,7 @@ def test_memory_provider_interface():
 # === 3. Skill ===
 
 def test_skill_register_and_get():
-    from core.skill import Skill, SkillRegistry
+    from micro_agent.core.skill import Skill, SkillRegistry
 
     SkillRegistry.clear()
     skill = Skill(name="test_skill", description="测试", prompt_fragment="请遵循测试规范")
@@ -123,7 +123,7 @@ def test_skill_register_and_get():
 
 
 def test_skill_from_directory():
-    from core.skill import Skill
+    from micro_agent.core.skill import Skill
 
     with tempfile.TemporaryDirectory() as tmpdir:
         p = Path(tmpdir) / "my_skill"
@@ -136,7 +136,7 @@ def test_skill_from_directory():
 
 
 def test_skill_discover():
-    from core.skill import Skill, SkillRegistry
+    from micro_agent.core.skill import Skill, SkillRegistry
 
     SkillRegistry.clear()
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -151,10 +151,10 @@ def test_skill_discover():
 
 
 def test_agent_load_skill():
-    from core.config import config
-    from core.llm import LLM
-    from core.agent import Agent
-    from core.skill import Skill, SkillRegistry
+    from micro_agent.core.config import config
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.skill import Skill, SkillRegistry
 
     SkillRegistry.clear()
     SkillRegistry.register(Skill(
@@ -173,7 +173,7 @@ def test_agent_load_skill():
 
 @pytest.mark.asyncio
 async def test_simple_retriever():
-    from core.rag import SimpleRetriever
+    from micro_agent.core.rag import SimpleRetriever
 
     retriever = SimpleRetriever()
     await retriever.add("Python 的 GIL 限制了多线程并行", source="python_faq.md")
@@ -187,7 +187,7 @@ async def test_simple_retriever():
 
 @pytest.mark.asyncio
 async def test_retriever_empty():
-    from core.rag import SimpleRetriever
+    from micro_agent.core.rag import SimpleRetriever
 
     retriever = SimpleRetriever()
     docs = await retriever.retrieve("不存在的内容")
@@ -195,10 +195,10 @@ async def test_retriever_empty():
 
 
 def test_agent_accepts_retriever():
-    from core.config import config
-    from core.llm import LLM
-    from core.agent import Agent
-    from core.rag import SimpleRetriever
+    from micro_agent.core.config import config
+    from micro_agent.core.llm import LLM
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.rag import SimpleRetriever
 
     llm = LLM(config.llm)
     retriever = SimpleRetriever()
@@ -207,6 +207,6 @@ def test_agent_accepts_retriever():
 
 
 def test_retriever_interface():
-    from core.rag.base import Retriever
-    from core.rag import SimpleRetriever
+    from micro_agent.core.rag.base import Retriever
+    from micro_agent.core.rag import SimpleRetriever
     assert issubclass(SimpleRetriever, Retriever)
