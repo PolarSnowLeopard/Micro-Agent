@@ -226,3 +226,81 @@ Micro-Agent/
 ## 许可
 
 [MIT](LICENSE)
+## ❓ FAQ
+
+### 通用问题
+
+**Q: Micro-Agent 与其他 Agent 框架（LangGraph、AutoGen）有什么区别？**
+Micro-Agent 专注于**垂域专业 Agent 服务交付**，开箱即用 API 服务，内置 Skills、RAG、知识图谱和 MCP 集成。LangGraph 面向复杂多步工作流编排，AutoGen 面向多角色智能体协作。
+
+**Q: 支持哪些 LLM 提供商？**
+通过 [litellm](https://github.com/BerriAI/litellm) 统一接口，支持 OpenAI、DeepSeek、Claude、Ollama、OpenRouter 等任意 litellm 兼容的模型。支持 `openai/gpt-4o`、`ollama/qwen2.5`、`openrouter/qwen/qwen3-coder-flash` 等格式。
+
+**Q: 最低 Python 版本要求是什么？**
+Python ≥ 3.11。建议使用 Python 3.11+ 以获得最佳兼容性和性能。
+
+### 安装与配置
+
+**Q: 如何快速安装 Micro-Agent？**
+```bash
+git clone https://github.com/fdueblab/Micro-Agent.git
+cd Micro-Agent
+pip install -e ".[dev]"
+cp .env.example .env
+# 编辑 .env 填入 API Key
+```
+
+**Q: 如何配置多个 LLM 模型？**
+在 `config/config.toml` 中定义不同的 LLM Profile：
+```toml
+[llm.default]
+model = "deepseek/deepseek-chat"
+temperature = 0.0
+
+[llm.reasoning]
+model = "openai/o1-mini"
+max_tokens = 16384
+```
+任务中通过 `llm_profile` 指定使用哪个 Profile。
+
+**Q: 支持本地模型吗？**
+支持。通过 Ollama 运行本地模型，配置 `LLM_MODEL=ollama/qwen2.5` 即可。
+
+### 核心功能
+
+**Q: Skills 系统如何工作？**
+Skills 将领域规范、编码标准等知识注入 Agent 的 system prompt。在 `workspace/skills/` 目录下放置 `SKILL.md` 文件，Agent 会自动发现并加载。
+
+**Q: 如何自定义工具？**
+继承 `Tool` 抽象类实现自定义工具，或在 `tool/` 目录下添加新工具模块。内置支持 Bash、MCP 和 Terminate 工具。
+
+**Q: RAG 如何配置？**
+在 `workspace/knowledge/` 目录下放置知识库文档，系统使用 EmbeddingRetriever 进行语义检索。可扩展为 FAISS、ChromaDB、Milvus 等后端。
+
+**Q: 支持 MCP 协议吗？**
+原生支持。通过 `tool/mcp/` 模块连接 MCP 服务器，支持 stdio 和 SSE 两种传输模式。
+
+### 部署与运行
+
+**Q: 如何启动 API 服务？**
+```bash
+uvicorn api.app:app --host 0.0.0.0 --port 8010 --reload
+```
+访问 `http://localhost:8010/docs` 查看 API 文档。
+
+**Q: 支持 Docker 部署吗？**
+支持。项目包含 `docker-compose.yml`，运行 `docker-compose up -d` 即可启动。
+
+### 故障排查
+
+**Q: API 调用报错 "Authentication failed"？**
+检查 `.env` 中的 `LLM_API_KEY` 是否正确配置，确保对应 LLM 提供商的 API Key 有效且有足够配额。
+
+**Q: 工具调用失败怎么办？**
+1. 检查工具配置是否正确
+2. 查看日志确认工具注册状态
+3. 如果是 MCP 工具，确认 MCP 服务器是否正常运行
+
+**Q: 记忆系统不工作？**
+确认 `config/config.toml` 中 memory 配置正确，检查 `workspace/` 目录是否有写入权限。
+
