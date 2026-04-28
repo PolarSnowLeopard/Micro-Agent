@@ -19,20 +19,21 @@
 
 <div align="center">
 
-| 能力 | Micro-Agent | LangGraph | AutoGen | OpenClaw |
+| 能力 | Micro-Agent | LangGraph | AutoGen¹ | OpenClaw |
 |:-----|:---:|:---:|:---:|:---:|
-| 开箱即用 API 服务 | ✅ | ❌ | ❌ | ❌ |
-| 垂域知识注入 (Skills) | ✅ | ❌ | ❌ | ❌ |
-| 内置 RAG 检索增强 | ✅ | ❌ | ❌ | ❌ |
-| 知识图谱增强 | ✅ | ❌ | ❌ | ❌ |
-| MCP 原生集成 | ✅ | 第三方 | 第三方 | 第三方 |
-| 流式 SSE 输出 | ✅ | ✅ | ❌ | ❌ |
+| 开箱即用 API 服务 | ✅ | ✅ | ❌ | ✅ |
+| 垂域知识注入 (Skills) | ✅ | ❌ | ❌ | ✅ |
+| 内置 RAG 检索增强 | ✅ | 生态 | 扩展 | ✅ |
+| MCP 集成 | ✅ | ✅ | ✅ | ✅ |
+| 流式 SSE 输出 | ✅ | ✅ | 需自建 | ✅ |
 | 多 LLM Profile 配置 | ✅ | ❌ | ❌ | ❌ |
 | 轻量（核心 <3K 行） | ✅ | ❌ | ❌ | ❌ |
 
 </div>
 
-**各框架定位：** Micro-Agent 面向垂域专业 Agent 服务交付 · LangGraph 面向复杂多步工作流编排 · AutoGen 面向多角色智能体协作 · OpenClaw 面向个人效率自动化
+> ¹ AutoGen 已进入维护模式，新项目建议使用 [Microsoft Agent Framework](https://github.com/microsoft/autogen)。
+
+**各框架定位：** Micro-Agent 面向垂域专业 Agent 服务交付 · LangGraph 面向复杂多步工作流编排 · AutoGen 面向多角色智能体协作 · OpenClaw 面向个人自主 AI 助手
 
 ## 架构
 
@@ -49,7 +50,6 @@
 - **Memory** — 会话记忆系统，支持短期记忆、文件持久化、跨会话恢复
 - **Skills** — 将领域规范、编码标准等知识注入 Agent 的 system prompt，使其具备专业能力
 - **RAG** — 从领域知识库中检索相关文档，为推理提供上下文
-- **Knowledge Graph** — 基于图结构的领域知识表示与关联推理
 - **MCP / Tools** — 通过 [Model Context Protocol](https://modelcontextprotocol.io) 连接外部工具和数据源
 
 ## 快速开始
