@@ -219,15 +219,18 @@ async def service_evaluation(
 async def mcp_service_recommendation(
     message: str = Form(...),
     service_type: str = Form(...),
+    session_id: Optional[str] = Form(default=None),
 ):
     prompt = render_prompt(
         "mcp_service_recommendation.md.j2",
         message=message, service_type=service_type, workspace=WORKSPACE,
     )
-    agent, _ = await build_agent(
+    agent, sid = await build_agent(
         name="mcp_service_recommendation",
         system_prompt=get_task("mcp_service_recommendation").system_prompt,
         use_mcp=True,
+        enable_session=True,
+        session_id=session_id,
     )
     assert isinstance(agent, MCPAgent)
     await agent.connect(ServerConfig(
@@ -243,6 +246,7 @@ async def mcp_service_recommendation(
         ctx,
         output_files=[{"name": "recommendation_result", "file": output_file}],
         cleanup=partial(cleanup_paths, output_file),
+        session_id=sid,
     )
 
 
