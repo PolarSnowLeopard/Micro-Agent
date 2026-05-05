@@ -42,7 +42,6 @@ class SimulationStartRequest(BaseModel):
     scenarioDescription: str = ""
     mode: str = "production"
     strategy: dict = Field(default_factory=dict)
-    domainKnowledge: Any = None
 
 
 class CompareRequest(BaseModel):

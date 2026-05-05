@@ -23,6 +23,7 @@ from micro_agent.core.agent import Agent
 from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.core.schema import AgentEvent
+from micro_agent.core.skill import SkillRegistry
 from micro_agent.simulation.sandbox_tool import SandboxTool, ToolCallRecord
 from micro_agent.tool.registry import ToolRegistry
 from micro_agent.tool.terminate import Terminate
@@ -74,6 +75,8 @@ class SimulationOrchestrator:
         self._cancelled = False
         self._started_at = 0.0
         self._final_iteration = 1
+
+        self._domain_skill_name = f"domain_{self.domain}"
 
         self._tools = ToolRegistry()
         self._sandbox_tools: list[SandboxTool] = []
@@ -289,7 +292,7 @@ class SimulationOrchestrator:
     # ====================== Agent 构建 ======================
 
     def _build_planner(self, iteration: int, prev_trace: list[AgentEvent]) -> Agent:
-        return Agent(
+        agent = Agent(
             name="simulation_planner",
             llm=LLM(config.llm),
             tools=self._tools,
@@ -297,12 +300,14 @@ class SimulationOrchestrator:
             next_step_prompt="根据当前进展决定下一步调用哪个服务工具；若已全部调用完毕请调用 terminate。",
             max_steps=20,
         )
+        self._load_domain_skill(agent)
+        return agent
 
     def _build_verifier(self) -> Agent:
         tools = ToolRegistry()
         tools.register(Terminate())
 
-        return Agent(
+        agent = Agent(
             name="simulation_verifier",
             llm=LLM(config.llm),
             tools=tools,
@@ -314,6 +319,15 @@ class SimulationOrchestrator:
             ),
             max_steps=5,
         )
+        self._load_domain_skill(agent)
+        return agent
+
+    def _load_domain_skill(self, agent: Agent) -> None:
+        """按 domain 加载领域 Skill；找不到则回退到 domain_generic。"""
+        if SkillRegistry.get(self._domain_skill_name):
+            agent.load_skill(self._domain_skill_name)
+        elif self._domain_skill_name != "domain_generic" and SkillRegistry.get("domain_generic"):
+            agent.load_skill("domain_generic")
 
     # ====================== Prompt ======================
 
