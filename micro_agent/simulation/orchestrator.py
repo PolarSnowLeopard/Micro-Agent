@@ -3,10 +3,9 @@
 输出 SimulationEvent 流，事件名与前端 simulation_builder.vue 一一对应：
   step / service / iteration / phase / issue / log / metrics / progress / complete
 
-设计要点：
-  - Planner 使用 SimulatedMCPTool（mock），后续替换为真实 MCP 只需改 tool 注册
-  - Verifier 纯 LLM 推理，无工具
-  - 两个 Agent 均复用 Agent.run() 的 ReAct 引擎
+工具层：
+  - 当前使用 SandboxTool（拟真 mock，接口与 MCPTool 一致）
+  - 替换为真实 MCP 只需改 _register_tools() 的工具来源
 """
 
 from __future__ import annotations
@@ -24,8 +23,8 @@ from micro_agent.core.agent import Agent
 from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.core.schema import AgentEvent
+from micro_agent.simulation.sandbox_tool import SandboxTool, ToolCallRecord
 from micro_agent.tool.registry import ToolRegistry
-from micro_agent.tool.simulated_mcp import SimulatedMCPTool
 from micro_agent.tool.terminate import Terminate
 
 
@@ -46,28 +45,18 @@ class SimulationEvent:
         return {"type": self.type, "data": self.data, "timestamp": self.timestamp}
 
 
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
-
-ENV_TASKS = [
-    "初始化仿真运行时",
-    "加载服务配置",
-    "配置沙箱隔离层",
-    "准备数据注入通道",
-]
-
-GEN_TASKS = [
-    "编译执行方案",
-    "生成服务调度配置",
-    "写入元应用描述",
-]
-
-
 def _sanitize(text: str, max_len: int = 128) -> str:
     ident = re.sub(r"[^A-Za-z0-9_-]+", "_", str(text or "srv"))
     return re.sub(r"_+", "_", ident).strip("_")[:max_len] or "srv"
 
+
+class _CancelledError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
 
 class SimulationOrchestrator:
     """仿真编排器。async generator 产出 SimulationEvent。"""
@@ -84,11 +73,35 @@ class SimulationOrchestrator:
 
         self._cancelled = False
         self._started_at = 0.0
+        self._final_iteration = 1
+
+        self._tools = ToolRegistry()
+        self._sandbox_tools: list[SandboxTool] = []
+        self._register_tools()
+
+    # ====================== 工具注册 ======================
+
+    def _register_tools(self) -> None:
+        """注册服务工具。当前用 SandboxTool；换真实 MCP 改此处即可。"""
+        self._tools.register(Terminate())
+
+        used: set[str] = set()
+        for svc in self.services_meta:
+            prefix = _sanitize(svc.get("id") or svc.get("name"))
+            tool_name = self._unique(prefix, "execute", used)
+            tool = SandboxTool(
+                name=tool_name,
+                description=f"调用服务 [{svc.get('name', '?')}]：{svc.get('description', '执行该服务的核心功能')}",
+                service_id=svc.get("id", ""),
+                service_name=svc.get("name", ""),
+            )
+            self._tools.register(tool)
+            self._sandbox_tools.append(tool)
 
     def cancel(self) -> None:
         self._cancelled = True
 
-    # ----- 主流程 -----
+    # ====================== 主流程 ======================
 
     async def run(self) -> AsyncIterator[SimulationEvent]:
         self._started_at = time.time()
@@ -102,6 +115,23 @@ class SimulationOrchestrator:
                 yield e
             async for e in self._phase_generation():
                 yield e
+
+            if self.mode == "research":
+                for metric, value in self._collect_metrics().items():
+                    yield SimulationEvent("metrics", {"metric": metric, "value": value})
+
+            elapsed = self._elapsed_ms()
+            exec_path = self._extract_execution_path()
+            yield SimulationEvent("complete", {
+                "success": True,
+                "metrics": {"iterations": self._final_iteration, "elapsedMs": elapsed},
+                "result": {
+                    "executionPath": exec_path,
+                    "strategy": self.strategy,
+                    "appName": self.app_name,
+                    "domain": self.domain,
+                },
+            })
         except _CancelledError:
             yield SimulationEvent("complete", {
                 "success": False,
@@ -119,52 +149,82 @@ class SimulationOrchestrator:
             })
             return
 
-    # ----- Phase 0: 服务匹配 -----
+    # ====================== Phase 0: 服务匹配 ======================
 
     async def _phase_service_match(self) -> AsyncIterator[SimulationEvent]:
         yield SimulationEvent("step", {"step": 0, "name": "服务匹配"})
         yield self._log("INFO", "开始服务匹配")
 
-        for svc in self.services_meta:
+        for tool in self._sandbox_tools:
             self._check_cancel()
-            await asyncio.sleep(0.3)
-            yield self._log("INFO", f"检测服务: {svc.get('name', '?')}")
-            yield SimulationEvent("service", {
-                "id": svc.get("id", ""),
-                "status": "online",
-                "latency": 120,
-            })
-            yield self._log("SUCCESS", f"{svc.get('name', '?')} 连接正常 (120ms)")
+            yield self._log("INFO", f"检测服务: {tool.service_name}")
+
+            try:
+                probe = await tool.execute(action="health_check")
+                if probe.error:
+                    yield SimulationEvent("service", {
+                        "id": tool.service_id,
+                        "status": "error",
+                        "error": probe.error,
+                    })
+                    yield self._log("WARN", f"{tool.service_name} 探测失败: {probe.error}")
+                else:
+                    latency = tool.call_log[-1].latency_ms if tool.call_log else 0
+                    yield SimulationEvent("service", {
+                        "id": tool.service_id,
+                        "status": "online",
+                        "latency": latency,
+                    })
+                    yield self._log("SUCCESS", f"{tool.service_name} 连接正常 ({latency}ms)")
+            except Exception as exc:
+                yield SimulationEvent("service", {
+                    "id": tool.service_id,
+                    "status": "error",
+                    "error": str(exc),
+                })
+                yield self._log("WARN", f"{tool.service_name} 探测异常: {exc}")
 
         yield self._log("SUCCESS", "服务匹配完成")
 
-    # ----- Phase 1: 环境准备 -----
+    # ====================== Phase 1: 环境准备 ======================
 
     async def _phase_env_prep(self) -> AsyncIterator[SimulationEvent]:
         yield SimulationEvent("step", {"step": 1, "name": "环境准备"})
         yield self._log("INFO", "开始准备仿真环境")
 
-        for i, text in enumerate(ENV_TASKS):
+        steps = [
+            ("初始化仿真运行时", self._init_runtime),
+            ("加载服务配置", self._load_service_config),
+        ]
+
+        for i, (text, fn) in enumerate(steps):
             self._check_cancel()
             yield SimulationEvent("progress", {"ctx": "env", "index": i, "text": text, "active": True})
-            await asyncio.sleep(0.4)
+            await fn()
             yield SimulationEvent("progress", {"ctx": "env", "index": i, "text": text, "done": True})
             yield self._log("INFO", text)
 
-        yield self._log("SUCCESS", "环境准备完成")
+        yield self._log("SUCCESS", f"环境准备完成 — {len(self._sandbox_tools)} 个工具已就绪")
 
-    # ----- Phase 2: 智能构建（核心双 Agent 循环）-----
+    async def _init_runtime(self) -> None:
+        tool_names = [t.name for t in self._sandbox_tools]
+        logger.debug(f"仿真运行时初始化: tools={tool_names}")
+
+    async def _load_service_config(self) -> None:
+        logger.debug(f"服务配置加载: {len(self.services_meta)} 个服务")
+
+    # ====================== Phase 2: 智能构建 ======================
 
     async def _phase_intelligent_build(self) -> AsyncIterator[SimulationEvent]:
         yield SimulationEvent("step", {"step": 2, "name": "智能构建"})
         yield self._log("INFO", "开始智能构建")
 
-        final_iteration = 1
+        self._final_iteration = 1
         planner_trace: list[AgentEvent] = []
 
         for iteration in range(1, self.max_iterations + 1):
             self._check_cancel()
-            final_iteration = iteration
+            self._final_iteration = iteration
             yield SimulationEvent("iteration", {"iteration": iteration, "status": "running"})
             yield self._log("INFO", f"第 {iteration} 轮开始")
 
@@ -179,10 +239,6 @@ class SimulationOrchestrator:
                 yield self._log("INFO", self._format_agent_event("Planner", event))
 
             yield SimulationEvent("phase", {"phase": "data", "status": "done"})
-            yield SimulationEvent("phase", {"phase": "logic", "status": "running"})
-            await asyncio.sleep(0.2)
-            yield SimulationEvent("phase", {"phase": "logic", "status": "done"})
-            yield self._log("SUCCESS", "数据 & 逻辑仿真完成")
 
             # --- Verifier ---
             yield SimulationEvent("phase", {"phase": "check", "status": "running"})
@@ -208,35 +264,23 @@ class SimulationOrchestrator:
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
                 yield self._log("WARN", f"第 {iteration} 轮发现问题: {issue}")
 
-        # 研究模式：输出指标
-        elapsed = self._elapsed_ms()
-        if self.mode == "research":
-            for metric, value in self._fake_module_metrics(final_iteration).items():
-                yield SimulationEvent("metrics", {"metric": metric, "value": value})
-
-        # complete
-        exec_path = ["用户输入"] + [s.get("name", "?") for s in self.services_meta] + ["输出结果"]
-        yield SimulationEvent("complete", {
-            "success": True,
-            "metrics": {"iterations": final_iteration, "elapsedMs": elapsed},
-            "result": {
-                "executionPath": exec_path,
-                "strategy": self.strategy,
-                "appName": self.app_name,
-                "domain": self.domain,
-            },
-        })
-
-    # ----- Phase 3: 方案生成 -----
+    # ====================== Phase 3: 方案生成 ======================
 
     async def _phase_generation(self) -> AsyncIterator[SimulationEvent]:
         yield SimulationEvent("step", {"step": 3, "name": "方案生成"})
         yield self._log("INFO", "开始生成方案")
 
-        for i, text in enumerate(GEN_TASKS):
+        call_records = self._collect_call_records()
+
+        gen_steps = [
+            ("提取执行路径", lambda: self._extract_execution_path()),
+            ("生成服务调度配置", lambda: self._build_dispatch_config(call_records)),
+        ]
+
+        for i, (text, fn) in enumerate(gen_steps):
             self._check_cancel()
             yield SimulationEvent("progress", {"ctx": "generate", "index": i, "text": text, "active": True})
-            await asyncio.sleep(0.4)
+            fn()
             yield SimulationEvent("progress", {"ctx": "generate", "index": i, "text": text, "done": True})
             yield self._log("INFO", text)
 
@@ -245,39 +289,22 @@ class SimulationOrchestrator:
     # ====================== Agent 构建 ======================
 
     def _build_planner(self, iteration: int, prev_trace: list[AgentEvent]) -> Agent:
-        llm = LLM(config.llm)
-        tools = ToolRegistry()
-        tools.register(Terminate())
-
-        used: set[str] = set()
-        for svc in self.services_meta:
-            prefix = _sanitize(svc.get("id") or svc.get("name"))
-            tool_name = self._unique(prefix, "execute", used)
-            tools.register(SimulatedMCPTool(
-                name=tool_name,
-                description=f"调用服务 [{svc.get('name', '?')}] 的模拟接口",
-                node_id=svc.get("id"),
-                node_name=svc.get("name"),
-                node_des=svc.get("name"),
-            ))
-
         return Agent(
             name="simulation_planner",
-            llm=llm,
-            tools=tools,
+            llm=LLM(config.llm),
+            tools=self._tools,
             system_prompt=self._planner_system_prompt(),
             next_step_prompt="根据当前进展决定下一步调用哪个服务工具；若已全部调用完毕请调用 terminate。",
             max_steps=20,
         )
 
     def _build_verifier(self) -> Agent:
-        llm = LLM(config.llm)
         tools = ToolRegistry()
         tools.register(Terminate())
 
         return Agent(
             name="simulation_verifier",
-            llm=llm,
+            llm=LLM(config.llm),
             tools=tools,
             system_prompt=(
                 "你是仿真验证智能体。审查规划智能体的执行轨迹，判断服务调用是否完整、"
@@ -288,24 +315,26 @@ class SimulationOrchestrator:
             max_steps=5,
         )
 
-    # ====================== Prompt 构建 ======================
+    # ====================== Prompt ======================
 
     def _planner_system_prompt(self) -> str:
         svc_list = "\n".join(
-            f"  - {s.get('name', '?')}" for s in self.services_meta
+            f"  - {s.get('name', '?')}（工具名: {_sanitize(s.get('id') or s.get('name'))}_execute）"
+            for s in self.services_meta
         )
         return (
-            f"你是仿真规划智能体，负责模拟执行元应用「{self.app_name}」的服务编排。\n\n"
+            f"你是仿真规划智能体，负责执行元应用「{self.app_name}」的服务编排。\n\n"
             f"领域: {self.domain}\n"
             f"场景: {self.scenario or '通用场景'}\n"
             f"可用服务:\n{svc_list}\n\n"
-            f"请按照合理的顺序逐一调用各服务工具，验证数据流转是否正确。\n"
-            f"完成后调用 terminate 返回执行结果摘要。"
+            f"请按照合理的业务顺序逐一调用各服务工具，观察返回结果，"
+            f"确认数据在服务间正确流转。\n"
+            f"完成所有调用后，调用 terminate 并返回执行结果摘要。"
         )
 
     def _planner_prompt(self, iteration: int, prev_trace: list[AgentEvent]) -> str:
         if iteration == 1 or not prev_trace:
-            return f"请开始仿真执行元应用「{self.app_name}」，逐步调用各服务并验证数据流转。"
+            return f"请开始执行元应用「{self.app_name}」的服务编排，逐步调用各服务并验证数据流转。"
         summary = self._summarize_trace(prev_trace)
         return (
             f"上一轮执行存在问题，请根据以下轨迹摘要进行修正后重新执行：\n{summary}"
@@ -320,6 +349,64 @@ class SimulationOrchestrator:
             f"请检查：1) 所有服务是否被调用 2) 数据流转是否合理 3) 调用顺序是否正确\n"
             f"结论为 PASSED 或 FAILED: [原因]，然后 terminate。"
         )
+
+    # ====================== 数据提取 ======================
+
+    def _collect_call_records(self) -> list[ToolCallRecord]:
+        records = []
+        for tool in self._sandbox_tools:
+            records.extend(tool.call_log)
+        records.sort(key=lambda r: r.timestamp)
+        return records
+
+    def _extract_execution_path(self) -> list[str]:
+        """从实际工具调用日志中提取执行路径。"""
+        records = self._collect_call_records()
+        if not records:
+            return ["用户输入"] + [s.get("name", "?") for s in self.services_meta] + ["输出结果"]
+
+        seen: set[str] = set()
+        path = ["用户输入"]
+        for rec in records:
+            if rec.service_id not in seen and not rec.error:
+                seen.add(rec.service_id)
+                svc = next(
+                    (s for s in self.services_meta if s.get("id") == rec.service_id),
+                    None,
+                )
+                path.append(svc.get("name", rec.service_id) if svc else rec.service_id)
+        path.append("输出结果")
+        return path
+
+    def _build_dispatch_config(self, records: list[ToolCallRecord]) -> dict:
+        """从调用记录构建调度配置（供后续编译使用）。"""
+        steps = []
+        for rec in records:
+            if not rec.error:
+                steps.append({
+                    "tool": rec.tool_name,
+                    "service": rec.service_id,
+                    "latency_ms": rec.latency_ms,
+                })
+        return {"steps": steps, "total_calls": len(records)}
+
+    def _collect_metrics(self) -> dict[str, float]:
+        """从实际执行中收集指标。
+
+        当前部分指标仍需人工标注/后续接入真实度量，此处基于调用日志
+        计算可计算的指标，其余标记为估计值。
+        """
+        records = self._collect_call_records()
+        total = len(records)
+        errors = sum(1 for r in records if r.error)
+        success_rate = (total - errors) / total if total > 0 else 1.0
+
+        return {
+            "sandboxFidelity": round(success_rate, 3),
+            "planningAccuracy": 1.0 if self._final_iteration == 1 else 0.0,
+            "verificationAccuracy": -1,
+            "repairEffectiveness": -1,
+        }
 
     # ====================== 工具方法 ======================
 
@@ -385,17 +472,3 @@ class SimulationOrchestrator:
             n += 1
         used.add(alias)
         return alias
-
-    @staticmethod
-    def _fake_module_metrics(iterations: int) -> dict[str, float]:
-        base = 0.85 + min(iterations, 3) * 0.03
-        return {
-            "sandboxFidelity": round(base + 0.02, 3),
-            "planningAccuracy": round(base, 3),
-            "verificationAccuracy": round(base + 0.01, 3),
-            "repairEffectiveness": round(base - 0.03, 3),
-        }
-
-
-class _CancelledError(Exception):
-    pass
