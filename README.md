@@ -9,6 +9,8 @@
 [![LiteLLM](https://img.shields.io/badge/LLM-litellm-orange)](https://github.com/BerriAI/litellm)
 [![MCP](https://img.shields.io/badge/Tool-MCP-purple)](https://modelcontextprotocol.io)
 
+**中文** | [English](README_en.md)
+
 </div>
 
 ---
