@@ -19,20 +19,21 @@
 
 <div align="center">
 
-| 能力 | Micro-Agent | LangGraph | AutoGen | OpenClaw |
+| 能力 | Micro-Agent | LangGraph | AutoGen¹ | OpenClaw |
 |:-----|:---:|:---:|:---:|:---:|
-| 开箱即用 API 服务 | ✅ | ❌ | ❌ | ❌ |
-| 垂域知识注入 (Skills) | ✅ | ❌ | ❌ | ❌ |
-| 内置 RAG 检索增强 | ✅ | ❌ | ❌ | ❌ |
-| 知识图谱增强 | ✅ | ❌ | ❌ | ❌ |
-| MCP 原生集成 | ✅ | 第三方 | 第三方 | 第三方 |
-| 流式 SSE 输出 | ✅ | ✅ | ❌ | ❌ |
+| 开箱即用 API 服务 | ✅ | ✅ | ❌ | ✅ |
+| 垂域知识注入 (Skills) | ✅ | ❌ | ❌ | ✅ |
+| 内置 RAG 检索增强 | ✅ | 生态 | 扩展 | ✅ |
+| MCP 集成 | ✅ | ✅ | ✅ | ✅ |
+| 流式 SSE 输出 | ✅ | ✅ | 需自建 | ✅ |
 | 多 LLM Profile 配置 | ✅ | ❌ | ❌ | ❌ |
 | 轻量（核心 <3K 行） | ✅ | ❌ | ❌ | ❌ |
 
 </div>
 
-**各框架定位：** Micro-Agent 面向垂域专业 Agent 服务交付 · LangGraph 面向复杂多步工作流编排 · AutoGen 面向多角色智能体协作 · OpenClaw 面向个人效率自动化
+> ¹ AutoGen 已进入维护模式，新项目建议使用 [Microsoft Agent Framework](https://github.com/microsoft/autogen)。
+
+**各框架定位：** Micro-Agent 面向垂域专业 Agent 服务交付 · LangGraph 面向复杂多步工作流编排 · AutoGen 面向多角色智能体协作 · OpenClaw 面向个人自主 AI 助手
 
 ## 架构
 
@@ -49,7 +50,6 @@
 - **Memory** — 会话记忆系统，支持短期记忆、文件持久化、跨会话恢复
 - **Skills** — 将领域规范、编码标准等知识注入 Agent 的 system prompt，使其具备专业能力
 - **RAG** — 从领域知识库中检索相关文档，为推理提供上下文
-- **Knowledge Graph** — 基于图结构的领域知识表示与关联推理
 - **MCP / Tools** — 通过 [Model Context Protocol](https://modelcontextprotocol.io) 连接外部工具和数据源
 
 ## 快速开始
@@ -222,6 +222,165 @@ Micro-Agent/
 ├── tests/                # 测试
 └── deploy/               # Docker 部署
 ```
+
+
+## FAQ
+
+### 通用问题
+
+**Micro-Agent 是什么？**
+
+Micro-Agent 是面向垂域应用的轻量级 AI Agent 框架。它基于 ReAct 执行引擎，集成 MCP 工具、RAG 检索增强、Skill 技能系统，可快速构建专业领域智能体。
+
+**Micro-Agent 与 LangChain/CrewAI 有什么区别？**
+
+Micro-Agent 的特点：
+- **轻量**: 核心代码精简，易于理解和定制
+- **垂域导向**: 内置示例任务覆盖金融分析、运维监控、安全测试、医疗问答、法律文书、模型评测
+- **Skill 系统**: SKILL.md 目录发现，技能可热加载
+- **MCP 集成**: 支持 stdio/SSE 协议，无缝对接外部工具
+- **可扩展**: 模型、工具、记忆、检索、技能五大组件均可扩展
+
+### 安装与配置
+
+**如何安装 Micro-Agent？**
+
+```bash
+pip install -e .
+# 或从 PyPI 安装（发布后）
+pip install micro-agent
+```
+
+**需要什么 Python 版本？**
+
+Python 3.10+ 推荐。
+
+**如何配置 LLM？**
+
+编辑 `config/settings.toml` 或设置环境变量：
+```bash
+export LLM_MODEL=deepseek-chat
+export LLM_API_KEY=your_api_key
+export LLM_BASE_URL=https://api.deepseek.com
+```
+
+### LLM 提供商
+
+**支持哪些 LLM 提供商？**
+
+通过 LiteLLM 支持：
+- OpenAI (GPT-4)
+- DeepSeek (deepseek-chat, deepseek-reasoner)
+- Claude (Anthropic)
+- 本地模型 (Ollama, vLLM)
+- 任意 OpenAI 兼容 API
+
+**如何使用本地模型？**
+
+配置 Ollama/vLLM：
+```bash
+export LLM_MODEL=ollama/llama3
+export LLM_BASE_URL=http://localhost:11434
+```
+
+### Skills 与记忆
+
+**什么是 Skill？**
+
+Skill 是可复用的能力模块，定义在 `workspace/skills/SKILL.md` 文件中。框架自动发现并注入到 Agent。
+
+**如何创建自定义 Skill？**
+
+在 `workspace/skills/` 下创建目录，编写 `SKILL.md` 描述技能的用途、工具依赖、执行流程。
+
+**记忆系统如何工作？**
+
+- **ShortTermMemory**: 会话内上下文记忆
+- **FileMemory**: 持久化文件记忆
+- 可扩展 Redis、向量数据库等后端
+
+### RAG 检索增强
+
+**如何使用 RAG？**
+
+将文档放入 `workspace/knowledge/`，EmbeddingRetriever 自动构建索引。Agent 执行时可检索相关上下文。
+
+**支持哪些检索后端？**
+
+默认 EmbeddingRetriever，可扩展 FAISS、ChromaDB、Milvus。
+
+### MCP 工具
+
+**如何配置 MCP 工具？**
+
+在 `config/mcp_servers.toml` 定义 MCP 服务器，支持 stdio 和 SSE 协议。
+
+**内置哪些工具？**
+
+- `BashTool`: 执行 shell 命令
+- `MCPTool`: 调用 MCP 服务器工具
+- `TerminateTool`: 结束 Agent 执行
+
+### API 服务
+
+**如何启动 API 服务？**
+
+```bash
+python -m api.app
+# 或 Docker
+docker-compose up
+```
+
+**API 支持哪些功能？**
+
+- 任务管理接口
+- Agent 执行端点
+- SSE 流式响应
+- 文件上传处理
+
+### 故障排查
+
+**Agent 不调用工具**
+
+- 检查工具定义是否包含正确的 type hints
+- 确认工具已注册到 `ToolRegistry`
+- 验证模型支持 tool calling
+
+**RAG 检索不生效**
+
+- 确认文档已放入 `workspace/knowledge/`
+- 检查 Embedding 模型配置
+- 验证检索参数设置
+
+**MCP 连接失败**
+
+- 使用 `pentestagent mcp test <name>` 检测连接
+- 检查 MCP 服务器配置的 command/args
+- 确认 MCP 包已正确安装
+
+**Skill 未加载**
+
+- 确认 `SKILL.md` 文件在正确目录
+- 检查 Skill 目录结构
+- 查看 SkillRegistry 日志
+
+**如何调试？**
+
+启用 debug 配置，查看详细日志：
+```bash
+export DEBUG=true
+python -m core.agent
+```
+
+### 参考资源
+
+**示例任务在哪？**
+
+`task/builtin.py` 包含金融分析、运维监控、安全测试、医疗问答、法律文书、模型评测等示例。
+
+**如何贡献？**
+
+欢迎提交 Issue 和 PR。代码风格参考项目结构，测试覆盖核心组件。
 
 ## 许可
 
