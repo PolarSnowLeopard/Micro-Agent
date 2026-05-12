@@ -168,3 +168,119 @@ def cleanup_paths(*paths: str | Path) -> None:
             logger.debug(f"已清理: {p}")
         except Exception as e:
             logger.warning(f"清理 {p} 失败: {e}")
+
+
+def parse_dataset_file(file_path: str, max_rows: int = 20) -> dict:
+    """解析数据集文件，提取元信息（格式、列名、样例行、标签分布等）。
+
+    支持 CSV / Excel / JSON / TXT / PDF 格式。
+    返回 dict 包含 format, columns, total_rows, sample_rows, label_distribution, raw_text。
+    """
+    _, ext = os.path.splitext(file_path.lower())
+    result: dict = {"format": ext.lstrip("."), "file_name": os.path.basename(file_path)}
+
+    try:
+        if ext == ".csv":
+            import csv
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+            if not rows:
+                result["raw_text"] = "(空文件)"
+                return result
+            result["columns"] = rows[0]
+            result["total_rows"] = len(rows) - 1
+            result["sample_rows"] = rows[1 : max_rows + 1]
+            result["raw_text"] = _rows_to_text(rows[0], rows[1 : max_rows + 1])
+            result["label_distribution"] = _detect_label_distribution(rows)
+
+        elif ext in (".xlsx", ".xls"):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+                ws = wb.active
+                rows = [[str(cell) if cell is not None else "" for cell in row] for row in ws.iter_rows(values_only=True)]
+                wb.close()
+            except Exception:
+                result["raw_text"] = "(无法解析 Excel 文件，请改用 CSV 格式)"
+                return result
+            if not rows:
+                result["raw_text"] = "(空文件)"
+                return result
+            result["columns"] = rows[0]
+            result["total_rows"] = len(rows) - 1
+            result["sample_rows"] = rows[1 : max_rows + 1]
+            result["raw_text"] = _rows_to_text(rows[0], rows[1 : max_rows + 1])
+            result["label_distribution"] = _detect_label_distribution(rows)
+
+        elif ext == ".json":
+            import json as json_mod
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                data = json_mod.load(f)
+            if isinstance(data, list):
+                result["total_rows"] = len(data)
+                result["sample_rows"] = data[:max_rows]
+                if data and isinstance(data[0], dict):
+                    result["columns"] = list(data[0].keys())
+                result["raw_text"] = json_mod.dumps(data[:max_rows], ensure_ascii=False, indent=2)
+            else:
+                result["raw_text"] = json_mod.dumps(data, ensure_ascii=False, indent=2)[:3000]
+
+        elif ext == ".txt":
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            lines = content.strip().split("\n")
+            result["total_rows"] = len(lines)
+            result["raw_text"] = "\n".join(lines[:max_rows])
+
+        elif ext == ".pdf":
+            content = read_paper_content(file_path)
+            if content:
+                lines = [l.strip() for l in content.split("\n") if l.strip()]
+                result["total_rows"] = len(lines)
+                result["raw_text"] = "\n".join(lines[:80])
+            else:
+                result["raw_text"] = "(PDF 内容提取为空)"
+
+        else:
+            result["raw_text"] = f"(不支持的数据集格式: {ext})"
+
+    except Exception as e:
+        logger.warning(f"解析数据集文件失败 ({file_path}): {e}")
+        result["raw_text"] = f"(解析失败: {e})"
+
+    return result
+
+
+def _rows_to_text(columns: list, rows: list) -> str:
+    """将表格数据转为可读文本。"""
+    header = " | ".join(str(c) for c in columns)
+    lines = [header, "-" * len(header)]
+    for row in rows:
+        lines.append(" | ".join(str(c) for c in row))
+    return "\n".join(lines)
+
+
+def _detect_label_distribution(rows: list) -> dict:
+    """尝试从表格数据中检测标签列及其分布。
+
+    启发式：寻找名字含 type/label/class/category 的列，统计各值计数。
+    """
+    if len(rows) < 2:
+        return {}
+    header = [str(c).lower().strip() for c in rows[0]]
+    label_keywords = ("type", "label", "class", "category", "action", "tag")
+    label_col_idx = None
+    for i, col in enumerate(header):
+        if any(kw in col for kw in label_keywords):
+            label_col_idx = i
+            break
+    if label_col_idx is None:
+        return {}
+    distribution: dict[str, int] = {}
+    for row in rows[1:]:
+        if label_col_idx < len(row):
+            val = str(row[label_col_idx]).strip()
+            if val:
+                distribution[val] = distribution.get(val, 0) + 1
+    return distribution

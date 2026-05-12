@@ -1,0 +1,13 @@
+name = "video_action_recognition"
+description = "视频动作识别技术指导：MediaPipe 姿态估计 + 规则分类"
+
+# prompt 留空 → 自动从同目录 SKILL.md 读取
+
+[metadata.match]
+categories = ["classification", "detection"]
+input_types = ["video", "video_url"]
+keywords = [
+    "视频", "video", "youtube", "动作识别", "action recognition",
+    "行为识别", "pose", "姿态", "arm flapping", "head banging",
+    "spinning", "动作分类", "action classification",
+]
