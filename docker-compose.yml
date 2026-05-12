@@ -10,6 +10,12 @@ services:
       - "2222:22"
     volumes:
       - ./workspace/data:/app/workspace/data
+      - ./micro_agent:/app/micro_agent
+      - ./api:/app/api
+      - ./tasks:/app/tasks
+      - ./workspace/skills:/app/workspace/skills
+      - ./workspace/knowledge:/app/workspace/knowledge
+    command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8010", "--reload", "--reload-dir", "/app/api", "--reload-dir", "/app/tasks", "--reload-dir", "/app/micro_agent"]
     env_file:
       - .env
     stdin_open: true

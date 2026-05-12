@@ -34,6 +34,7 @@ from api.deps import build_agent, task_manager
 from api.services.files import (
     cleanup_paths,
     find_main_file,
+    parse_dataset_file,
     read_paper_content,
     resolve_file_or_url,
     resolve_project_dir,
@@ -439,12 +440,16 @@ async def aml_auto_generate(
     scenario: str = Form(""),
     technology: str = Form(""),
     file: UploadFile = File(None),
+    dataset_file: UploadFile = File(None),
+    algorithm_category: str = Form(""),
+    category_params: str = Form(""),
     session_id: Optional[str] = Form(default=None),
 ):
     from tasks.aml_auto_generate import build_aml_auto_generate_prompt
 
     cleanup_files: list[str] = []
     paper_content = ""
+    dataset_info: dict = {}
 
     try:
         if file and file.filename:
@@ -456,9 +461,46 @@ async def aml_auto_generate(
             paper_content = read_paper_content(str(saved))
             logger.info(f"描述文件已保存并提取文本 ({len(paper_content)} 字符)")
 
+        if dataset_file and dataset_file.filename:
+            ds_ext = os.path.splitext(dataset_file.filename)[1].lower()
+            if ds_ext not in (".csv", ".xlsx", ".xls", ".json", ".txt", ".pdf"):
+                raise HTTPException(400, f"不支持的数据集格式: {ds_ext}")
+            ds_saved = await save_upload(dataset_file, Path(WORKSPACE) / "temp")
+            cleanup_files.append(str(ds_saved))
+            dataset_info = parse_dataset_file(str(ds_saved))
+            logger.info(f"数据集文件已解析: {dataset_info.get('format', '?')}, "
+                        f"rows={dataset_info.get('total_rows', '?')}")
+
+        parsed_category_params = _parse_json_form(category_params) or {}
+
         retriever = await _get_aml_retriever()
 
-        skill_names = ["algorithm_code_standards"]
+        # Skill 匹配：通过 SkillRegistry 元数据自动选择（含 always_for）
+        skill_names = _resolve_skills_for_category(
+            algorithm_category, parsed_category_params, free_narrative,
+            model_name=model_name,
+        )
+        logger.info(f"自动匹配 Skill: {skill_names}")
+
+        # RAG 预检索：用聚焦查询代替完整 prompt，提高检索精度
+        rag_context = ""
+        rag_docs = []
+        if retriever:
+            rag_parts = [model_name, algorithm_category, free_narrative[:200]]
+            cat_labels = parsed_category_params.get("labels") or []
+            if cat_labels:
+                rag_parts.extend(str(l) for l in cat_labels)
+            rag_query = " ".join(p for p in rag_parts if p)
+            rag_docs = await retriever.retrieve(rag_query, top_k=5)
+            if rag_docs:
+                rag_context = "\n---\n".join(
+                    f"[{d.source}] {d.content}" for d in rag_docs
+                )
+                logger.info(
+                    f"RAG 预检索命中 {len(rag_docs)} 篇文档: "
+                    f"{[d.source for d in rag_docs]}"
+                )
+
         llm_profile = "reasoning"
 
         agent, sid = await build_agent(
@@ -478,6 +520,7 @@ async def aml_auto_generate(
             "llm_model": config.get_llm(llm_profile).model,
             "rag_ready": retriever is not None and len(retriever._docs) > 0,
             "rag_docs_count": len(retriever._docs) if retriever else 0,
+            "rag_prequery_hits": len(rag_docs) if retriever and rag_context else 0,
             "memory_loaded": len(agent.memory) if sid and session_id else 0,
             "session_id": sid,
             "session_resumed": bool(session_id),
@@ -491,6 +534,10 @@ async def aml_auto_generate(
             scenario=scenario,
             technology=technology,
             paper_content=paper_content,
+            dataset_info=dataset_info,
+            algorithm_category=algorithm_category,
+            category_params=parsed_category_params,
+            rag_context=rag_context,
         )
 
         ctx = await task_manager.submit(agent, prompt)
@@ -515,6 +562,50 @@ async def aml_auto_generate(
             if os.path.exists(fp):
                 os.remove(fp)
         raise HTTPException(500, f"处理请求时出错: {e}")
+
+
+def _resolve_skills_for_category(
+    category: str,
+    params: dict,
+    narrative: str,
+    model_name: str = "",
+) -> list[str]:
+    """通过 SkillRegistry 元数据匹配，自动选择适用的 Skill。
+
+    无需硬编码任何 Skill 名称 —— 新增 Skill 只需在其目录下放 skill.toml
+    声明 match 条件即可自动被发现。
+    """
+    from micro_agent.core.skill import SkillRegistry
+
+    input_types = params.get("inputTypes") or []
+    labels = params.get("labels") or []
+    text_ctx = " ".join(
+        filter(None, [model_name, narrative, *(str(l) for l in labels)])
+    )
+    logger.info(
+        f"[Skill匹配] category={category!r}, input_types={input_types}, "
+        f"labels={labels}, text_ctx_preview={text_ctx[:150]!r}"
+    )
+    logger.info(f"[Skill匹配] 已注册 Skill 列表: {SkillRegistry.list_skills()}")
+    result = SkillRegistry.find_matching(
+        task_name="aml_auto_generate",
+        category=category,
+        input_types=input_types,
+        labels=labels,
+        text_context=text_ctx,
+    )
+    logger.info(f"[Skill匹配] 匹配结果: {result}")
+    return result
+
+
+def _parse_json_form(value: str) -> list | dict | None:
+    """安全解析 Form 中的 JSON 字符串，失败时返回 None。"""
+    if not value or not value.strip():
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 # ============================================================
