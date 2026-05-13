@@ -102,6 +102,7 @@ async def _get_packaging_retriever():
         model=config.rag.embedding_model,
         chunk_size=config.rag.chunk_size,
         api_key=config.llm.api_key,
+        base_url=config.llm.base_url,
     )
     await _packaging_retriever.load_directory(knowledge_dir)
     return _packaging_retriever
@@ -427,6 +428,7 @@ async def _get_aml_retriever():
         model=config.rag.embedding_model,
         chunk_size=250,
         api_key=config.llm.api_key,
+        base_url=config.llm.base_url,
     )
     await _aml_retriever.load_directory(knowledge_dir)
     return _aml_retriever
