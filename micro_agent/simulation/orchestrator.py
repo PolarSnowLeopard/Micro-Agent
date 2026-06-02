@@ -1,16 +1,13 @@
 """仿真编排器：4 阶段流程 + Planner/Verifier 双 Agent 核心循环。
 
-输出 SimulationEvent 流，事件名与前端 simulation_builder.vue 一一对应：
-  step / service / iteration / phase / issue / log / metrics / progress / complete
-
-工具层：
-  - 当前使用 SandboxTool（拟真 mock，接口与 MCPTool 一致）
-  - 替换为真实 MCP 只需改 _register_tools() 的工具来源
+工具层（双通道，与平台目录一致）：
+  - isFake=false 且已登记 SSE 地址（mcpUrl）→ 真实 MCPTool（LoggingMCPTool 记录轨迹）
+  - isFake=true 或未登记可连 SSE → SandboxTool（进程内拟真）
+  - 真实 MCP 连接失败时回退 SandboxTool
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import time
@@ -24,7 +21,9 @@ from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.core.schema import AgentEvent
 from micro_agent.core.skill import SkillRegistry
+from micro_agent.simulation.logging_mcp_tool import LoggingMCPTool
 from micro_agent.simulation.sandbox_tool import SandboxTool, ToolCallRecord
+from micro_agent.tool.mcp.connection import MCPConnectionManager, ServerConfig
 from micro_agent.tool.registry import ToolRegistry
 from micro_agent.tool.terminate import Terminate
 
@@ -46,9 +45,47 @@ class SimulationEvent:
         return {"type": self.type, "data": self.data, "timestamp": self.timestamp}
 
 
+@dataclass
+class _McpServiceBinding:
+    service_id: str
+    service_name: str
+    server_id: str
+    mcp_url: str
+    tools: list[LoggingMCPTool]
+
+
 def _sanitize(text: str, max_len: int = 128) -> str:
     ident = re.sub(r"[^A-Za-z0-9_-]+", "_", str(text or "srv"))
     return re.sub(r"_+", "_", ident).strip("_")[:max_len] or "srv"
+
+
+def _resolve_mcp_url(svc: dict[str, Any]) -> str:
+    """从 servicesMeta 项解析 MCP SSE 地址（兼容 mcpUrl / url）。"""
+    return str(svc.get("mcpUrl") or svc.get("url") or "").strip()
+
+
+def _is_sse_mcp_url(url: str) -> bool:
+    return url.startswith("http://") or url.startswith("https://")
+
+
+def _is_catalog_fake(svc: dict[str, Any]) -> bool:
+    """平台目录 isFake：true 表示演示/剧本，仿真不走真实 MCP。"""
+    v = svc.get("isFake", svc.get("is_fake"))
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes")
+
+
+def _should_use_real_mcp(svc: dict[str, Any]) -> bool:
+    """是否尝试真实 MCP：以目录 isFake 为准，并需已登记的 SSE 端点。"""
+    if _is_catalog_fake(svc):
+        return False
+    method = str(svc.get("mcpMethod") or svc.get("method") or "sse").lower()
+    if method != "sse":
+        return False
+    return _is_sse_mcp_url(_resolve_mcp_url(svc))
 
 
 class _CancelledError(Exception):
@@ -89,37 +126,113 @@ class SimulationOrchestrator:
         self._domain_skill_name = f"domain_{self.domain}"
 
         self._tools = ToolRegistry()
+        self._mcp_conn = MCPConnectionManager()
         self._sandbox_tools: list[SandboxTool] = []
-        self._register_tools()
-
-    # ====================== 工具注册 ======================
-
-    def _register_tools(self) -> None:
-        """注册服务工具。当前用 SandboxTool；换真实 MCP 改此处即可。"""
-        self._tools.register(Terminate())
-
-        used: set[str] = set()
-        for svc in self.services_meta:
-            prefix = _sanitize(svc.get("id") or svc.get("name"))
-            tool_name = self._unique(prefix, "execute", used)
-            tool = SandboxTool(
-                name=tool_name,
-                description=f"调用服务 [{svc.get('name', '?')}]：{svc.get('description', '执行该服务的核心功能')}",
-                service_id=svc.get("id", ""),
-                service_name=svc.get("name", ""),
-            )
-            self._tools.register(tool)
-            self._sandbox_tools.append(tool)
+        self._mcp_bindings: list[_McpServiceBinding] = []
+        self._tool_names_used: set[str] = set()
+        self._tools_ready = False
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    # ====================== 工具注册（双通道） ======================
+
+    async def _register_tools(self) -> None:
+        """isFake=false 且已登记 SSE → 真实 MCP；否则 SandboxTool。"""
+        self._tools = ToolRegistry()
+        self._sandbox_tools = []
+        self._mcp_bindings = []
+        self._tool_names_used = set()
+        self._tools.register(Terminate())
+
+        for svc in self.services_meta:
+            self._check_cancel()
+            service_id = str(svc.get("id") or "")
+            service_name = str(svc.get("name") or "?")
+            mcp_url = _resolve_mcp_url(svc)
+
+            if _should_use_real_mcp(svc):
+                await self._register_mcp_service(svc, service_id, service_name, mcp_url)
+            else:
+                self._register_sandbox_service(svc, service_id, service_name)
+
+        self._tools_ready = True
+
+    async def _register_mcp_service(
+        self,
+        svc: dict[str, Any],
+        service_id: str,
+        service_name: str,
+        mcp_url: str,
+    ) -> None:
+        prefix = _sanitize(svc.get("id") or svc.get("name"))
+        server_id = _sanitize(f"{prefix}_mcp")
+        try:
+            _, mcp_tools = await self._mcp_conn.connect(
+                ServerConfig(
+                    connection_type="sse",
+                    server_url=mcp_url,
+                    server_id=server_id,
+                )
+            )
+            logged: list[LoggingMCPTool] = []
+            for inner in mcp_tools:
+                alias = self._unique(prefix, inner.name)
+                wrapper = LoggingMCPTool(
+                    inner,
+                    registered_name=alias,
+                    service_id=service_id,
+                    service_name=service_name,
+                )
+                self._tools.register(wrapper)
+                logged.append(wrapper)
+
+            self._mcp_bindings.append(
+                _McpServiceBinding(
+                    service_id=service_id,
+                    service_name=service_name,
+                    server_id=server_id,
+                    mcp_url=mcp_url,
+                    tools=logged,
+                )
+            )
+            logger.info(
+                f"仿真 MCP 已连接 [{service_name}] {mcp_url} → "
+                f"{[t.name for t in logged]}"
+            )
+        except Exception as exc:
+            logger.warning(
+                f"MCP 连接失败 [{service_name}] {mcp_url}: {exc}，回退 SandboxTool"
+            )
+            self._register_sandbox_service(svc, service_id, service_name)
+
+    def _register_sandbox_service(
+        self,
+        svc: dict[str, Any],
+        service_id: str,
+        service_name: str,
+    ) -> None:
+        prefix = _sanitize(svc.get("id") or svc.get("name"))
+        tool_name = self._unique(prefix, "execute")
+        tool = SandboxTool(
+            name=tool_name,
+            description=(
+                f"调用服务 [{service_name}]："
+                f"{svc.get('description', '执行该服务的核心功能（模拟通道）')}"
+            ),
+            service_id=service_id,
+            service_name=service_name,
+        )
+        self._tools.register(tool)
+        self._sandbox_tools.append(tool)
 
     # ====================== 主流程 ======================
 
     async def run(self) -> AsyncIterator[SimulationEvent]:
         self._started_at = time.time()
-
         try:
+            await self._register_tools()
+
             async for e in self._phase_service_match():
                 yield e
             async for e in self._phase_env_prep():
@@ -157,6 +270,7 @@ class SimulationOrchestrator:
                     "strategy": self.strategy,
                     "appName": self.app_name,
                     "domain": self.domain,
+                    "toolChannels": self._tool_channel_summary(),
                 },
             })
         except _CancelledError:
@@ -166,14 +280,12 @@ class SimulationOrchestrator:
                 "metrics": {"iterations": 0, "elapsedMs": self._elapsed_ms()},
                 "result": {"error": "用户取消"},
             })
-            return
         except _BuildFailedError as exc:
             yield SimulationEvent("complete", {
                 "success": False,
                 "metrics": {"iterations": self._final_iteration, "elapsedMs": self._elapsed_ms()},
                 "result": {"error": exc.reason, "suggestion": exc.suggestion},
             })
-            return
         except Exception as exc:
             logger.error(f"仿真异常: {exc}", exc_info=True)
             yield SimulationEvent("complete", {
@@ -181,7 +293,26 @@ class SimulationOrchestrator:
                 "metrics": {"elapsedMs": self._elapsed_ms()},
                 "result": {"error": str(exc), "suggestion": "请检查日志后重试"},
             })
-            return
+        finally:
+            await self._mcp_conn.disconnect_all()
+
+    def _tool_channel_summary(self) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for b in self._mcp_bindings:
+            rows.append({
+                "serviceId": b.service_id,
+                "name": b.service_name,
+                "channel": "mcp",
+                "mcpUrl": b.mcp_url,
+            })
+        for t in self._sandbox_tools:
+            rows.append({
+                "serviceId": t.service_id,
+                "name": t.service_name,
+                "channel": "sandbox",
+                "mcpUrl": "",
+            })
+        return rows
 
     # ====================== Phase 0: 服务匹配 ======================
 
@@ -189,9 +320,40 @@ class SimulationOrchestrator:
         yield SimulationEvent("step", {"step": 0, "name": "服务匹配"})
         yield self._log("INFO", "开始服务匹配")
 
+        for binding in self._mcp_bindings:
+            self._check_cancel()
+            yield self._log("INFO", f"检测 MCP 服务: {binding.service_name}")
+            t0 = time.time()
+            try:
+                session = self._mcp_conn.get_session(binding.server_id)
+                if not session:
+                    raise RuntimeError("MCP 会话不存在")
+                resp = await session.list_tools()
+                latency = int((time.time() - t0) * 1000)
+                tool_names = [t.name for t in resp.tools]
+                yield SimulationEvent("service", {
+                    "id": binding.service_id,
+                    "status": "online",
+                    "latency": latency,
+                    "channel": "mcp",
+                    "tools": tool_names,
+                })
+                yield self._log(
+                    "SUCCESS",
+                    f"{binding.service_name} MCP 在线 ({latency}ms, {len(tool_names)} 个工具)",
+                )
+            except Exception as exc:
+                yield SimulationEvent("service", {
+                    "id": binding.service_id,
+                    "status": "error",
+                    "error": str(exc),
+                    "channel": "mcp",
+                })
+                yield self._log("WARN", f"{binding.service_name} MCP 探测失败: {exc}")
+
         for tool in self._sandbox_tools:
             self._check_cancel()
-            yield self._log("INFO", f"检测服务: {tool.service_name}")
+            yield self._log("INFO", f"检测模拟服务: {tool.service_name}")
 
             try:
                 probe = await tool.execute(action="health_check")
@@ -200,6 +362,7 @@ class SimulationOrchestrator:
                         "id": tool.service_id,
                         "status": "error",
                         "error": probe.error,
+                        "channel": "sandbox",
                     })
                     yield self._log("WARN", f"{tool.service_name} 探测失败: {probe.error}")
                 else:
@@ -208,13 +371,15 @@ class SimulationOrchestrator:
                         "id": tool.service_id,
                         "status": "online",
                         "latency": latency,
+                        "channel": "sandbox",
                     })
-                    yield self._log("SUCCESS", f"{tool.service_name} 连接正常 ({latency}ms)")
+                    yield self._log("SUCCESS", f"{tool.service_name} 模拟通道正常 ({latency}ms)")
             except Exception as exc:
                 yield SimulationEvent("service", {
                     "id": tool.service_id,
                     "status": "error",
                     "error": str(exc),
+                    "channel": "sandbox",
                 })
                 yield self._log("WARN", f"{tool.service_name} 探测异常: {exc}")
 
@@ -238,11 +403,15 @@ class SimulationOrchestrator:
             yield SimulationEvent("progress", {"ctx": "env", "index": i, "text": text, "done": True})
             yield self._log("INFO", text)
 
-        yield self._log("SUCCESS", f"环境准备完成 — {len(self._sandbox_tools)} 个工具已就绪")
+        mcp_n = sum(len(b.tools) for b in self._mcp_bindings)
+        yield self._log(
+            "SUCCESS",
+            f"环境准备完成 — MCP 工具 {mcp_n} 个，模拟工具 {len(self._sandbox_tools)} 个",
+        )
 
     async def _init_runtime(self) -> None:
-        tool_names = [t.name for t in self._sandbox_tools]
-        logger.debug(f"仿真运行时初始化: tools={tool_names}")
+        names = [n for n in self._tools.list_names() if n != "terminate"]
+        logger.debug(f"仿真运行时初始化: tools={names}")
 
     async def _load_service_config(self) -> None:
         logger.debug(f"服务配置加载: {len(self.services_meta)} 个服务")
@@ -262,7 +431,6 @@ class SimulationOrchestrator:
             yield SimulationEvent("iteration", {"iteration": iteration, "status": "running"})
             yield self._log("INFO", f"第 {iteration} 轮开始")
 
-            # --- Planner ---
             yield SimulationEvent("phase", {"phase": "data", "status": "running"})
             yield self._log("INFO", "规划 Agent 执行中…")
 
@@ -290,7 +458,6 @@ class SimulationOrchestrator:
                 yield self._log("WARN", f"第 {iteration} 轮规划失败，进入下一轮")
                 continue
 
-            # --- Verifier ---
             yield SimulationEvent("phase", {"phase": "check", "status": "running"})
             yield self._log("INFO", "验证 Agent 执行中…")
 
@@ -386,7 +553,6 @@ class SimulationOrchestrator:
         return agent
 
     def _load_domain_skill(self, agent: Agent) -> None:
-        """按 domain 加载领域 Skill；找不到则回退到 domain_generic。"""
         if SkillRegistry.get(self._domain_skill_name):
             agent.load_skill(self._domain_skill_name)
         elif self._domain_skill_name != "domain_generic" and SkillRegistry.get("domain_generic"):
@@ -395,18 +561,28 @@ class SimulationOrchestrator:
     # ====================== Prompt ======================
 
     def _planner_system_prompt(self) -> str:
-        svc_list = "\n".join(
-            f"  - {s.get('name', '?')}（工具名: {_sanitize(s.get('id') or s.get('name'))}_execute）"
+        tool_lines: list[str] = []
+        for name in sorted(self._tools.list_names()):
+            if name == "terminate":
+                continue
+            tool = self._tools.get(name)
+            desc = (getattr(tool, "description", None) or "")[:160]
+            tool_lines.append(f"  - {name}: {desc}")
+
+        svc_lines = "\n".join(
+            f"  - {s.get('name', '?')} (id={s.get('id', '?')}, "
+            f"通道={'mcp' if _should_use_real_mcp(s) else 'sandbox'})"
             for s in self.services_meta
         )
         return (
             f"你是仿真规划智能体，负责执行元应用「{self.app_name}」的服务编排。\n\n"
             f"领域: {self.domain}\n"
             f"场景: {self.scenario or '通用场景'}\n"
-            f"可用服务:\n{svc_list}\n\n"
-            f"请按照合理的业务顺序逐一调用各服务工具，观察返回结果，"
-            f"确认数据在服务间正确流转。\n"
-            f"完成所有调用后，调用 terminate 并返回执行结果摘要。"
+            f"参与服务:\n{svc_lines}\n\n"
+            f"可用工具（请按名称调用）:\n"
+            + ("\n".join(tool_lines) if tool_lines else "  （无）")
+            + "\n\n"
+            "请按合理业务顺序调用工具，观察返回；完成后调用 terminate 并摘要结果。"
         )
 
     def _planner_prompt(self, iteration: int, prev_trace: list[AgentEvent]) -> str:
@@ -430,16 +606,20 @@ class SimulationOrchestrator:
     # ====================== 数据提取 ======================
 
     def _collect_call_records(self) -> list[ToolCallRecord]:
-        records = []
+        records: list[ToolCallRecord] = []
         for tool in self._sandbox_tools:
             records.extend(tool.call_log)
+        for binding in self._mcp_bindings:
+            for tool in binding.tools:
+                records.extend(tool.call_log)
         records.sort(key=lambda r: r.timestamp)
         return records
 
     def _extract_execution_path(self) -> list[str]:
-        """从实际工具调用日志中提取执行路径（仅含成功的业务调用，不含 health_check）。"""
-        records = [r for r in self._collect_call_records()
-                   if not r.error and r.arguments.get("action") != "health_check"]
+        records = [
+            r for r in self._collect_call_records()
+            if not r.error and r.arguments.get("action") != "health_check"
+        ]
         if not records:
             return []
 
@@ -449,7 +629,7 @@ class SimulationOrchestrator:
             if rec.service_id not in seen:
                 seen.add(rec.service_id)
                 svc = next(
-                    (s for s in self.services_meta if s.get("id") == rec.service_id),
+                    (s for s in self.services_meta if str(s.get("id")) == str(rec.service_id)),
                     None,
                 )
                 path.append(svc.get("name", rec.service_id) if svc else rec.service_id)
@@ -457,7 +637,6 @@ class SimulationOrchestrator:
         return path
 
     def _build_dispatch_config(self, records: list[ToolCallRecord]) -> dict:
-        """从调用记录构建调度配置（供后续编译使用）。"""
         steps = []
         for rec in records:
             if not rec.error:
@@ -469,11 +648,6 @@ class SimulationOrchestrator:
         return {"steps": steps, "total_calls": len(records)}
 
     def _collect_metrics(self) -> dict[str, float]:
-        """从实际执行中收集指标。
-
-        当前部分指标仍需人工标注/后续接入真实度量，此处基于调用日志
-        计算可计算的指标，其余标记为估计值。
-        """
         records = self._collect_call_records()
         total = len(records)
         errors = sum(1 for r in records if r.error)
@@ -549,19 +723,19 @@ class SimulationOrchestrator:
 
     @staticmethod
     def _is_infra_error(error_text: str) -> bool:
-        """判断是否为基础设施错误（LLM 不可用等），不值得重试。"""
-        infra_keywords = ("AuthenticationError", "401", "403", "api_key", "Missing Authentication",
-                          "RateLimitError", "429", "quota", "billing")
+        infra_keywords = (
+            "AuthenticationError", "401", "403", "api_key", "Missing Authentication",
+            "RateLimitError", "429", "quota", "billing",
+        )
         lower = error_text.lower()
         return any(kw.lower() in lower for kw in infra_keywords)
 
-    @staticmethod
-    def _unique(prefix: str, name: str, used: set[str]) -> str:
+    def _unique(self, prefix: str, name: str) -> str:
         base = _sanitize(f"{prefix}_{name}")
         alias = base
         n = 1
-        while alias in used:
+        while alias in self._tool_names_used:
             alias = f"{base}_{n}"
             n += 1
-        used.add(alias)
+        self._tool_names_used.add(alias)
         return alias
