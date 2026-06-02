@@ -1,12 +1,13 @@
 """仿真沙箱工具：在无真实 MCP 服务时提供拟真调用。
 
-与 SimulatedMCPTool 的区别：
-  - 返回格式与 MCPTool 一致（纯文本 ToolResult.output）
-  - 模拟真实延迟（随机 50-300ms）
-  - 可配置失败率，用于验证 Agent 的容错能力
+设计目标：对 Agent（调用者）而言表现应与真实 MCP 一致：
+  - 返回格式与 MCPTool 一致（纯文本 ToolResult.output / .error）
+  - 模拟真实延迟（随机 100-500ms）
+  - 参数驱动：缺必要参数 / 类型错误 → 稳定返回业务错误（非随机）
+  - 可配置随机失败率，用于验证 Agent 的容错与重试能力
   - 记录调用日志，供 TraceStore 持久化
 
-后续替换为真实 MCP 时，只需在 orchestrator._build_planner() 中
+后续替换为真实 MCP 时，只需在 orchestrator._register_tools() 中
 把 SandboxTool 替换为 MCPTool（二者共享 Tool 接口）。
 """
 
@@ -48,31 +49,29 @@ class SandboxTool(Tool):
     service_id: str = ""
     service_name: str = ""
 
-    latency_range: tuple[int, int] = (50, 300)
+    latency_range: tuple[int, int] = (100, 500)
     failure_rate: float = 0.0
 
     call_log: list[ToolCallRecord] = field(default_factory=list, repr=False)
+    _call_count: int = field(default=0, repr=False)
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         start = time.time()
+        self._call_count += 1
         latency = random.randint(*self.latency_range)
         await asyncio.sleep(latency / 1000.0)
 
-        if self.failure_rate > 0 and random.random() < self.failure_rate:
-            error_msg = f"服务 [{self.service_name}] 调用超时或异常"
-            elapsed = int((time.time() - start) * 1000)
-            self.call_log.append(ToolCallRecord(
-                tool_name=self.name,
-                service_id=self.service_id,
-                arguments=kwargs,
-                result="",
-                error=error_msg,
-                latency_ms=elapsed,
-                timestamp=start,
-            ))
-            return ToolResult(error=error_msg)
+        # 1) 参数校验：缺 action → 稳定报错（对 Agent 可学习）
+        action = kwargs.get("action", "")
+        if not action and not kwargs:
+            return self._record_error(start, kwargs, f"服务 [{self.service_name}] 调用缺少参数，请提供 action 或业务参数")
 
-        output = self._generate_response(kwargs)
+        # 2) 随机失败（模拟真实 MCP 的偶发超时 / 异常）
+        if self.failure_rate > 0 and random.random() < self.failure_rate:
+            return self._record_error(start, kwargs, f"服务 [{self.service_name}] 调用超时或异常（可重试）")
+
+        # 3) 正常响应
+        output = self._generate_response(kwargs, action)
         elapsed = int((time.time() - start) * 1000)
 
         self.call_log.append(ToolCallRecord(
@@ -84,32 +83,61 @@ class SandboxTool(Tool):
             latency_ms=elapsed,
             timestamp=start,
         ))
-
         return ToolResult(output=output)
 
-    def _generate_response(self, kwargs: dict) -> str:
-        """根据工具描述和参数生成拟真响应。
+    def _record_error(self, start: float, kwargs: dict, error_msg: str) -> ToolResult:
+        elapsed = int((time.time() - start) * 1000)
+        self.call_log.append(ToolCallRecord(
+            tool_name=self.name,
+            service_id=self.service_id,
+            arguments=kwargs,
+            result="",
+            error=error_msg,
+            latency_ms=elapsed,
+            timestamp=start,
+        ))
+        return ToolResult(error=error_msg)
+
+    def _generate_response(self, kwargs: dict, action: str) -> str:
+        """根据 action / 工具描述 / 参数生成拟真响应。
 
         格式与 MCPTool 一致：纯 JSON 文本。Agent 不应感知这是 mock。
+        响应内容由调用参数决定，同样的输入产生结构一致的输出。
         """
+        # health_check 单独处理
+        if action == "health_check":
+            return json.dumps({
+                "status": "healthy",
+                "service": self.service_name,
+                "latency_ms": random.randint(*self.latency_range),
+            }, ensure_ascii=False)
+
         data: dict[str, Any] = {
             "status": "success",
             "service": self.service_name,
-            "data": self._infer_data(kwargs),
+            "action": action or "execute",
+            "data": self._infer_data(kwargs, action),
         }
+
+        # 回显 Agent 传入的关键参数，便于 Verifier 审查数据流转
+        input_keys = [k for k in kwargs if k != "action"]
+        if input_keys:
+            data["input_echo"] = {k: _summarize_value(kwargs[k]) for k in input_keys[:5]}
+
         return json.dumps(data, ensure_ascii=False)
 
-    def _infer_data(self, kwargs: dict) -> dict[str, Any]:
-        """基于工具名称和输入推断合理的输出结构。"""
-        hint = self.name.lower()
+    def _infer_data(self, kwargs: dict, action: str) -> dict[str, Any]:
+        """基于 action、工具名称和输入推断合理的输出结构。"""
+        hint = (action + " " + self.name).lower()
 
         if any(k in hint for k in ("query", "get", "list", "fetch", "search")):
+            limit = min(int(kwargs.get("limit", 3)), 10)
             return {
                 "records": [
                     {"id": f"rec-{i+1}", "summary": f"示例记录 {i+1}"}
-                    for i in range(min(kwargs.get("limit", 3), 5))
+                    for i in range(limit)
                 ],
-                "total": kwargs.get("limit", 3),
+                "total": limit,
             }
 
         if any(k in hint for k in ("detect", "check", "validate", "assess", "risk")):
@@ -142,3 +170,15 @@ class SandboxTool(Tool):
             }
 
         return {"output": "操作完成", "input_received": list(kwargs.keys())}
+
+
+def _summarize_value(v: Any, max_len: int = 80) -> Any:
+    """截断过长的值用于 input_echo。"""
+    if isinstance(v, str) and len(v) > max_len:
+        return v[:max_len] + "…"
+    if isinstance(v, (list, dict)):
+        s = json.dumps(v, ensure_ascii=False)
+        if len(s) > max_len:
+            return s[:max_len] + "…"
+        return v
+    return v

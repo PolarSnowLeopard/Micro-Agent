@@ -55,6 +55,15 @@ class _CancelledError(Exception):
     pass
 
 
+class _BuildFailedError(Exception):
+    """智能构建阶段不可恢复的失败（如 LLM 不可用）。"""
+
+    def __init__(self, reason: str, suggestion: str = ""):
+        super().__init__(reason)
+        self.reason = reason
+        self.suggestion = suggestion or "请检查 LLM 配置与网络后重试"
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -75,6 +84,7 @@ class SimulationOrchestrator:
         self._cancelled = False
         self._started_at = 0.0
         self._final_iteration = 1
+        self._build_succeeded = False
 
         self._domain_skill_name = f"domain_{self.domain}"
 
@@ -116,6 +126,20 @@ class SimulationOrchestrator:
                 yield e
             async for e in self._phase_intelligent_build():
                 yield e
+
+            if not self._build_succeeded:
+                yield SimulationEvent("complete", {
+                    "success": False,
+                    "metrics": {"iterations": self._final_iteration, "elapsedMs": self._elapsed_ms()},
+                    "result": {
+                        "error": "智能构建未通过验证",
+                        "suggestion": "已达最大迭代次数，仍未通过验证；请检查服务配置或调整场景描述",
+                        "appName": self.app_name,
+                        "domain": self.domain,
+                    },
+                })
+                return
+
             async for e in self._phase_generation():
                 yield e
 
@@ -141,6 +165,13 @@ class SimulationOrchestrator:
                 "cancelled": True,
                 "metrics": {"iterations": 0, "elapsedMs": self._elapsed_ms()},
                 "result": {"error": "用户取消"},
+            })
+            return
+        except _BuildFailedError as exc:
+            yield SimulationEvent("complete", {
+                "success": False,
+                "metrics": {"iterations": self._final_iteration, "elapsedMs": self._elapsed_ms()},
+                "result": {"error": exc.reason, "suggestion": exc.suggestion},
             })
             return
         except Exception as exc:
@@ -237,11 +268,27 @@ class SimulationOrchestrator:
 
             planner = self._build_planner(iteration, planner_trace)
             planner_trace = []
+            planner_had_error = False
             async for event in planner.run(self._planner_prompt(iteration, planner_trace)):
                 planner_trace.append(event)
                 yield self._log("INFO", self._format_agent_event("Planner", event))
+                if event.type == "error":
+                    planner_had_error = True
 
             yield SimulationEvent("phase", {"phase": "data", "status": "done"})
+
+            if planner_had_error:
+                error_detail = self._extract_agent_error(planner_trace)
+                yield self._log("ERROR", f"规划 Agent 异常: {error_detail}")
+                if self._is_infra_error(error_detail):
+                    raise _BuildFailedError(
+                        f"规划 Agent 不可用: {error_detail}",
+                        "请检查 LLM API Key / 网络配置后重试",
+                    )
+                yield SimulationEvent("issue", {"message": f"规划失败: {error_detail}", "fix": "下一轮重试"})
+                yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
+                yield self._log("WARN", f"第 {iteration} 轮规划失败，进入下一轮")
+                continue
 
             # --- Verifier ---
             yield SimulationEvent("phase", {"phase": "check", "status": "running"})
@@ -249,16 +296,32 @@ class SimulationOrchestrator:
 
             verifier = self._build_verifier()
             verification_result = ""
+            verifier_trace: list[AgentEvent] = []
             async for event in verifier.run(self._verifier_prompt(planner_trace)):
+                verifier_trace.append(event)
                 if event.type == "done":
                     verification_result = event.data.get("result", "")
                 yield self._log("INFO", self._format_agent_event("Verifier", event))
 
             yield SimulationEvent("phase", {"phase": "check", "status": "done"})
 
+            verifier_had_error = any(e.type == "error" for e in verifier_trace)
+            if verifier_had_error:
+                error_detail = self._extract_agent_error(verifier_trace)
+                yield self._log("ERROR", f"验证 Agent 异常: {error_detail}")
+                if self._is_infra_error(error_detail):
+                    raise _BuildFailedError(
+                        f"验证 Agent 不可用: {error_detail}",
+                        "请检查 LLM API Key / 网络配置后重试",
+                    )
+                yield SimulationEvent("issue", {"message": f"验证异常: {error_detail}", "fix": "下一轮重试"})
+                yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
+                continue
+
             passed, issue = self._parse_verification(verification_result)
 
             if passed:
+                self._build_succeeded = True
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "passed"})
                 yield self._log("SUCCESS", f"第 {iteration} 轮验证通过")
                 break
@@ -374,15 +437,16 @@ class SimulationOrchestrator:
         return records
 
     def _extract_execution_path(self) -> list[str]:
-        """从实际工具调用日志中提取执行路径。"""
-        records = self._collect_call_records()
+        """从实际工具调用日志中提取执行路径（仅含成功的业务调用，不含 health_check）。"""
+        records = [r for r in self._collect_call_records()
+                   if not r.error and r.arguments.get("action") != "health_check"]
         if not records:
-            return ["用户输入"] + [s.get("name", "?") for s in self.services_meta] + ["输出结果"]
+            return []
 
         seen: set[str] = set()
         path = ["用户输入"]
         for rec in records:
-            if rec.service_id not in seen and not rec.error:
+            if rec.service_id not in seen:
                 seen.add(rec.service_id)
                 svc = next(
                     (s for s in self.services_meta if s.get("id") == rec.service_id),
@@ -468,13 +532,28 @@ class SimulationOrchestrator:
     @staticmethod
     def _parse_verification(text: str) -> tuple[bool, str]:
         if not text:
-            return True, ""
+            return False, "验证 Agent 未产生有效结论"
         upper = text.upper()
         if "PASSED" in upper:
             return True, ""
         m = re.search(r"FAILED\s*[：:]\s*(.+)", text, re.DOTALL)
         issue = m.group(1).strip()[:200] if m else text[:200]
         return False, issue
+
+    @staticmethod
+    def _extract_agent_error(trace: list[AgentEvent]) -> str:
+        for e in trace:
+            if e.type == "error":
+                return e.data.get("error", "未知错误")[:300]
+        return "未知错误"
+
+    @staticmethod
+    def _is_infra_error(error_text: str) -> bool:
+        """判断是否为基础设施错误（LLM 不可用等），不值得重试。"""
+        infra_keywords = ("AuthenticationError", "401", "403", "api_key", "Missing Authentication",
+                          "RateLimitError", "429", "quota", "billing")
+        lower = error_text.lower()
+        return any(kw.lower() in lower for kw in infra_keywords)
 
     @staticmethod
     def _unique(prefix: str, name: str, used: set[str]) -> str:
