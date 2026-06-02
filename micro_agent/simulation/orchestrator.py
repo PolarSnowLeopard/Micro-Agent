@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -78,14 +79,22 @@ def _is_catalog_fake(svc: dict[str, Any]) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes")
 
 
+def _mcp_transport_method(svc: dict[str, Any]) -> str:
+    return str(svc.get("mcpMethod") or svc.get("method") or "sse").lower()
+
+
 def _should_use_real_mcp(svc: dict[str, Any]) -> bool:
-    """是否尝试真实 MCP：以目录 isFake 为准，并需已登记的 SSE 端点。"""
+    """是否尝试真实 MCP：以目录 isFake 为准，并需可连的传输配置。"""
     if _is_catalog_fake(svc):
         return False
-    method = str(svc.get("mcpMethod") or svc.get("method") or "sse").lower()
-    if method != "sse":
-        return False
-    return _is_sse_mcp_url(_resolve_mcp_url(svc))
+    method = _mcp_transport_method(svc)
+    if method == "stdio":
+        return bool(str(svc.get("mcpCommand") or "").strip())
+    if method in ("http", "streamable_http", "streamable-http"):
+        return _is_sse_mcp_url(_resolve_mcp_url(svc))
+    if method == "sse":
+        return _is_sse_mcp_url(_resolve_mcp_url(svc))
+    return False
 
 
 class _CancelledError(Exception):
@@ -135,6 +144,13 @@ class SimulationOrchestrator:
     def cancel(self) -> None:
         self._cancelled = True
 
+    def _min_iterations(self) -> int:
+        raw = self.strategy.get("minIterations")
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return 1
+
     # ====================== 工具注册（双通道） ======================
 
     async def _register_tools(self) -> None:
@@ -158,6 +174,29 @@ class SimulationOrchestrator:
 
         self._tools_ready = True
 
+    def _server_config_for_service(
+        self, svc: dict[str, Any], server_id: str, mcp_url: str
+    ) -> ServerConfig:
+        method = _mcp_transport_method(svc)
+        if method == "stdio":
+            return ServerConfig(
+                connection_type="stdio",
+                command=str(svc.get("mcpCommand")),
+                args=list(svc.get("mcpArgs") or []),
+                server_id=server_id,
+            )
+        if method in ("http", "streamable_http", "streamable-http"):
+            return ServerConfig(
+                connection_type="streamable_http",
+                server_url=mcp_url,
+                server_id=server_id,
+            )
+        return ServerConfig(
+            connection_type="sse",
+            server_url=mcp_url,
+            server_id=server_id,
+        )
+
     async def _register_mcp_service(
         self,
         svc: dict[str, Any],
@@ -168,13 +207,8 @@ class SimulationOrchestrator:
         prefix = _sanitize(svc.get("id") or svc.get("name"))
         server_id = _sanitize(f"{prefix}_mcp")
         try:
-            _, mcp_tools = await self._mcp_conn.connect(
-                ServerConfig(
-                    connection_type="sse",
-                    server_url=mcp_url,
-                    server_id=server_id,
-                )
-            )
+            config = self._server_config_for_service(svc, server_id, mcp_url)
+            _, mcp_tools = await self._mcp_conn.connect(config)
             logged: list[LoggingMCPTool] = []
             for inner in mcp_tools:
                 alias = self._unique(prefix, inner.name)
@@ -458,6 +492,9 @@ class SimulationOrchestrator:
                 yield self._log("WARN", f"第 {iteration} 轮规划失败，进入下一轮")
                 continue
 
+            async for e in self._emit_logic_simulation():
+                yield e
+
             yield SimulationEvent("phase", {"phase": "check", "status": "running"})
             yield self._log("INFO", "验证 Agent 执行中…")
 
@@ -488,6 +525,17 @@ class SimulationOrchestrator:
             passed, issue = self._parse_verification(verification_result)
 
             if passed:
+                min_iter = self._min_iterations()
+                if iteration < min_iter:
+                    yield self._log(
+                        "INFO",
+                        f"第 {iteration} 轮验证通过，继续下一轮"
+                        f"（最少 {min_iter} 轮）",
+                    )
+                    yield SimulationEvent(
+                        "iteration", {"iteration": iteration, "status": "retry"}
+                    )
+                    continue
                 self._build_succeeded = True
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "passed"})
                 yield self._log("SUCCESS", f"第 {iteration} 轮验证通过")
@@ -496,6 +544,46 @@ class SimulationOrchestrator:
                 yield SimulationEvent("issue", {"message": issue, "fix": "下一轮自动修复"})
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
                 yield self._log("WARN", f"第 {iteration} 轮发现问题: {issue}")
+
+    async def _emit_logic_simulation(self) -> AsyncIterator[SimulationEvent]:
+        """业务逻辑仿真：对照 Planner 已产生的工具调用做通道与结果核验（非独立 Agent）。"""
+        yield SimulationEvent("phase", {"phase": "logic", "status": "running"})
+        yield self._log("INFO", "业务逻辑仿真：核对工具调用、通道与编排顺序")
+
+        mcp_service_ids = {b.service_id for b in self._mcp_bindings}
+        records = self._collect_call_records()
+
+        if not records:
+            yield self._log(
+                "WARN",
+                "本轮 Planner 未调用任何服务工具；逻辑仿真仅检查编排结构",
+            )
+            await asyncio.sleep(0.4)
+        else:
+            for rec in records:
+                self._check_cancel()
+                channel = "mcp" if rec.service_id in mcp_service_ids else "sandbox"
+                svc = next(
+                    (s for s in self.services_meta if str(s.get("id")) == str(rec.service_id)),
+                    None,
+                )
+                svc_name = svc.get("name", rec.service_id) if svc else rec.service_id
+                if rec.error:
+                    yield self._log(
+                        "WARN",
+                        f"逻辑核验 [{svc_name}] {rec.tool_name} ({channel}) 失败: "
+                        f"{str(rec.error)[:120]}",
+                    )
+                else:
+                    preview = (rec.result or "")[:80].replace("\n", " ")
+                    yield self._log(
+                        "INFO",
+                        f"逻辑核验 [{svc_name}] {rec.tool_name} ({channel}, "
+                        f"{rec.latency_ms}ms) → {preview}",
+                    )
+                await asyncio.sleep(0.25)
+
+        yield SimulationEvent("phase", {"phase": "logic", "status": "done"})
 
     # ====================== Phase 3: 方案生成 ======================
 

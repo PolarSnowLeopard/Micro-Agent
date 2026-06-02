@@ -15,6 +15,7 @@ from loguru import logger
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 
 from micro_agent.tool.mcp.tool import MCPTool
 
@@ -23,7 +24,7 @@ from micro_agent.tool.mcp.tool import MCPTool
 class ServerConfig:
     """MCP 服务器连接配置。"""
 
-    connection_type: str = "sse"  # "sse" | "stdio"
+    connection_type: str = "sse"  # "sse" | "stdio" | "streamable_http"
     server_url: Optional[str] = None  # SSE 模式
     command: Optional[str] = None  # stdio 模式
     args: Optional[list[str]] = None  # stdio 模式
@@ -60,6 +61,10 @@ class MCPConnectionManager:
                 session = await self._connect_stdio(
                     stack, config.command, config.args or []
                 )
+            elif config.connection_type == "streamable_http":
+                if not config.server_url:
+                    raise ValueError("streamable_http 连接需要 server_url")
+                session = await self._connect_streamable_http(stack, config.server_url)
             else:
                 raise ValueError(f"不支持的连接类型: {config.connection_type}")
 
@@ -126,6 +131,14 @@ class MCPConnectionManager:
             stdio_client(StdioServerParameters(command=command, args=args))
         )
         return await stack.enter_async_context(ClientSession(*transport))
+
+    @staticmethod
+    async def _connect_streamable_http(
+        stack: AsyncExitStack, url: str
+    ) -> ClientSession:
+        transport = await stack.enter_async_context(streamable_http_client(url))
+        read, write = transport[0], transport[1]
+        return await stack.enter_async_context(ClientSession(read, write))
 
     def _gen_id(self, conn_type: str) -> str:
         self._counter += 1
