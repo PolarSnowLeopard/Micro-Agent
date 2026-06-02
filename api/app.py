@@ -25,9 +25,21 @@ DEMO_HTML = Path(__file__).parent.parent / "demo" / "index.html"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     skills_dir = Path(config.workspace) / config.skills.directory
+    logger.info(f"Skill 目录: {skills_dir} (exists={skills_dir.exists()})")
     count = SkillRegistry.discover(skills_dir)
     if count:
         logger.info(f"已发现 {count} 个 Skill: {SkillRegistry.list_skills()}")
+        for name in SkillRegistry.list_skills():
+            sk = SkillRegistry.get(name)
+            if sk:
+                has_prompt = bool(sk.prompt_fragment)
+                match_cfg = sk.metadata.get("match", {})
+                logger.info(
+                    f"  Skill[{name}]: prompt={len(sk.prompt_fragment)}chars, "
+                    f"match={match_cfg}"
+                )
+    else:
+        logger.warning(f"未发现任何 Skill! 目录内容: {list(skills_dir.iterdir()) if skills_dir.exists() else '目录不存在'}")
     yield
 
 

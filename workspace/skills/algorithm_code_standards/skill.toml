@@ -1,0 +1,7 @@
+name = "algorithm_code_standards"
+description = "算法代码提交规范（众智工场平台）"
+
+# prompt 留空 → 自动从同目录 SKILL.md 读取
+
+[metadata.match]
+always_for = ["aml_auto_generate"]

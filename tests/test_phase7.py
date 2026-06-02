@@ -73,11 +73,12 @@ def test_skill_discover_real_skills():
 
     skills_dir = Path(config.workspace) / config.skills.directory
     count = SkillRegistry.discover(skills_dir)
-    assert count == 4
+    assert count == 5
     assert "mcp_protocol" in SkillRegistry.list_skills()
     assert "docker_packaging" in SkillRegistry.list_skills()
     assert "code_analysis_patterns" in SkillRegistry.list_skills()
     assert "algorithm_code_standards" in SkillRegistry.list_skills()
+    assert "video_action_recognition" in SkillRegistry.list_skills()
     SkillRegistry.clear()
 
 

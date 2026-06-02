@@ -20,8 +20,12 @@ env/
 # pytest
 .pytest_cache/
 
+# 配置文件（含 API 密钥）
+config/config.toml
+
 # 运行时产生的临时文件
 workspace/data/memory/*.json
+workspace/data/traces/
 workspace/app-demo-output/
 workspace/temp/
 
