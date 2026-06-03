@@ -85,6 +85,11 @@
           "remediation": {
             "type": "string",
             "description": "Actionable operator guidance for resolving non-PASS checks"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["data", "logic"],
+            "description": "Evaluation dimension: data fidelity vs planning / control-flow logic"
           }
         },
         "additionalProperties": false

@@ -145,6 +145,22 @@ class TestEvidenceChecker(unittest.TestCase):
     def test_overall_status_not_fail(self):
         self.assertIn(self.report.overall_status, ("PASS", "WARN"))
 
+    def test_checks_have_research_category(self):
+        for c in self.report.checks:
+            self.assertIn(c.category, ("data", "logic"))
+        data_names = {c.check_name for c in self.report.checks if c.category == "data"}
+        self.assertIn("channel_classification", data_names)
+        self.assertIn("service_coverage", {c.check_name for c in self.report.checks if c.category == "logic"})
+
+    def test_summarize_evidence_dimensions(self):
+        from evidence_checker import summarize_evidence_dimensions
+
+        dims = summarize_evidence_dimensions(self.report.checks)
+        self.assertEqual(set(dims.keys()), {"data", "logic"})
+        for key in ("data", "logic"):
+            self.assertIn(dims[key]["status"], ("PASS", "WARN", "FAIL"))
+            self.assertGreater(dims[key]["total"], 0)
+
 
 class TestRobustness(unittest.TestCase):
     """Graceful handling of malformed traces"""

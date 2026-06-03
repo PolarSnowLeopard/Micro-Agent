@@ -164,3 +164,50 @@ async def list_records():
 async def compare_records(req: CompareRequest):
     records = await _trace_store.compare(req.recordIds)
     return {"records": records}
+
+
+@router.get("/{session_id}/trace")
+async def get_trace(session_id: str):
+    record = await _trace_store.load(session_id)
+    if not record:
+        raise HTTPException(404, "trace not found")
+    return record.to_dict()
+
+
+@router.post("/{session_id}/evidence")
+async def build_evidence(session_id: str):
+    record = await _trace_store.load(session_id)
+    if not record:
+        raise HTTPException(404, "trace not found")
+    try:
+        from trace_evidence import run_pipeline
+
+        result = run_pipeline(record.to_dict())
+    except Exception as exc:
+        logger.warning(f"证据分析失败 {session_id}: {exc}")
+        raise HTTPException(422, str(exc)) from exc
+
+    report = result.report
+    from trace_evidence.evidence_checker import summarize_evidence_dimensions
+
+    def _check_api(c):
+        return {
+            "checkName": c.check_name,
+            "status": c.status,
+            "detail": (c.detail or "")[:240],
+            "category": c.category,
+        }
+
+    checks = [_check_api(c) for c in report.checks]
+    non_pass = [c for c in checks if c["status"] != "PASS"]
+    return {
+        "evidenceId": result.card.evidence_id,
+        "overallStatus": report.overall_status,
+        "summary": report.summary,
+        "checks": checks,
+        "failedChecks": non_pass,
+        "dimensions": summarize_evidence_dimensions(report.checks),
+        "cardSummary": result.card.summary,
+        "verification": result.card.verification,
+        "missingEvidence": result.bundle.missing_evidence,
+    }

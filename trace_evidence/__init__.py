@@ -59,6 +59,8 @@ from .evidence_checker import (
     EvidenceChecker,
     CheckResult,
     CheckerReport,
+    check_category,
+    summarize_evidence_dimensions,
     render_checker_report_markdown,
 )
 
@@ -313,6 +315,8 @@ __all__ = [
     "EvidenceChecker",
     "CheckResult",
     "CheckerReport",
+    "check_category",
+    "summarize_evidence_dimensions",
     "render_checker_report_markdown",
     # Schema validation
     "ValidationResult",

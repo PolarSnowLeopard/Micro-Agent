@@ -41,6 +41,46 @@ except ImportError:
     from evidence_card import EvidenceCard, build_evidence_card
 
 
+# 研究维度：数据保真 vs 逻辑规划（正交切面，非流程阶段）
+DATA_CHECK_NAMES = frozenset({
+    "channel_classification",
+    "tool_io_completeness",
+    "confidence_distribution",
+    "evidence_source_coverage",
+    "tool_channels_presence",
+    "tool_call_details_consistency",
+    "result_hash_integrity",
+    "tool_call_pairs",
+})
+
+
+def check_category(check_name: str) -> str:
+    """Map checker name to evaluation dimension: data | logic."""
+    return "data" if check_name in DATA_CHECK_NAMES else "logic"
+
+
+def summarize_evidence_dimensions(checks: list["CheckResult"]) -> dict[str, dict[str, Any]]:
+    """Per-dimension roll-up for API / UI (data fidelity vs planning logic)."""
+    out: dict[str, dict[str, Any]] = {}
+    for dim in ("data", "logic"):
+        subset = [c for c in checks if c.category == dim]
+        statuses = [c.status for c in subset]
+        if "FAIL" in statuses:
+            overall = "FAIL"
+        elif "MISSING" in statuses or "WARN" in statuses:
+            overall = "WARN"
+        else:
+            overall = "PASS"
+        out[dim] = {
+            "status": overall,
+            "total": len(subset),
+            "passed": sum(1 for c in subset if c.status == "PASS"),
+            "warnings": sum(1 for c in subset if c.status == "WARN"),
+            "failed": sum(1 for c in subset if c.status in ("FAIL", "MISSING")),
+        }
+    return out
+
+
 @dataclass
 class CheckResult:
     """单项检查结果"""
@@ -50,6 +90,7 @@ class CheckResult:
     evidence_count: int = 0
     missing_items: list[str] = field(default_factory=list)
     remediation: str = ""  # Actionable guidance for operators when status != PASS
+    category: str = "logic"  # data | logic — evaluation dimension for research / UI
 
 
 @dataclass
@@ -116,6 +157,8 @@ class EvidenceChecker:
 
         # Apply remediation guidance for non-PASS checks
         self._apply_remediation()
+        for check in self.checks:
+            check.category = check_category(check.check_name)
 
         # 综合评定
         statuses = [c.status for c in self.checks]

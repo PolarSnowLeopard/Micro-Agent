@@ -772,6 +772,7 @@ class SimulationOrchestrator:
         return records
 
     def _extract_execution_path(self) -> list[str]:
+        """按调用顺序列出每一步（不去重），反映真实调用链。"""
         records = [
             r for r in self._collect_call_records()
             if not r.error and r.arguments.get("action") != "health_check"
@@ -779,16 +780,20 @@ class SimulationOrchestrator:
         if not records:
             return []
 
-        seen: set[str] = set()
         path = ["用户输入"]
         for rec in records:
-            if rec.service_id not in seen:
-                seen.add(rec.service_id)
-                svc = next(
-                    (s for s in self.services_meta if str(s.get("id")) == str(rec.service_id)),
-                    None,
-                )
-                path.append(svc.get("name", rec.service_id) if svc else rec.service_id)
+            svc = next(
+                (s for s in self.services_meta if str(s.get("id")) == str(rec.service_id)),
+                None,
+            )
+            if rec.service_id == "internal":
+                path.append(rec.tool_name or "internal")
+                continue
+            svc_label = svc.get("name", rec.service_id) if svc else rec.service_id
+            if rec.tool_name and rec.tool_name != svc_label:
+                path.append(f"{svc_label} · {rec.tool_name}")
+            else:
+                path.append(svc_label)
         path.append("输出结果")
         return path
 
