@@ -143,6 +143,9 @@ class TraceEvidenceBundle:
     # 全局缺失标注
     missing_evidence: list[str] = field(default_factory=list)
 
+    # Raw metadata from trace (for consistency checks)
+    raw_metadata: dict = field(default_factory=dict)
+
     # Diagnostics: why events were dropped (for observability, not evidence)
     diagnostics: list[dict] = field(default_factory=list)
 
@@ -191,6 +194,8 @@ class TraceEvidenceAdapter:
             mode=self.trace.get("mode", ""),
             strategy=self.trace.get("strategy", {}),
         )
+        # Preserve raw metadata for consistency checks
+        bundle.raw_metadata = self.trace.get("metadata", {}) or {}
 
         # Filter: only process valid event dicts with required fields
         raw_count = len(self.events)

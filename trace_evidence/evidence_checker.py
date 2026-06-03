@@ -111,6 +111,8 @@ class EvidenceChecker:
         self._check_timeline_monotonicity()
         # Pass #15: result_hash tamper detection
         self._check_result_hash_integrity()
+        # Pass #16: metadata consistency (declared vs actual counts)
+        self._check_metadata_consistency()
 
         # Apply remediation guidance for non-PASS checks
         self._apply_remediation()
@@ -173,12 +175,16 @@ class EvidenceChecker:
 
     def _check_structural_integrity(self):
         """检查 trace 顶层字段完整性"""
+        _PLACEHOLDER_VALUES = {"unknown", "unnamed", "", None}
         missing = []
-        if not self.bundle.session_id:
+        degraded = []
+        if not self.bundle.session_id or self.bundle.session_id in _PLACEHOLDER_VALUES:
             missing.append("session_id")
-        if not self.bundle.app_name:
+        elif self.bundle.session_id.startswith("unknown"):
+            degraded.append("session_id (placeholder value)")
+        if not self.bundle.app_name or self.bundle.app_name in _PLACEHOLDER_VALUES:
             missing.append("app_name")
-        if not self.bundle.domain:
+        if not self.bundle.domain or self.bundle.domain in _PLACEHOLDER_VALUES:
             missing.append("domain")
 
         if missing:
@@ -187,6 +193,13 @@ class EvidenceChecker:
                 status="FAIL",
                 detail=f"Missing required fields: {missing}",
                 missing_items=missing,
+            ))
+        elif degraded:
+            self.checks.append(CheckResult(
+                check_name="structural_integrity",
+                status="WARN",
+                detail=f"Fields present but degraded: {degraded}",
+                evidence_count=len(degraded),
             ))
         else:
             self.checks.append(CheckResult(
@@ -965,6 +978,45 @@ class EvidenceChecker:
                 missing_items=[f"hash_mismatch:{t}" for t in mismatches],
                 remediation="Result content may have been modified after collection due to JSON serialization. Re-run trace or investigate encoding.",
             ))
+
+    def _check_metadata_consistency(self):
+        """检查 metadata 中声明的计数与实际证据是否一致"""
+        meta = getattr(self.bundle, 'raw_metadata', {}) or {}
+        if not meta:
+            # No metadata to validate — not an error
+            return
+
+        declared_tool_count = meta.get('tool_call_count')
+        if declared_tool_count is not None:
+            actual_tool_count = len(self.bundle.tool_calls)
+            if declared_tool_count == 0 and actual_tool_count > 0:
+                self.checks.append(CheckResult(
+                    check_name="metadata_consistency",
+                    status="WARN",
+                    detail=f"metadata.tool_call_count={declared_tool_count} but found {actual_tool_count} actual tool_calls",
+                    evidence_count=actual_tool_count,
+                    missing_items=["tool_call_count_mismatch"],
+                    remediation="Update metadata.tool_call_count to match actual tool call events, or investigate why count is zero.",
+                ))
+                return
+            elif declared_tool_count > 0 and actual_tool_count == 0:
+                self.checks.append(CheckResult(
+                    check_name="metadata_consistency",
+                    status="WARN",
+                    detail=f"metadata.tool_call_count={declared_tool_count} but no tool_calls found in events",
+                    evidence_count=0,
+                    missing_items=["tool_call_count_mismatch"],
+                    remediation="Trace events may be truncated or corrupted — declared tool calls are missing.",
+                ))
+                return
+
+        # All declared metadata consistent
+        self.checks.append(CheckResult(
+            check_name="metadata_consistency",
+            status="PASS",
+            detail="Metadata declarations consistent with actual evidence",
+            evidence_count=1,
+        ))
 
 
 def render_checker_report_markdown(report: CheckerReport) -> str:
