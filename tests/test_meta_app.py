@@ -152,7 +152,7 @@ def test_meta_app_agent_no_nodes():
 
     import asyncio
     with pytest.raises(ValueError, match="未找到"):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             agent.initialize_from_config({"info": {}, "services": []}, use_sim=True)
         )
 
