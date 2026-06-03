@@ -29,9 +29,12 @@ except ImportError:
 @dataclass
 class ConfigAttachmentDraft:
     """带 evidence_id 的配置草稿"""
-    # 关联标识
+    # 关联标识 (required)
     evidence_id: str
     session_id: str
+
+    # 元数据
+    schema_version: str = "1.0.0"
     draft: bool = True
     generated_at: str = ""
 
@@ -55,7 +58,11 @@ class ConfigAttachmentDraft:
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        # Ensure schema_version is first key (convention matching evidence_card/checker)
+        ordered = {"schema_version": d.pop("schema_version")}
+        ordered.update(d)
+        return ordered
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)

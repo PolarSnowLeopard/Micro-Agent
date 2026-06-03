@@ -82,6 +82,37 @@ HEADLESS_CFG = {
 OUTPUT_DIR = Path(__file__).resolve().parent / "output_headless"
 TRACE_STORE_DIR = PROJECT_ROOT / "workspace" / "data" / "traces"
 
+# Retention policy
+MAX_TRACES_KEPT = 5
+
+
+def _cleanup_output_dir(output_dir: Path) -> None:
+    """Remove stale artifacts from previous runs, keeping only canonical names.
+
+    Canonical outputs (evidence_card.json, checker_report.json, etc.) get
+    overwritten each run. Prefixed files (ev-*, sim-*) from older runs accumulate
+    and should be removed before a fresh run.
+    """
+    canonical = {
+        "evidence_card.json", "evidence_card.md",
+        "config_attachment_draft.json",
+        "checker_report.json", "checker_report.md",
+    }
+    for f in output_dir.iterdir():
+        if f.is_file() and f.name not in canonical:
+            f.unlink()
+            logger.debug(f"Cleaned stale output: {f.name}")
+
+
+def _rotate_traces(trace_dir: Path, keep: int = MAX_TRACES_KEPT) -> None:
+    """Keep only the N most recent trace files, remove older ones."""
+    if not trace_dir.exists():
+        return
+    traces = sorted(trace_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in traces[keep:]:
+        old.unlink()
+        logger.debug(f"Rotated old trace: {old.name}")
+
 
 async def run_headless() -> Path | None:
     """Execute headless simulation, return path to saved trace JSON."""
@@ -239,6 +270,9 @@ async def run_headless() -> Path | None:
     logger.info(f"=== Trace saved: {trace_path} ===")
     logger.info(f"    Events: {len(all_events)} ({len(tool_call_events)} tool_call_records)")
 
+    # Rotate old traces (keep only recent N)
+    _rotate_traces(TRACE_STORE_DIR)
+
     # === Gracefully close the generator (triggers disconnect_all in finally) ===
     try:
         await run_gen.aclose()
@@ -247,6 +281,9 @@ async def run_headless() -> Path | None:
 
     # === Now run evidence pipeline on the fresh trace ===
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Cleanup: remove stale artifacts from previous runs (keep folder clean)
+    _cleanup_output_dir(OUTPUT_DIR)
 
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))

@@ -149,3 +149,30 @@ class TestProvenanceLogic:
         draft = build_config_attachment_draft(bundle, card)
         d = draft.to_dict()
         assert len(d["dispatch_sequence"]) == 0
+
+
+class TestSchemaVersion:
+    """Verify schema_version is present and positioned first in output."""
+
+    def test_schema_version_present(self):
+        """config_attachment_draft must include schema_version."""
+        bundle = FakeBundle(
+            tool_calls=[FakeToolCall(tool_name="calc_add")],
+            completion=FakeCompletion(),
+        )
+        card = FakeCard()
+        draft = build_config_attachment_draft(bundle, card)
+        d = draft.to_dict()
+        assert "schema_version" in d
+        assert d["schema_version"] == "1.0.0"
+
+    def test_schema_version_is_first_key(self):
+        """schema_version should be the first key in serialized output (convention)."""
+        bundle = FakeBundle(
+            tool_calls=[FakeToolCall(tool_name="calc_add")],
+            completion=FakeCompletion(),
+        )
+        card = FakeCard()
+        draft = build_config_attachment_draft(bundle, card)
+        d = draft.to_dict()
+        assert list(d.keys())[0] == "schema_version"
