@@ -18,7 +18,7 @@ PACKAGE_DIR = Path(__file__).parent.parent
 PROJECT_ROOT = PACKAGE_DIR.parent
 PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
 PIPELINE_SCRIPT = PACKAGE_DIR / "run_pipeline.py"
-REAL_TRACE = PROJECT_ROOT / "workspace/data/traces/sim-b963f6d83a89.json"
+REAL_TRACE = Path(__file__).parent / "fixtures" / "minimal_v1_trace.json"
 
 
 def _skip_if_no_trace():

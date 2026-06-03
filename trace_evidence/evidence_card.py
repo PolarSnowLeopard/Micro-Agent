@@ -229,29 +229,18 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
         total_evidence_items += 1
 
     original_pct = round(100 * confidence_counter.get("original", 0) / max(total_evidence_items, 1))
-    inferred_pct = round(100 * confidence_counter.get("inferred", 0) / max(total_evidence_items, 1))
-    # Determine if this is a log-parsed trace (most evidence is inferred, which is expected)
-    is_log_parsed = (source_counter.get("inferred_from_log", 0) + source_counter.get("log_parsed", 0)) > total_evidence_items * 0.5
-    if is_log_parsed:
-        # For log-parsed traces, high inferred % is normal and expected
-        provenance_note = (
-            "good — fully reconstructed from execution logs" if inferred_pct >= 70 else
-            "adequate — partially reconstructed from logs" if inferred_pct >= 40 else
-            "mixed — some original metadata available"
-        )
-    else:
-        provenance_note = (
-            "high — most evidence from original metadata" if original_pct >= 70 else
-            "medium" if original_pct >= 40 else
-            "low — limited original metadata"
-        )
+    provenance_note = (
+        "high — structured v1 trace events" if original_pct >= 70 else
+        "medium — partial structured coverage" if original_pct >= 40 else
+        "low — check trace format"
+    )
     provenance = {
         "total_evidence_items": total_evidence_items,
         "source_distribution": dict(source_counter.most_common()),
         "confidence_distribution": dict(confidence_counter.most_common()),
         "channel_distribution": dict(channel_counter.most_common()),
         "original_confidence_pct": original_pct,
-        "is_log_parsed": is_log_parsed,
+        "is_log_parsed": False,
         "provenance_note": provenance_note,
     }
 
@@ -297,8 +286,8 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
                 if pt.timestamp else "N/A"
             ),
             "preview": content_preview,
-            "source": getattr(pt, "source", "inferred_from_log"),
-            "confidence": getattr(pt, "confidence", "inferred"),
+            "source": getattr(pt, "source", "original_trace"),
+            "confidence": getattr(pt, "confidence", "original"),
         }
         # Include v1 structured fields when available
         if getattr(pt, "candidate_tools", None):
@@ -335,7 +324,7 @@ def render_evidence_card_markdown(card: EvidenceCard) -> str:
         f"# Evidence Card: {card.evidence_id}",
         "",
         f"**Session**: `{card.session_id}`  ",
-        f"**App**: {card.app_name}  ",
+        f"**App**: {sanitize_md_cell(card.app_name)}  ",
         f"**Domain**: {card.domain} | **Mode**: {card.mode}  ",
         f"**Evidence Generated**: {card.generated_at}  ",
         f"**Fingerprint**: `{card.evidence_fingerprint}`",

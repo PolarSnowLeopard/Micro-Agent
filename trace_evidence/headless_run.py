@@ -26,6 +26,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from loguru import logger
 
 from micro_agent.simulation.orchestrator import SimulationOrchestrator
+from micro_agent.simulation.trace_records import (
+    build_tool_call_record_events,
+    build_trace_metadata,
+)
 from micro_agent.simulation.trace_store import FileTraceStore, TraceRecord
 
 
@@ -173,79 +177,13 @@ async def run_headless() -> Path | None:
                 "timestamp": time.time(),
             })
 
-    # === Collect tool_call_records (v1: enhanced with call_id/channel/transport/success) ===
     tool_call_events: list[dict] = []
     try:
-        for rec in orch._collect_call_records():
-            import hashlib
-            result_stored = rec.result[:2000] if rec.result else None
-            result_hash = hashlib.sha256((result_stored or "").encode()).hexdigest()[:16]
-            tool_call_events.append({
-                "type": "tool_call_record",
-                "data": {
-                    "call_id": rec.call_id,
-                    "tool_name": rec.tool_name,
-                    "service_id": rec.service_id,
-                    "service_name": rec.service_name,
-                    "channel": rec.channel,
-                    "transport": rec.transport,
-                    "arguments": rec.arguments,
-                    "result": result_stored,
-                    "result_hash": result_hash,
-                    "error": rec.error,
-                    "latency_ms": rec.latency_ms,
-                    "timestamp": rec.timestamp,
-                    "success": rec.success,
-                },
-                "timestamp": rec.timestamp,
-            })
+        tool_call_events = build_tool_call_record_events(orch._collect_call_records())
     except Exception as e:
         logger.debug(f"收集 tool_call_records 失败 (non-fatal): {e}")
 
-    # === Build toolChannels from static config (checker: tool_channels_presence) ===
-    tool_channels = [
-        {
-            "service_id": svc["id"],
-            "service_name": svc["name"],
-            "channel": "mcp",
-            "transport": svc.get("mcpMethod", "sse"),
-            "url": svc.get("mcpUrl", ""),
-        }
-        for svc in HEADLESS_CFG.get("servicesMeta", [])
-    ]
-
-    # === Build executionPath from phase events (checker: execution_path) ===
-    execution_path = []
-    for ev in trace_events:
-        ev_type = ev.get("type", "")
-        if ev_type == "phase":
-            phase_name = ev.get("data", {}).get("phase", ev.get("data", {}).get("name", ""))
-            if phase_name and phase_name not in execution_path:
-                execution_path.append(phase_name)
-        elif ev_type in ("planner_decision", "verifier_result", "iteration_complete"):
-            if ev_type not in execution_path:
-                execution_path.append(ev_type)
-
-    # === Build metadata (mirrors simulation.py pattern) ===
-    metadata = {
-        "trace_version": "v1.0.0",
-        "config_snapshot": {
-            "appId": HEADLESS_CFG.get("appId", ""),
-            "serviceIds": HEADLESS_CFG.get("serviceIds", []),
-            "servicesMeta": HEADLESS_CFG.get("servicesMeta", []),
-            "maxIterations": HEADLESS_CFG.get("maxIterations", 3),
-            "scenarioDescription": HEADLESS_CFG.get("scenarioDescription", ""),
-        },
-        "runtime": {
-            "platform": platform.system(),
-            "python_version": platform.python_version(),
-            "trace_version": "v1.0.0",
-            "headless": True,
-        },
-        "tool_call_count": len(tool_call_events),
-        "toolChannels": tool_channels,
-        "executionPath": execution_path,
-    }
+    metadata = build_trace_metadata(HEADLESS_CFG, len(tool_call_events), headless=True)
 
     all_events = trace_events + tool_call_events
 

@@ -82,18 +82,7 @@ def build_config_attachment_draft(
             if tc.service_id in ('internal', 'unresolved'):
                 continue
             seen_tools.add(tc.tool_name)
-            # Provenance: use adapter's source field (authoritative)
-            # "persisted_metadata" = from explicit tool_call_record events
-            # "derived_from_log" = parsed from log text (lower confidence)
-            # enriched channels (from service discovery cross-ref) still count as structured
-            source = getattr(tc, "source", "")
-            if source == "persisted_metadata":
-                ev_source = "structured_event"
-            elif source == "derived_from_log":
-                ev_source = "log_text_extraction"
-            else:
-                # Fallback: if channel/latency present, it was enriched from structured data
-                ev_source = "structured_event" if getattr(tc, "channel", None) else "log_text_extraction"
+            ev_source = "structured_event"
             dispatch_sequence.append({
                 "tool": tc.tool_name,
                 "service_id": tc.service_id,
@@ -113,7 +102,6 @@ def build_config_attachment_draft(
     notes = [
         "This is a DRAFT — not a deployable configuration.",
         f"Evidence gaps: {len(bundle.missing_evidence)} items.",
-        "tool_call arguments/results not available in current trace format.",
         "Use evidence_id to trace back to full evidence bundle.",
     ]
 

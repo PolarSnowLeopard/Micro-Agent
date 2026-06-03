@@ -27,6 +27,8 @@ def sanitize_md_cell(value: str, max_len: int = 120) -> str:
     if not isinstance(value, str):
         value = str(value)
 
+    value = value.replace("\x00", "")
+
     # Strip HTML tags entirely (prevents <script>, <img onerror=...>, etc.)
     value = re.sub(r'<[^>]*>', '', value)
 

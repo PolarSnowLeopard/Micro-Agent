@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = PROJECT_ROOT / "schemas" / "evidence_card_schema.json"
 PIPELINE_SCRIPT = PROJECT_ROOT / "run_pipeline.py"
 PYTHON = PROJECT_ROOT.parent / ".venv" / "bin" / "python"
-TRACE_FILE = PROJECT_ROOT.parent / "workspace" / "data" / "traces" / "sim-b963f6d83a89.json"
+TRACE_FILE = Path(__file__).parent / "fixtures" / "minimal_v1_trace.json"
 
 
 def _skip_if_no_jsonschema():

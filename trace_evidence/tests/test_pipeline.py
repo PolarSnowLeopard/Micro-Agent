@@ -17,7 +17,8 @@ from evidence_card import build_evidence_card, render_evidence_card_markdown
 from evidence_checker import EvidenceChecker
 
 
-REAL_TRACE = Path(__file__).parent.parent.parent / "workspace/data/traces/sim-b963f6d83a89.json"
+REAL_TRACE = Path(__file__).parent / "fixtures/minimal_v1_trace.json"
+V1_META = {"trace_version": "v1.0.0", "runtime": {"trace_version": "v1.0.0"}}
 
 
 def _load_real_trace():
@@ -48,8 +49,8 @@ class TestTraceAdapter(unittest.TestCase):
 
     def test_tool_calls_have_source_and_confidence(self):
         for tc in self.bundle.tool_calls:
-            self.assertIn(tc.source, ("original_trace", "inferred_from_log", "derived_from_log"))
-            self.assertIn(tc.confidence, ("original", "derived", "inferred"))
+            self.assertEqual(tc.source, "persisted_metadata")
+            self.assertEqual(tc.confidence, "original")
 
     def test_services_have_channel(self):
         for s in self.bundle.services:
@@ -58,7 +59,7 @@ class TestTraceAdapter(unittest.TestCase):
     def test_phases_have_source(self):
         for p in self.bundle.phases:
             self.assertTrue(hasattr(p, "source"))
-            self.assertIn(p.source, ("original_trace", "inferred_from_log"))
+            self.assertEqual(p.source, "original_trace")
 
 
 class TestChannelEnrichment(unittest.TestCase):
@@ -86,13 +87,9 @@ class TestChannelEnrichment(unittest.TestCase):
         for tc in internal_calls:
             self.assertEqual(tc.channel, "local")
 
-    def test_derived_confidence_for_enriched(self):
-        """Tool calls enriched with channel from services get 'derived' confidence."""
-        enriched = [tc for tc in self.bundle.tool_calls
-                    if tc.channel == "mcp" and tc.source == "derived_from_log"]
-        self.assertGreater(len(enriched), 0)
-        for tc in enriched:
-            self.assertEqual(tc.confidence, "derived")
+    def test_mcp_channel_on_tool_calls(self):
+        mcp_calls = [tc for tc in self.bundle.tool_calls if tc.channel == "real_mcp"]
+        self.assertGreater(len(mcp_calls), 0)
 
 
 class TestEvidenceCard(unittest.TestCase):
@@ -139,8 +136,8 @@ class TestEvidenceChecker(unittest.TestCase):
         checker = EvidenceChecker(bundle, card)
         cls.report = checker.run_all()
 
-    def test_runs_20_checks(self):
-        self.assertEqual(len(self.report.checks), 20)
+    def test_runs_21_checks(self):
+        self.assertEqual(len(self.report.checks), 21)
 
     def test_no_failures_on_real_trace(self):
         self.assertEqual(self.report.summary["failed"], 0)
@@ -161,22 +158,15 @@ class TestRobustness(unittest.TestCase):
     ]
 
     def test_no_crash_on_malformed(self):
-        """All malformed traces produce FAIL without exceptions."""
+        """Non-v1 traces are rejected at adapter init."""
         for trace, label in self.MALFORMED_TRACES:
             with self.subTest(label=label):
-                adapter = TraceEvidenceAdapter(trace)
-                bundle = adapter.extract()
-                card = build_evidence_card(bundle)
-                checker = EvidenceChecker(bundle, card)
-                report = checker.run_all()
-                self.assertEqual(report.overall_status, "FAIL",
-                                 f"{label} should FAIL gracefully")
+                with self.assertRaises(ValueError):
+                    TraceEvidenceAdapter(trace)
 
-    def test_empty_trace_has_zero_evidence(self):
-        adapter = TraceEvidenceAdapter({})
-        bundle = adapter.extract()
-        self.assertEqual(len(bundle.tool_calls), 0)
-        self.assertEqual(len(bundle.services), 0)
+    def test_empty_trace_rejected(self):
+        with self.assertRaises(ValueError):
+            TraceEvidenceAdapter({})
 
 
 class TestServiceInference(unittest.TestCase):
@@ -191,7 +181,11 @@ class TestServiceInference(unittest.TestCase):
                 "data": {"id": sid, "name": sid, "status": "connected", "channel": "mcp"},
                 "timestamp": 1000.0,
             })
-        return TraceEvidenceAdapter({"session_id": "test", "events": events})
+        return TraceEvidenceAdapter({
+            "session_id": "test",
+            "metadata": V1_META,
+            "events": events,
+        })
 
     def test_exact_prefix_match(self):
         adapter = self._make_adapter_with_services(["weather-api", "db-service"])
@@ -212,10 +206,10 @@ class TestServiceInference(unittest.TestCase):
         adapter = self._make_adapter_with_services(["alpha-svc"])
         self.assertEqual(adapter._infer_service_id("totally_random_tool"), "unresolved")
 
-    def test_fallback_regex_without_service_events(self):
-        """When no service events exist, fallback regex handles mcp-demo-* pattern."""
-        adapter = TraceEvidenceAdapter({"session_id": "t", "events": []})
-        self.assertEqual(adapter._infer_service_id("mcp-demo-openfda_search"), "mcp-demo-openfda")
+    def test_unknown_tool_without_service_events(self):
+        """Without service discovery events, tool names are not inferred."""
+        adapter = TraceEvidenceAdapter({"session_id": "t", "metadata": V1_META, "events": []})
+        self.assertEqual(adapter._infer_service_id("mcp-demo-openfda_search"), "unresolved")
 
     def test_empty_tool_name(self):
         adapter = self._make_adapter_with_services(["svc"])
@@ -289,7 +283,7 @@ class TestCLIIntegration(unittest.TestCase):
         data = json.loads(reports[0].read_text())
         self.assertIn("overall_status", data)
         self.assertIn("checks", data)
-        self.assertEqual(len(data["checks"]), 20)
+        self.assertEqual(len(data["checks"]), 21)
 
     def test_checker_report_md_produced(self):
         reports = [f for f in Path(self.tmpdir).iterdir()
@@ -344,6 +338,7 @@ class TestMarkdownInjection(unittest.TestCase):
         """Create a trace where tool output and planner reasoning contain injection payloads."""
         return {
             "session_id": "injection-test",
+            "metadata": V1_META,
             "events": [
                 {
                     "type": "service",

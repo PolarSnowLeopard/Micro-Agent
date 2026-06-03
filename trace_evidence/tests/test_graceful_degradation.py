@@ -18,12 +18,11 @@ from evidence_card import build_evidence_card
 from evidence_checker import EvidenceChecker
 
 
-def _find_real_trace():
-    """Find any sim-headless trace for mutation testing."""
-    traces_dir = Path(__file__).parent.parent.parent / "workspace" / "data" / "traces"
-    for f in sorted(traces_dir.glob("sim-headless-*.json"), reverse=True):
-        return json.loads(f.read_text())
-    return None
+def _load_fixture_trace():
+    path = Path(__file__).parent / "fixtures" / "minimal_v1_trace.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _run_checker(trace_data):
@@ -41,9 +40,9 @@ class TestGracefulDegradation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.real_trace = _find_real_trace()
+        cls.real_trace = _load_fixture_trace()
         if cls.real_trace is None:
-            raise unittest.SkipTest("No sim-headless trace available")
+            raise unittest.SkipTest("minimal_v1_trace fixture not available")
 
     def _assert_not_pass(self, trace_data, msg):
         """Run checker and assert overall_status != PASS."""
@@ -63,11 +62,12 @@ class TestGracefulDegradation(unittest.TestCase):
         trace['events'] = []
         self._assert_not_pass(trace, "Empty events trace must not PASS")
 
-    def test_null_metadata(self):
-        """A trace with null metadata must not get PASS."""
+    def test_null_metadata_rejected(self):
+        """Null metadata is rejected at adapter init (v1 required)."""
         trace = copy.deepcopy(self.real_trace)
         trace['metadata'] = None
-        self._assert_not_pass(trace, "Null metadata trace must not PASS")
+        with self.assertRaises(ValueError):
+            TraceEvidenceAdapter(trace)
 
     def test_missing_session_id(self):
         """A trace with missing session_id must not get PASS."""

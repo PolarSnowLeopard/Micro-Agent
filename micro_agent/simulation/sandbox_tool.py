@@ -32,6 +32,12 @@ class ToolCallRecord:
     error: Optional[str]
     latency_ms: int
     timestamp: float
+    # v1 enhanced fields
+    call_id: str = ""
+    service_name: str = ""
+    channel: str = "unknown"        # real_mcp / sandbox / mock
+    transport: str = "unknown"      # sse / streamable_http / stdio / in_process
+    success: bool = True
 
 
 @dataclass
@@ -56,19 +62,21 @@ class SandboxTool(Tool):
     _call_count: int = field(default=0, repr=False)
 
     async def execute(self, **kwargs: Any) -> ToolResult:
+        import uuid as _uuid
         start = time.time()
         self._call_count += 1
+        call_id = f"call-{_uuid.uuid4().hex[:12]}"
         latency = random.randint(*self.latency_range)
         await asyncio.sleep(latency / 1000.0)
 
         # 1) 参数校验：缺 action → 稳定报错（对 Agent 可学习）
         action = kwargs.get("action", "")
         if not action and not kwargs:
-            return self._record_error(start, kwargs, f"服务 [{self.service_name}] 调用缺少参数，请提供 action 或业务参数")
+            return self._record_error(start, kwargs, f"服务 [{self.service_name}] 调用缺少参数，请提供 action 或业务参数", call_id=call_id)
 
         # 2) 随机失败（模拟真实 MCP 的偶发超时 / 异常）
         if self.failure_rate > 0 and random.random() < self.failure_rate:
-            return self._record_error(start, kwargs, f"服务 [{self.service_name}] 调用超时或异常（可重试）")
+            return self._record_error(start, kwargs, f"服务 [{self.service_name}] 调用超时或异常（可重试）", call_id=call_id)
 
         # 3) 正常响应
         output = self._generate_response(kwargs, action)
@@ -82,10 +90,15 @@ class SandboxTool(Tool):
             error=None,
             latency_ms=elapsed,
             timestamp=start,
+            call_id=call_id,
+            service_name=self.service_name,
+            channel="sandbox",
+            transport="in_process",
+            success=True,
         ))
         return ToolResult(output=output)
 
-    def _record_error(self, start: float, kwargs: dict, error_msg: str) -> ToolResult:
+    def _record_error(self, start: float, kwargs: dict, error_msg: str, *, call_id: str = "") -> ToolResult:
         elapsed = int((time.time() - start) * 1000)
         self.call_log.append(ToolCallRecord(
             tool_name=self.name,
@@ -95,6 +108,11 @@ class SandboxTool(Tool):
             error=error_msg,
             latency_ms=elapsed,
             timestamp=start,
+            call_id=call_id,
+            service_name=self.service_name,
+            channel="sandbox",
+            transport="in_process",
+            success=False,
         ))
         return ToolResult(error=error_msg)
 

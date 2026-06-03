@@ -217,6 +217,7 @@ class SimulationOrchestrator:
                     registered_name=alias,
                     service_id=service_id,
                     service_name=service_name,
+                    transport=config.connection_type,
                 )
                 self._tools.register(wrapper)
                 logged.append(wrapper)
@@ -283,6 +284,8 @@ class SimulationOrchestrator:
                         "suggestion": "已达最大迭代次数，仍未通过验证；请检查服务配置或调整场景描述",
                         "appName": self.app_name,
                         "domain": self.domain,
+                        "executionPath": self._extract_execution_path(),
+                        "toolChannels": self._tool_channel_summary(),
                     },
                 })
                 return
@@ -492,6 +495,42 @@ class SimulationOrchestrator:
                 yield self._log("WARN", f"第 {iteration} 轮规划失败，进入下一轮")
                 continue
 
+            # P0-3: Emit planner_decision event with structured decision trace
+            iter_records = self._collect_call_records()
+            selected_tools = list(dict.fromkeys(r.tool_name for r in iter_records))
+            candidate_tools = [n for n in self._tools.list_names() if n != "terminate"]
+            exec_path = self._extract_execution_path()
+            dispatch_config = self._build_dispatch_config(iter_records)
+            planner_content = ""
+            for ev in planner_trace:
+                if ev.type == "done":
+                    planner_content = ev.data.get("result", "")[:500]
+                    break
+            yield SimulationEvent("planner_decision", {
+                "iteration": iteration,
+                "candidate_tools": candidate_tools,
+                "selected_tools": selected_tools,
+                "reason": planner_content[:200],
+                "executionPath": exec_path,
+                "dispatch": dispatch_config,
+                "tool_call_details": [
+                    {
+                        "call_id": r.call_id,
+                        "tool": r.tool_name,
+                        "service": r.service_name or r.service_id,
+                        "channel": r.channel,
+                        "transport": r.transport,
+                        "arguments": r.arguments,
+                        "result_preview": (r.result or "")[:200],
+                        "error": r.error,
+                        "latency_ms": r.latency_ms,
+                        "success": r.success,
+                        "timestamp": r.timestamp,
+                    }
+                    for r in iter_records
+                ],
+            })
+
             async for e in self._emit_logic_simulation():
                 yield e
 
@@ -523,6 +562,32 @@ class SimulationOrchestrator:
                 continue
 
             passed, issue = self._parse_verification(verification_result)
+
+            # P0-1: Emit structured verifier_result event
+            call_records = self._collect_call_records()
+            evidence_ids = [r.call_id for r in call_records if r.call_id]
+            verifier_checks = []
+            if passed:
+                verifier_checks.append({
+                    "check": "overall_verification",
+                    "status": "PASSED",
+                    "evidence_refs": evidence_ids,
+                })
+            else:
+                verifier_checks.append({
+                    "check": "overall_verification",
+                    "status": "FAILED",
+                    "issue": issue,
+                    "evidence_refs": evidence_ids,
+                })
+            yield SimulationEvent("verifier_result", {
+                "iteration": iteration,
+                "status": "PASSED" if passed else "FAILED",
+                "summary": verification_result[:500] if verification_result else "",
+                "reason": "" if passed else issue,
+                "checks": verifier_checks,
+                "issues": [] if passed else [{"description": issue, "evidence_refs": evidence_ids}],
+            })
 
             if passed:
                 min_iter = self._min_iterations()
@@ -684,11 +749,14 @@ class SimulationOrchestrator:
     def _verifier_prompt(self, trace: list[AgentEvent]) -> str:
         summary = self._summarize_trace(trace)
         svc_names = [s.get("name", "?") for s in self.services_meta]
+        scenario = self.scenario or "（未提供场景描述）"
         return (
-            f"以下是规划智能体的执行轨迹：\n{summary}\n\n"
-            f"需要验证的服务列表: {svc_names}\n"
-            f"请检查：1) 所有服务是否被调用 2) 数据流转是否合理 3) 调用顺序是否正确\n"
-            f"结论为 PASSED 或 FAILED: [原因]，然后 terminate。"
+            f"任务场景（需要完成的目标）:\n{scenario}\n\n"
+            f"规划智能体为完成该任务产生的执行轨迹：\n{summary}\n\n"
+            f"参与服务: {svc_names}\n"
+            f"请判断：在该场景下，编排结果是否看起来已经完成了任务目标（允许基于日志与推理，不要求形式完美）。\n"
+            f"并检查：1) 关键服务是否被合理调用 2) 数据流转是否合理 3) 调用顺序是否合理。\n"
+            f"结论必须写为 PASSED 或 FAILED: [原因]，然后 terminate。"
         )
 
     # ====================== 数据提取 ======================

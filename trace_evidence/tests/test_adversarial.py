@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from trace_evidence import run_pipeline
 from trace_evidence.trace_adapter import TraceEvidenceAdapter
 
+V1_META = {"trace_version": "v1.0.0", "runtime": {"trace_version": "v1.0.0"}}
+
 
 class TestRunPipelineInputValidation(unittest.TestCase):
     """run_pipeline() rejects invalid inputs with clear errors."""
@@ -54,22 +56,24 @@ class TestAdapterMalformedEvents(unittest.TestCase):
 
     def _make_trace(self, events):
         return {
+            "session_id": "adv-001",
             "events": events,
-            "metadata": {"app_name": "adversarial_test", "simulation_id": "adv-001"},
+            "metadata": {
+                "trace_version": "v1.0.0",
+                "runtime": {"trace_version": "v1.0.0"},
+            },
         }
 
     def test_events_is_none(self):
         trace = self._make_trace(None)
         trace["events"] = None  # force None
-        adapter = TraceEvidenceAdapter(trace)
-        bundle = adapter.extract()
-        self.assertEqual(len(bundle.tool_calls), 0)
+        with self.assertRaises(ValueError):
+            TraceEvidenceAdapter(trace)
 
     def test_events_is_string(self):
-        trace = {"events": "not a list", "metadata": {}}
-        adapter = TraceEvidenceAdapter(trace)
-        bundle = adapter.extract()
-        self.assertEqual(len(bundle.tool_calls), 0)
+        trace = {"events": "not a list", "metadata": V1_META}
+        with self.assertRaises(ValueError):
+            TraceEvidenceAdapter(trace)
 
     def test_event_missing_type(self):
         trace = self._make_trace([
@@ -131,12 +135,14 @@ class TestAdapterXSSResistance(unittest.TestCase):
 
     def test_xss_in_tool_name_sanitized(self):
         trace = {
+            "session_id": "xss-test",
+            "metadata": V1_META,
             "events": [
-                {"type": "mcp_tool_call", "timestamp": "2024-01-01T00:00:00Z",
+                {"type": "tool_call_record", "timestamp": 1704067200.0,
                  "data": {"tool_name": "<script>alert('xss')</script>",
-                          "service_id": "evil", "args": {}, "result": "pwned"}},
+                          "service_id": "evil", "arguments": {}, "result": "pwned",
+                          "channel": "mcp"}},
             ],
-            "metadata": {"app_name": "<img onerror=alert(1)>", "simulation_id": "xss-test"},
         }
         result = run_pipeline(trace)
         # Card markdown should not contain raw script tags
@@ -145,13 +151,14 @@ class TestAdapterXSSResistance(unittest.TestCase):
 
     def test_xss_in_args_sanitized(self):
         trace = {
+            "session_id": "xss-args",
+            "metadata": V1_META,
             "events": [
-                {"type": "mcp_tool_call", "timestamp": "2024-01-01T00:00:00Z",
+                {"type": "tool_call_record", "timestamp": 1704067200.0,
                  "data": {"tool_name": "safe_tool", "service_id": "s",
-                          "args": {"payload": "<script>document.cookie</script>"},
-                          "result": "ok"}},
+                          "arguments": {"payload": "<script>document.cookie</script>"},
+                          "result": "ok", "channel": "mcp"}},
             ],
-            "metadata": {"app_name": "test", "simulation_id": "xss-args"},
         }
         result = run_pipeline(trace)
         self.assertNotIn("<script>", result.card_md)
@@ -164,12 +171,14 @@ class TestAdapterLargeInput(unittest.TestCase):
         """Tool call with 1MB args shouldn't produce 1MB card."""
         big_data = "x" * (1024 * 1024)  # 1MB string
         trace = {
+            "session_id": "big-test",
+            "metadata": V1_META,
             "events": [
-                {"type": "mcp_tool_call", "timestamp": "2024-01-01T00:00:00Z",
+                {"type": "tool_call_record", "timestamp": 1704067200.0,
                  "data": {"tool_name": "big_tool", "service_id": "s",
-                          "args": {"huge": big_data}, "result": big_data}},
+                          "arguments": {"huge": big_data}, "result": big_data,
+                          "channel": "mcp"}},
             ],
-            "metadata": {"app_name": "big", "simulation_id": "big-test"},
         }
         result = run_pipeline(trace)
         # Card should be reasonable size (under 50KB)
@@ -183,7 +192,12 @@ class TestAdapterLargeInput(unittest.TestCase):
                       "args": {"i": i}, "result": f"result_{i}", "channel": "stdio"}}
             for i in range(500)
         ]
-        trace = {"events": events, "app_name": "bulk", "session_id": "bulk-test"}
+        trace = {
+            "session_id": "bulk-test",
+            "app_name": "bulk",
+            "metadata": V1_META,
+            "events": events,
+        }
         result = run_pipeline(trace)
         self.assertGreater(len(result.bundle.tool_calls), 0)
         # Should complete without error
@@ -195,12 +209,15 @@ class TestAdapterUnicode(unittest.TestCase):
 
     def test_null_bytes_stripped(self):
         trace = {
+            "session_id": "unicode-test",
+            "app_name": "null\x00byte",
+            "metadata": V1_META,
             "events": [
-                {"type": "mcp_tool_call", "timestamp": "2024-01-01T00:00:00Z",
+                {"type": "tool_call_record", "timestamp": 1704067200.0,
                  "data": {"tool_name": "unicode_tool\x00", "service_id": "s\x00",
-                          "args": {"key": "val\x00ue"}, "result": "ok\x00"}},
+                          "arguments": {"key": "val\x00ue"}, "result": "ok\x00",
+                          "channel": "mcp"}},
             ],
-            "metadata": {"app_name": "null\x00byte", "simulation_id": "unicode-test"},
         }
         result = run_pipeline(trace)
         self.assertNotIn("\x00", result.card_md)
@@ -209,10 +226,12 @@ class TestAdapterUnicode(unittest.TestCase):
         trace = {
             "session_id": "cn-test",
             "app_name": "中文应用",
+            "metadata": V1_META,
             "events": [
                 {"type": "tool_call_record", "timestamp": 1704067200.0,
                  "data": {"tool_name": "搜索工具🔍", "service_id": "搜索服务",
-                          "args": {"query": "你好世界🌍"}, "result": "找到了✓", "channel": "stdio"}},
+                          "arguments": {"query": "你好世界🌍"}, "result": "找到了✓",
+                          "channel": "stdio"}},
             ],
         }
         result = run_pipeline(trace)

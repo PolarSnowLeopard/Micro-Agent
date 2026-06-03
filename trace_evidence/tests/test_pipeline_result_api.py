@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from trace_evidence import run_pipeline
 
 TRACE_PATH = os.path.join(
-    os.path.dirname(__file__), '..', '..', 'workspace', 'data', 'traces', 'sim-headless-2bc5a5f8cdbe.json'
+    os.path.dirname(__file__), 'fixtures', 'minimal_v1_trace.json'
 )
 
 
