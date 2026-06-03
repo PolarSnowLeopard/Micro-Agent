@@ -405,10 +405,25 @@ def render_evidence_card_markdown(card: EvidenceCard) -> str:
         hdr_cols.append("Source")
         sep_cols.append("--------")
 
+        # Use collapsible <details> for large timelines (>5 calls)
+        use_collapsible = len(card.tool_call_details) > 5
+        if use_collapsible:
+            lines.extend([
+                "",
+                "## 🔧 Tool Call Timeline",
+                "",
+                "<details>",
+                f"<summary>Show {len(card.tool_call_details)} tool calls</summary>",
+                "",
+            ])
+        else:
+            lines.extend([
+                "",
+                "## 🔧 Tool Call Timeline",
+                "",
+            ])
+
         lines.extend([
-            "",
-            "## 🔧 Tool Call Timeline",
-            "",
             "| " + " | ".join(hdr_cols) + " |",
             "| " + " | ".join(sep_cols) + " |",
         ])
@@ -434,6 +449,10 @@ def render_evidence_card_markdown(card: EvidenceCard) -> str:
             lines.append("| " + " | ".join(row) + " |")
         lines.append("")
         lines.append(f"*{len(card.tool_call_details)} tool calls recorded.*")
+
+        # Close collapsible block if opened
+        if use_collapsible:
+            lines.extend(["", "</details>"])
 
     lines.extend([
         "",
@@ -463,11 +482,22 @@ def render_evidence_card_markdown(card: EvidenceCard) -> str:
 
     # Planner/Agent reasoning events for debrief
     if card.planner_events:
-        lines.extend([
-            "",
-            "## 🧠 Planner Events",
-            "",
-        ])
+        use_collapsible_planner = len(card.planner_events) > 5
+        if use_collapsible_planner:
+            lines.extend([
+                "",
+                "## 🧠 Planner Events",
+                "",
+                "<details>",
+                f"<summary>Show {len(card.planner_events)} planner events</summary>",
+                "",
+            ])
+        else:
+            lines.extend([
+                "",
+                "## 🧠 Planner Events",
+                "",
+            ])
         for pe in card.planner_events:
             iter_label = f"Iteration {pe.get('iteration', '?')}" if pe.get('iteration') else "Init"
             # Show only HH:MM:SS for readability
@@ -480,6 +510,9 @@ def render_evidence_card_markdown(card: EvidenceCard) -> str:
             for pline in preview.split('\n'):
                 lines.append(f"> {pline}")
             lines.append("")
+
+        if use_collapsible_planner:
+            lines.extend(["", "</details>"])
 
     if card.missing_evidence:
         lines.extend([
