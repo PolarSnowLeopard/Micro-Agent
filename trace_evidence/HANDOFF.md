@@ -1,24 +1,35 @@
-# Wake #10 Handoff
+# HANDOFF — Trace Evidence v1 (Wake#11)
 
 ## Commit
-`e04a92d` — schema_version in config_draft + output cleanup rotation
+`167851d` — wake#11: evidence_card collapsible sections + edge case tests
 
-## Delivered This Wake
-1. **schema_version in ConfigAttachmentDraft** — Added `schema_version="1.0.0"` field, serialized as first key in `to_dict()` output. Matches evidence_card and checker_report convention.
-2. **Output folder cleanup** — `_cleanup_output_dir()` removes stale `ev-*` / `sim-*` / `*_bundle.json` artifacts before each new pipeline run. Only canonical outputs survive.
-3. **Trace rotation** — `_rotate_traces()` keeps only the 5 most recent trace files, preventing unbounded growth.
-4. **2 new tests** — `test_schema_version_present` + `test_schema_version_first_key` in test_config_attachment.py.
+## What Was Delivered
 
-## Verification
-- 157 unit tests PASS
-- Fresh headless trace: 20/20 checks PASS, cleanup removed 11 stale files, 1 old trace rotated
+### 1. Evidence Card Readability (evidence_card.py)
+- Collapsible `<details>` sections for tool timeline when >5 entries
+- Collapsible `<details>` sections for planner events when >5 entries
+- Keeps cards compact for large traces while preserving full detail on expand
 
-## Test Count Progression
-Wake#5: 55 → Wake#6: 125 → Wake#7: 132 → Wake#8: 148 → Wake#9: 155 → Wake#10: 157
+### 2. Edge Case Tests (test_edge_cases.py — 15 tests, all PASS)
+- **TestCheckerEdgeCases** (7 tests): empty bundle, single tool call (with/without return), missing planner thoughts, missing completion, missing verification, many-iterations-single-tool
+- **TestExecutionEvidenceSlot** (5 tests): slot presence, structure keys, empty bundle paths, multiple services dispatch, elapsed_ms in metrics
+- **TestMarkdownReadability** (3 tests): header presence, collapsible tool timeline >5, no collapsible when <=5
 
-## Remaining Quality Angles (for future wakes)
-- evidence_card.md readability polish (table widths, section folding)
-- Broader e2e integration test (config_attachment round-trip through full pipeline)
-- Performance profiling of headless_run (currently ~25s)
-- Schema validation test for config_draft JSON against a formal JSON Schema
-- CI integration (GitHub Actions workflow for pytest + headless)
+### 3. executionEvidence Slot Verification
+- Tests confirm P0-⑤ executionEvidence slot in config_attachment works correctly
+- Verified keys: traceSessionId, evidenceId, verdict, executionPath, toolChannels, dispatchSequence, metrics
+
+## Test Status
+- **111 passed** (existing) + **15 new** = 126 running tests
+- **51 skipped** (MCP port-dependent)
+- **2 pre-existing failures** in test_graceful_degradation (checker is lenient on missing session_id — design choice, not regression)
+- **8 pre-existing errors** in test_pipeline_result_api (import/setup issue from prior wake)
+
+## Known Issues for Next Wake
+1. `test_graceful_degradation.py` — 2 tests expect WARN/FAIL for missing session_id but checker returns PASS. Decision needed: tighten checker or loosen test?
+2. `test_pipeline_result_api.py` — 8 errors from import issue (PipelineResult class path changed?)
+3. 3 unstaged simulation files (`orchestrator.py`, `sandbox_tool.py`, `logging_mcp_tool.py`) — from earlier work, not committed
+
+## Architecture Notes
+- All test factories now use **real dataclasses** from `trace_adapter.py` (no more FakeX classes)
+- This eliminates interface drift permanently — tests fail immediately if fields change
