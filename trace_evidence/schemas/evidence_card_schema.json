@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evidence_card_v0",
+  "title": "Evidence Card",
+  "description": "Structured evidence card produced by trace_evidence pipeline from a simulation trace.",
+  "type": "object",
+  "required": [
+    "evidence_id",
+    "session_id",
+    "generated_at",
+    "summary",
+    "timeline",
+    "tool_call_summary",
+    "services_discovered",
+    "missing_evidence",
+    "provenance",
+    "evidence_fingerprint"
+  ],
+  "properties": {
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^ev-[a-f0-9]{6}-[a-f0-9]{8}$",
+      "description": "Unique evidence identifier: ev-{session_prefix}-{hash}"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Original trace session identifier"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when evidence card was generated"
+    },
+    "app_name": {
+      "type": ["string", "null"],
+      "description": "Application name from trace metadata"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the evidence card schema (e.g., 1.0.0)"
+    },
+    "domain": {
+      "type": ["string", "null"],
+      "description": "Application domain (e.g., health, finance)"
+    },
+    "mode": {
+      "type": ["string", "null"],
+      "description": "Execution mode"
+    },
+    "strategy": {
+      "type": ["object", "null"],
+      "description": "Strategy configuration from trace"
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total_tool_calls",
+        "total_tool_returns",
+        "unique_services_called",
+        "services_discovered"
+      ],
+      "properties": {
+        "total_tool_calls": { "type": "integer", "minimum": 0 },
+        "total_tool_returns": { "type": "integer", "minimum": 0 },
+        "unique_services_called": { "type": "integer", "minimum": 0 },
+        "services_discovered": { "type": "integer", "minimum": 0 },
+        "planner_thoughts": { "type": "integer", "minimum": 0 },
+        "phases_recorded": { "type": "integer", "minimum": 0 },
+        "iterations_recorded": { "type": "integer", "minimum": 0 },
+        "evidence_gaps": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "timeline": {
+      "type": "object",
+      "required": ["start", "end", "duration_sec"],
+      "properties": {
+        "start": { "type": "number", "description": "Unix epoch start" },
+        "end": { "type": "number", "description": "Unix epoch end" },
+        "duration_sec": { "type": "number", "minimum": 0 },
+        "start_iso": { "type": "string" },
+        "end_iso": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "tool_call_summary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["service_id", "call_count"],
+        "properties": {
+          "service_id": { "type": "string", "minLength": 1 },
+          "call_count": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "services_discovered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["service_id", "status", "channel"],
+        "properties": {
+          "service_id": { "type": "string", "minLength": 1 },
+          "status": { "type": "string" },
+          "channel": { "type": "string" },
+          "tool_count": { "type": ["integer", "null"], "minimum": 0 },
+          "latency_ms": { "type": ["number", "null"], "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "verification": {
+      "type": ["object", "null"],
+      "properties": {
+        "status": { "type": "string" },
+        "reason": { "type": ["string", "null"] },
+        "has_raw_text": { "type": "boolean" },
+        "missing": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "completion": {
+      "type": ["object", "null"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "iterations": { "type": "integer", "minimum": 0 },
+        "elapsed_ms": { "type": ["number", "null"], "minimum": 0 },
+        "execution_path": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "missing_evidence": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Explicit list of evidence items that could not be extracted"
+    },
+    "tool_call_details": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool_name", "service_id", "channel"],
+        "properties": {
+          "tool_name": { "type": "string", "minLength": 1 },
+          "service_id": { "type": "string", "minLength": 1 },
+          "channel": { "type": "string" },
+          "timestamp_iso": { "type": ["string", "null"] },
+          "latency_ms": { "type": ["number", "null"] },
+          "has_result": { "type": "boolean" },
+          "has_error": { "type": "boolean" },
+          "source": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "planner_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["iteration"],
+        "properties": {
+          "iteration": { "type": "integer", "minimum": 0 },
+          "thought_preview": { "type": ["string", "null"] },
+          "preview": { "type": ["string", "null"] },
+          "timestamp_iso": { "type": ["string", "null"] },
+          "source": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "pipeline_version": { "type": "string" },
+        "adapter_version": { "type": "string" },
+        "source_trace": { "type": ["string", "null"] },
+        "extraction_method": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "evidence_fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 fingerprint of the evidence card content"
+    }
+  },
+  "additionalProperties": false
+}

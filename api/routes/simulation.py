@@ -10,7 +10,10 @@
 
 from __future__ import annotations
 
+import platform
+import time
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -95,16 +98,58 @@ async def simulation_stream(session_id: str):
                     final_iterations = metrics.get("iterations", 0)
                     final_elapsed = metrics.get("elapsedMs", 0)
         finally:
+            # === P0-① Evidence Enhancement: 收集结构化工具调用记录 ===
+            tool_call_events = []
+            try:
+                call_records = orchestrator._collect_call_records()
+                for rec in call_records:
+                    tool_call_events.append({
+                        "type": "tool_call_record",
+                        "data": {
+                            "tool_name": rec.tool_name,
+                            "service_id": rec.service_id,
+                            "arguments": rec.arguments,
+                            "result": rec.result[:2000] if rec.result else None,
+                            "error": rec.error,
+                            "latency_ms": rec.latency_ms,
+                            "timestamp": rec.timestamp,
+                        },
+                        "timestamp": rec.timestamp,
+                    })
+            except Exception as e:
+                logger.debug(f"收集 tool_call_records 失败 (non-fatal): {e}")
+
+            # === P0-① Evidence Enhancement: 构建元数据 ===
+            metadata = {
+                "config_snapshot": {
+                    "appId": cfg.get("appId", ""),
+                    "serviceIds": cfg.get("serviceIds", []),
+                    "servicesMeta": cfg.get("servicesMeta", []),
+                    "maxIterations": cfg.get("maxIterations", 3),
+                    "scenarioDescription": cfg.get("scenarioDescription", ""),
+                },
+                "runtime": {
+                    "platform": platform.system(),
+                    "python_version": platform.python_version(),
+                    "trace_version": "v0.1.0",
+                },
+                "tool_call_count": len(tool_call_events),
+            }
+
+            # 合并 tool_call_record 到 trace_events 末尾
+            all_events = trace_events + tool_call_events
+
             record = TraceRecord(
                 session_id=session_id,
                 app_name=cfg.get("appName", ""),
                 domain=cfg.get("domain", ""),
                 mode=cfg.get("mode", "production"),
                 strategy=cfg.get("strategy", {}),
-                events=trace_events,
+                events=all_events,
                 success=final_success,
                 iterations=final_iterations,
                 elapsed_ms=final_elapsed,
+                metadata=metadata,
             )
             try:
                 await _trace_store.save(record)

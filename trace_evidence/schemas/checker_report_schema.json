@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "checker_report_v0",
+  "title": "Checker Report",
+  "description": "Evidence checker report validating the quality and completeness of a trace evidence card.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "evidence_id",
+    "session_id",
+    "checked_at",
+    "overall_status",
+    "summary",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the checker report schema"
+    },
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^ev-[a-f0-9]{6}-[a-f0-9]{8}$",
+      "description": "Evidence identifier this report validates"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Original trace session identifier"
+    },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when check was performed"
+    },
+    "overall_status": {
+      "type": "string",
+      "enum": ["PASS", "WARN", "FAIL"],
+      "description": "Worst status across all checks"
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total_checks", "passed", "warnings", "failed", "missing"],
+      "properties": {
+        "total_checks": { "type": "integer", "minimum": 1 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "missing": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["check_name", "status", "detail"],
+        "properties": {
+          "check_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Machine-readable check identifier"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["PASS", "WARN", "FAIL", "MISSING"],
+            "description": "Check result status"
+          },
+          "detail": {
+            "type": "string",
+            "description": "Human-readable explanation of the check result"
+          },
+          "evidence_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of evidence items found for this check"
+          },
+          "missing_items": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of specific items missing or problematic"
+          },
+          "remediation": {
+            "type": "string",
+            "description": "Actionable operator guidance for resolving non-PASS checks"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
