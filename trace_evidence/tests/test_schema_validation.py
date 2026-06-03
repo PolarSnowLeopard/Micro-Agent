@@ -85,8 +85,11 @@ class TestPipelineOutputValidation(unittest.TestCase):
             timeout=60,
         )
         self.assertEqual(result.returncode, 0, f"Pipeline failed: {result.stderr}")
-        # Find evidence card file (starts with 'ev-')
-        ev_files = list(Path(outdir).glob("ev-*.json"))
+        # Find evidence card file (starts with 'ev-', exclude auxiliary files)
+        ev_files = [
+            f for f in Path(outdir).glob("ev-*.json")
+            if "_config_draft" not in f.name and "_checker_report" not in f.name
+        ]
         self.assertTrue(ev_files, f"No evidence card found in {outdir}")
         card = json.loads(ev_files[0].read_text(encoding="utf-8"))
         # Cleanup

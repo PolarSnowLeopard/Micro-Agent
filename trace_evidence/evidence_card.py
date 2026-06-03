@@ -22,6 +22,20 @@ except ImportError:
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+
+
+def _normalize_ts(val) -> float:
+    """Convert timestamp to epoch float. Accepts float, int, or ISO-8601 string."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        # Try ISO format with/without Z suffix
+        ts = val.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(ts).timestamp()
+        except ValueError:
+            return 0.0
+    return 0.0
 from pathlib import Path
 from typing import Any, Optional
 
@@ -103,11 +117,11 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
     # 时间线
     timestamps = []
     if bundle.services:
-        timestamps.append(bundle.services[0].timestamp)
+        timestamps.append(_normalize_ts(bundle.services[0].timestamp))
     if bundle.completion:
-        timestamps.append(bundle.completion.timestamp)
+        timestamps.append(_normalize_ts(bundle.completion.timestamp))
     for tc in bundle.tool_calls:
-        timestamps.append(tc.timestamp)
+        timestamps.append(_normalize_ts(tc.timestamp))
 
     timeline = {}
     if timestamps:
@@ -242,19 +256,29 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
     }
 
     # 详细工具调用时间线 (只展示 call 方向, 按时间排序)
+    # Build lookup from matching "return" entries to get result/error
+    return_events = [tc for tc in bundle.tool_calls if tc.direction == "return"]
+    return_lookup: dict[tuple, "ToolCallEvidence"] = {}
+    for ret in return_events:
+        key = (ret.tool_name, ret.timestamp, ret.trace_event_index)
+        return_lookup[key] = ret
+
     tool_call_details = []
     for tc in sorted(call_events, key=lambda x: x.timestamp or 0):
+        # Find matching return by (tool_name, timestamp, event_index)
+        ret_key = (tc.tool_name, tc.timestamp, tc.trace_event_index)
+        ret = return_lookup.get(ret_key)
         detail = {
             "tool_name": tc.tool_name,
             "service_id": tc.service_id,
             "channel": tc.channel,
             "timestamp_iso": (
-                datetime.fromtimestamp(tc.timestamp, tz=timezone.utc).strftime("%H:%M:%S")
+                datetime.fromtimestamp(_normalize_ts(tc.timestamp), tz=timezone.utc).strftime("%H:%M:%S")
                 if tc.timestamp else "N/A"
             ),
-            "latency_ms": tc.latency_ms,
-            "has_result": tc.result is not None,
-            "has_error": tc.error is not None,
+            "latency_ms": tc.latency_ms or (ret.latency_ms if ret else None),
+            "has_result": (ret.result is not None) if ret else (tc.result is not None),
+            "has_error": (ret.error is not None) if ret else (tc.error is not None),
             "source": tc.source,
         }
         tool_call_details.append(detail)
@@ -266,14 +290,22 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
         content_preview = redact_secrets((pt.content or "")[:200])
         if len(pt.content or "") > 200:
             content_preview += "..."
-        planner_events.append({
+        event_entry = {
             "iteration": pt.iteration,
             "timestamp_iso": (
-                datetime.fromtimestamp(pt.timestamp, tz=timezone.utc).strftime("%H:%M:%S")
+                datetime.fromtimestamp(_normalize_ts(pt.timestamp), tz=timezone.utc).strftime("%H:%M:%S")
                 if pt.timestamp else "N/A"
             ),
             "preview": content_preview,
-        })
+            "source": getattr(pt, "source", "inferred_from_log"),
+            "confidence": getattr(pt, "confidence", "inferred"),
+        }
+        # Include v1 structured fields when available
+        if getattr(pt, "candidate_tools", None):
+            event_entry["candidate_tools"] = pt.candidate_tools
+        if getattr(pt, "selected_tools", None):
+            event_entry["selected_tools"] = pt.selected_tools
+        planner_events.append(event_entry)
 
     return EvidenceCard(
         evidence_id=evidence_id,

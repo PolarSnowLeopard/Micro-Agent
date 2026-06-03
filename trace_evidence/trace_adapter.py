@@ -41,6 +41,7 @@ class ToolCallEvidence:
     result: Optional[str] = None
     error: Optional[str] = None
     latency_ms: Optional[int] = None
+    result_hash: Optional[str] = None
     missing_evidence: list[str] = field(default_factory=list)
 
 
@@ -61,12 +62,15 @@ class ServiceEvidence:
 
 @dataclass
 class PlannerThoughtEvidence:
-    """Planner 思考过程证据（从 log 提取）"""
-    content: str  # 原始文本
+    """Planner 思考过程证据"""
+    content: str  # 原始文本 or reasoning
     timestamp: float
     iteration: Optional[int] = None
-    source: str = "inferred_from_log"  # planner thoughts are parsed from log text
-    confidence: str = "inferred"  # inferred since extracted via regex
+    source: str = "inferred_from_log"  # or "original_trace" for structured events
+    confidence: str = "inferred"  # or "original" for structured events
+    # v1 structured fields (from planner_decision event)
+    candidate_tools: Optional[list[str]] = None
+    selected_tools: Optional[list[str]] = None
 
 
 @dataclass
@@ -284,6 +288,7 @@ class TraceEvidenceAdapter:
                 result=d.get("result"),
                 error=d.get("error"),
                 latency_ms=d.get("latency_ms"),
+                result_hash=d.get("result_hash"),
                 trace_event_index=_ev_idx,
             ))
         return results
@@ -359,8 +364,28 @@ class TraceEvidenceAdapter:
                 tc.channel = "local"
 
     def _extract_planner_thoughts(self) -> list[PlannerThoughtEvidence]:
-        """从 log 中提取 [Planner] 思考: 开头的思考过程"""
+        """提取 Planner 思考过程。优先读取结构化 planner_decision 事件（v1），
+        fallback 到 log 文本解析。
+        """
         results = []
+        # === Priority 1: structured planner_decision events (v1) ===
+        for ev in self.events:
+            if ev.get("type") == "planner_decision":
+                d = ev.get("data", {})
+                reasoning = d.get("reasoning", "")
+                results.append(PlannerThoughtEvidence(
+                    content=reasoning or f"Selected {len(d.get('selected_tools', []))} tools from {len(d.get('candidate_tools', []))} candidates",
+                    timestamp=ev["timestamp"],
+                    iteration=d.get("iteration"),
+                    source="original_trace",
+                    confidence="original",
+                    candidate_tools=d.get("candidate_tools"),
+                    selected_tools=d.get("selected_tools"),
+                ))
+        if results:
+            return results
+
+        # === Priority 2: log text with [Planner] 思考: (legacy) ===
         current_iteration = 1
         for _ev_idx, ev in enumerate(self.events):
             if ev["type"] == "iteration":
@@ -412,11 +437,38 @@ class TraceEvidenceAdapter:
         return results
 
     def _extract_verification(self) -> Optional[VerificationEvidence]:
-        """从 log 中提取验证结果——检查 Planner 思考中的 PASSED/FAILED。
-        
-        Fallback: 如果没有显式 PASSED/FAILED 文本，但 completion event 有 success 字段，
-        则使用 completion.success 推断验证状态（置信度为 derived）。
+        """提取验证结果。优先读取结构化 verifier_result 事件（v1），
+        fallback 到 log 文本解析或 completion.success 推断。
         """
+        # === Priority 1: structured verifier_result event (v1) ===
+        for ev in self.events:
+            if ev.get("type") == "verifier_result":
+                d = ev.get("data", {})
+                status = d.get("status", "UNKNOWN")
+                # Prefer "summary" (rich text), fall back to "reason"
+                reason = d.get("summary") or d.get("reason") or None
+                checks = d.get("checks", [])
+                # Build reason from checks if not explicitly provided
+                if not reason and checks:
+                    failed = [c for c in checks if c.get("status") not in ("PASS", "PASSED")]
+                    if failed:
+                        reason = "; ".join(
+                            f"{c.get('check', c.get('name', '?'))}:{c['status']}"
+                            for c in failed[:5]
+                        )
+                    else:
+                        reason = f"All {len(checks)} checks passed"
+                return VerificationEvidence(
+                    status=status,
+                    reason=reason,
+                    timestamp=ev.get("timestamp"),
+                    raw_text=None,
+                    source="original_trace",
+                    confidence="original",
+                    missing_evidence=[],
+                )
+
+        # === Priority 2: log text with PASSED/FAILED (legacy) ===
         verification_texts = []
         for _ev_idx, ev in enumerate(self.events):
             if ev["type"] != "log":
@@ -468,15 +520,52 @@ class TraceEvidenceAdapter:
                 d = ev["data"]
                 metrics = d.get("metrics", {})
                 result = d.get("result", {})
+                execution_path = result.get("executionPath", [])
+                tool_channels = result.get("toolChannels", [])
+
+                # Synthesize execution_path from phase events if not explicit
+                if not execution_path:
+                    execution_path = self._synthesize_execution_path()
+
+                # Synthesize tool_channels from service discovery if not explicit
+                if not tool_channels:
+                    tool_channels = self._synthesize_tool_channels()
+
                 return CompleteEvidence(
                     success=d.get("success", False),
                     iterations=metrics.get("iterations", 0),
                     elapsed_ms=metrics.get("elapsedMs", 0),
-                    execution_path=result.get("executionPath", []),
-                    tool_channels=result.get("toolChannels", []),
+                    execution_path=execution_path,
+                    tool_channels=tool_channels,
                     timestamp=ev["timestamp"],
                 )
         return None
+
+    def _synthesize_execution_path(self) -> list[str]:
+        """Reconstruct execution_path from phase events when not explicitly stored."""
+        seen = []
+        for ev in self.events:
+            if ev.get("type") == "phase":
+                phase_name = ev.get("data", {}).get("phase", "")
+                status = ev.get("data", {}).get("status", "")
+                if phase_name and status == "running" and phase_name not in seen:
+                    seen.append(phase_name)
+        return seen
+
+    def _synthesize_tool_channels(self) -> list[str]:
+        """Reconstruct tool_channels from service discovery events."""
+        channels = set()
+        for ev in self.events:
+            if ev.get("type") == "service":
+                data = ev.get("data", {})
+                # Detect channel from mcpUrl or explicit channel field
+                if data.get("mcpUrl") or data.get("channel") == "mcp":
+                    channels.add("mcp")
+                elif data.get("httpUrl") or data.get("channel") == "http":
+                    channels.add("http")
+                elif data.get("channel"):
+                    channels.add(data["channel"])
+        return sorted(channels)
 
     def _assess_gaps(self, bundle: TraceEvidenceBundle) -> list[str]:
         """评估证据缺口"""

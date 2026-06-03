@@ -169,7 +169,16 @@
           "thought_preview": { "type": ["string", "null"] },
           "preview": { "type": ["string", "null"] },
           "timestamp_iso": { "type": ["string", "null"] },
-          "source": { "type": "string" }
+          "source": { "type": "string" },
+          "confidence": { "type": "string" },
+          "candidate_tools": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "selected_tools": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
         },
         "additionalProperties": false
       }

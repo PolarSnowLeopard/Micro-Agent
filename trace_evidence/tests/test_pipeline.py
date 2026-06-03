@@ -139,8 +139,8 @@ class TestEvidenceChecker(unittest.TestCase):
         checker = EvidenceChecker(bundle, card)
         cls.report = checker.run_all()
 
-    def test_runs_19_checks(self):
-        self.assertEqual(len(self.report.checks), 19)
+    def test_runs_20_checks(self):
+        self.assertEqual(len(self.report.checks), 20)
 
     def test_no_failures_on_real_trace(self):
         self.assertEqual(self.report.summary["failed"], 0)
@@ -289,7 +289,7 @@ class TestCLIIntegration(unittest.TestCase):
         data = json.loads(reports[0].read_text())
         self.assertIn("overall_status", data)
         self.assertIn("checks", data)
-        self.assertEqual(len(data["checks"]), 19)
+        self.assertEqual(len(data["checks"]), 20)
 
     def test_checker_report_md_produced(self):
         reports = [f for f in Path(self.tmpdir).iterdir()
@@ -524,6 +524,100 @@ class TestRunPipelineConvenience(unittest.TestCase):
                 # Detail should be a non-empty informative string
                 self.assertGreater(len(check.detail), 0)
                 break
+
+
+class TestTimestampRobustness(unittest.TestCase):
+    """Edge-case tests for _normalize_ts and timestamp handling in evidence_card."""
+
+    def test_normalize_ts_float(self):
+        from evidence_card import _normalize_ts
+        self.assertAlmostEqual(_normalize_ts(1700000000.0), 1700000000.0)
+
+    def test_normalize_ts_int(self):
+        from evidence_card import _normalize_ts
+        self.assertEqual(_normalize_ts(1700000000), 1700000000.0)
+
+    def test_normalize_ts_iso_string(self):
+        from evidence_card import _normalize_ts
+        ts = _normalize_ts("2024-01-15T10:30:00+00:00")
+        self.assertIsInstance(ts, float)
+        self.assertGreater(ts, 1700000000)
+
+    def test_normalize_ts_iso_z_suffix(self):
+        from evidence_card import _normalize_ts
+        ts = _normalize_ts("2024-01-15T10:30:00Z")
+        self.assertIsInstance(ts, float)
+        self.assertGreater(ts, 1700000000)
+
+    def test_normalize_ts_invalid_string(self):
+        from evidence_card import _normalize_ts
+        self.assertEqual(_normalize_ts("not-a-date"), 0.0)
+
+    def test_normalize_ts_none_like(self):
+        from evidence_card import _normalize_ts
+        self.assertEqual(_normalize_ts(None), 0.0)
+
+    def test_card_with_iso_timestamps_no_crash(self):
+        """Regression: build_evidence_card must not crash on ISO string timestamps."""
+        from trace_adapter import ToolCallEvidence, ServiceEvidence, TraceEvidenceBundle
+
+        tc = ToolCallEvidence(
+            tool_name="test_tool", service_id="svc1", direction="call",
+            timestamp="2024-06-01T12:00:00Z",
+            trace_event_index=0, channel="real_mcp"
+        )
+        svc = ServiceEvidence(
+            service_id="svc1", status="connected", latency_ms=50,
+            channel="real_mcp", tools=["test_tool"],
+            timestamp="2024-06-01T12:00:01Z"
+        )
+        bundle = TraceEvidenceBundle(
+            session_id="test-iso-ts",
+            app_name="test", domain="test", mode="headless",
+            strategy={"type": "test"},
+            tool_calls=[tc], services=[svc],
+            completion=None, planner_thoughts=[], missing_evidence=[]
+        )
+        card = build_evidence_card(bundle)
+        self.assertIn("start", card.timeline)
+        self.assertIsInstance(card.timeline["duration_sec"], float)
+
+
+class TestSanitizationSecurity(unittest.TestCase):
+    """Test that malicious inputs are sanitized in card output."""
+
+    def test_redact_secrets_api_key(self):
+        from sanitize import redact_secrets
+        text = "Using key sk-abc123def456ghi789jkl012mno345pqr678"
+        result = redact_secrets(text)
+        self.assertNotIn("sk-abc123", result)
+        self.assertIn("[REDACTED", result)
+
+    def test_redact_secrets_bearer_token(self):
+        from sanitize import redact_secrets
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig"
+        result = redact_secrets(text)
+        self.assertNotIn("eyJhbGci", result)
+        self.assertIn("[REDACTED", result)
+
+    def test_sanitize_md_cell_injection(self):
+        from sanitize import sanitize_md_cell
+        malicious = "cell | injected | extra"
+        result = sanitize_md_cell(malicious)
+        # Pipe chars are escaped with backslash — won't break markdown tables
+        self.assertNotIn(" | ", result)  # raw unescaped pipe gone
+
+    def test_sanitize_md_block_html_injection(self):
+        from sanitize import sanitize_md_block
+        malicious = '<script>alert("xss")</script>'
+        result = sanitize_md_block(malicious)
+        self.assertNotIn("<script>", result)
+
+    def test_sanitize_identifier_length_limit(self):
+        from sanitize import sanitize_identifier
+        long_id = "a" * 200
+        result = sanitize_identifier(long_id)
+        self.assertLessEqual(len(result), 80)
 
 
 if __name__ == "__main__":

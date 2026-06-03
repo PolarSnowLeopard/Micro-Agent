@@ -25,9 +25,9 @@ The pipeline produces 6 files:
 |------|-------------|
 | `evidence_card.json` | Structured evidence: tool calls, phases, iterations, planner thoughts, verification |
 | `evidence_card.md` | Human-readable markdown version of the evidence card |
-| `checker_report.json` | Machine-readable report with 19 check results |
+| `checker_report.json` | Machine-readable report with 20 check results |
 | `checker_report.md` | Human-readable report with pass/warn/fail table |
-| `config_draft.json` | Config attachment draft linking evidence ID to session config |
+| `config_attachment_draft.json` | Config attachment draft linking evidence ID + executionEvidence to session config |
 | `bundle.json` | Full pipeline bundle (trace + all intermediate data, for replay/debugging) |
 
 ## Architecture
@@ -51,11 +51,11 @@ The pipeline produces 6 files:
     │ EvidenceCard   │  │ ConfigDraft │  │ EvidenceChecker  │
     │ (evidence_card │  │ (config_    │  │ (evidence_       │
     │  .py)          │  │  attachment │  │  checker.py)     │
-    │                │  │  .py)       │  │  19 checks       │
+    │                │  │  .py)       │  │  20 checks       │
     └────────────────┘  └─────────────┘  └─────────────────┘
 ```
 
-## The 19 Checks
+## The 20 Checks
 
 | # | Check | What it validates |
 |---|-------|-------------------|
@@ -78,6 +78,7 @@ The pipeline produces 6 files:
 | 17 | `tool_call_details_consistency` | Detail count matches summary total |
 | 18 | `planner_events_completeness` | Planner events have iteration + content |
 | 19 | `timeline_monotonicity` | Tool call timestamps are monotonically ordered |
+| 20 | `result_hash_integrity` | Result hashes match recomputed sha256 of tool outputs |
 
 Each check returns one of: **PASS**, **WARN** (non-fatal gap), **FAIL** (integrity violation), or **MISSING** (cannot evaluate).
 
@@ -131,15 +132,15 @@ The pipeline never fabricates evidence. When data is missing, it reports `missin
 ## Testing
 
 ```bash
-# Run all tests (129 as of Pass #36)
+# Run all tests (125 as of v1.0.0)
 cd /path/to/Micro-Agent
-python -m pytest trace_evidence/tests/ -v
+python -m unittest discover -s trace_evidence/tests -p "test_*.py" -v
 
 # Run just the pipeline E2E test
-python -m pytest trace_evidence/tests/test_pipeline.py -v
+python -m unittest trace_evidence.tests.test_pipeline -v
 
 # Run schema validation tests only
-python -m pytest trace_evidence/tests/test_schema_validation.py -v
+python -m unittest trace_evidence.tests.test_schema_validation -v
 ```
 
 Test coverage includes: unit tests, adversarial inputs, JSON Schema validation (both evidence_card and checker_report), E2E pipeline, CLI interface, and secret redaction.

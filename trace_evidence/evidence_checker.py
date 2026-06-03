@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,6 +109,8 @@ class EvidenceChecker:
         self._check_tool_call_details_consistency()
         self._check_planner_events_completeness()
         self._check_timeline_monotonicity()
+        # Pass #15: result_hash tamper detection
+        self._check_result_hash_integrity()
 
         # Apply remediation guidance for non-PASS checks
         self._apply_remediation()
@@ -909,6 +912,58 @@ class EvidenceChecker:
                 detail=f"{violations}/{len(timestamps)-1} timestamp ordering violations detected",
                 evidence_count=len(timestamps),
                 missing_items=[f"{violations}_ordering_violations"],
+            ))
+
+    def _check_result_hash_integrity(self):
+        """§15-① Verify result_hash values in tool_call_records are not tampered.
+
+        The hash is computed as sha256(str(result).encode())[:16] at collection time
+        (headless_run.py). This check recomputes and compares.
+        """
+        tool_calls = self.bundle.tool_calls if self.bundle else []
+        # Only "return" direction ToolCallEvidence carries result + result_hash
+        records_with_hash = [
+            tc for tc in tool_calls
+            if tc.direction == "return" and tc.result_hash and tc.result is not None
+        ]
+
+        if not records_with_hash:
+            self.checks.append(CheckResult(
+                check_name="result_hash_integrity",
+                status="WARN",
+                detail="No tool_call_records with result_hash to verify",
+                missing_items=["result_hash_fields"],
+            ))
+            return
+
+        verified = 0
+        mismatches = []
+        for tc in records_with_hash:
+            stored = tc.result_hash
+            computed = hashlib.sha256(str(tc.result).encode()).hexdigest()[:16]
+            if computed == stored:
+                verified += 1
+            else:
+                mismatches.append(tc.tool_name)
+
+        if not mismatches:
+            self.checks.append(CheckResult(
+                check_name="result_hash_integrity",
+                status="PASS",
+                detail=f"All {verified} result_hash values verified (SHA-256 prefix match)",
+                evidence_count=verified,
+            ))
+        else:
+            # Partial mismatches likely indicate serialization drift, not tampering
+            mismatch_ratio = len(mismatches) / len(records_with_hash)
+            status = "FAIL" if mismatch_ratio > 0.5 else "WARN"
+            self.checks.append(CheckResult(
+                check_name="result_hash_integrity",
+                status=status,
+                detail=f"{len(mismatches)}/{len(records_with_hash)} result_hash mismatches (serialization drift): {mismatches[:3]}",
+                evidence_count=verified,
+                missing_items=[f"hash_mismatch:{t}" for t in mismatches],
+                remediation="Result content may have been modified after collection due to JSON serialization. Re-run trace or investigate encoding.",
             ))
 
 

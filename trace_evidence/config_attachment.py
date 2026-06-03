@@ -48,6 +48,9 @@ class ConfigAttachmentDraft:
     # 服务调度配置 (从 tool_call 顺序推断)
     dispatch_sequence: list[dict] = field(default_factory=list)
 
+    # P0-⑤ executionEvidence 槽位: 打包执行证据供下游配置系统消费
+    execution_evidence: dict = field(default_factory=dict)
+
     # 草稿状态说明
     notes: list[str] = field(default_factory=list)
 
@@ -95,6 +98,26 @@ def build_config_attachment_draft(
         "Use evidence_id to trace back to full evidence bundle.",
     ]
 
+    # P0-⑤ executionEvidence 槽位: 打包执行证据供下游配置系统消费
+    execution_evidence = {
+        "traceSessionId": bundle.session_id,
+        "evidenceId": card.evidence_id,
+        "verdict": card.verification.get("status", "unknown") if card.verification else "unknown",
+        "executionPath": bundle.completion.execution_path if bundle.completion else [],
+        "toolChannels": bundle.completion.tool_channels if bundle.completion else [],
+        "dispatchSequence": [
+            {"tool": d["tool"], "serviceId": d["service_id"]}
+            for d in dispatch_sequence
+        ],
+        "metrics": runtime_metrics,
+        "integrity": {
+            "checkerVersion": "v1.0.0",
+            "summary": card.summary if card.summary else {},
+        },
+        "generatedAt": datetime.now(tz=timezone.utc).isoformat(),
+        "draft": True,
+    }
+
     return ConfigAttachmentDraft(
         evidence_id=card.evidence_id,
         session_id=bundle.session_id,
@@ -107,5 +130,6 @@ def build_config_attachment_draft(
         strategy=bundle.strategy,
         runtime_metrics=runtime_metrics,
         dispatch_sequence=dispatch_sequence,
+        execution_evidence=execution_evidence,
         notes=notes,
     )
