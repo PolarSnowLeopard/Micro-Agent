@@ -11,9 +11,7 @@
 from __future__ import annotations
 
 import platform
-import time
 import uuid
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 

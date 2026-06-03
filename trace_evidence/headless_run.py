@@ -136,51 +136,25 @@ async def run_headless() -> Path | None:
                 "timestamp": time.time(),
             })
 
-    # === Collect tool_call_records from orchestrator internals ===
+    # === Collect tool_call_records (same schema as api/routes/simulation.py) ===
     tool_call_events: list[dict] = []
     try:
-        for binding in orch._mcp_bindings:
-            for tool in binding.tools:
-                for rec in getattr(tool, "_call_records", []):
-                    tool_call_events.append({
-                        "type": "tool_call_record",
-                        "data": {
-                            "tool_name": rec.tool_name if hasattr(rec, "tool_name") else str(rec),
-                            "service_id": binding.service_id,
-                            "service_name": binding.service_name,
-                            "channel": "mcp",
-                            "input": getattr(rec, "input_args", None),
-                            "output": getattr(rec, "output", None),
-                            "error": getattr(rec, "error", None),
-                            "latency_ms": getattr(rec, "latency_ms", None),
-                            "timestamp": getattr(rec, "timestamp", time.time()),
-                        },
-                        "timestamp": getattr(rec, "timestamp", time.time()),
-                    })
+        for rec in orch._collect_call_records():
+            tool_call_events.append({
+                "type": "tool_call_record",
+                "data": {
+                    "tool_name": rec.tool_name,
+                    "service_id": rec.service_id,
+                    "arguments": rec.arguments,
+                    "result": rec.result[:2000] if rec.result else None,
+                    "error": rec.error,
+                    "latency_ms": rec.latency_ms,
+                    "timestamp": rec.timestamp,
+                },
+                "timestamp": rec.timestamp,
+            })
     except Exception as e:
         logger.debug(f"收集 tool_call_records 失败 (non-fatal): {e}")
-
-    # Also collect from sandbox tools
-    try:
-        for tool in orch._sandbox_tools:
-            for rec in tool.call_records:
-                tool_call_events.append({
-                    "type": "tool_call_record",
-                    "data": {
-                        "tool_name": rec.tool_name,
-                        "service_id": tool.service_id,
-                        "service_name": tool.service_name,
-                        "channel": "sandbox",
-                        "input": rec.input_args,
-                        "output": rec.output,
-                        "error": rec.error,
-                        "latency_ms": rec.latency_ms,
-                        "timestamp": rec.timestamp,
-                    },
-                    "timestamp": rec.timestamp,
-                })
-    except Exception as e:
-        logger.debug(f"收集 sandbox_tool records 失败 (non-fatal): {e}")
 
     # === Build metadata (mirrors simulation.py pattern) ===
     metadata = {
