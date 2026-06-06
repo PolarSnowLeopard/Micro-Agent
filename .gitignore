@@ -40,3 +40,5 @@ trace_evidence/INFRASTRUCTURE_REPORT.md
 trace_evidence/PROGRESS.md
 trace_evidence/output/
 trace_evidence/output_headless/
+trace_evidence/output_audit/
+trace_evidence/output_audit_*/
