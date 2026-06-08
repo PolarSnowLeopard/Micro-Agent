@@ -12,7 +12,7 @@ python trace_evidence/run_pipeline.py workspace/data/traces/sim-b963f6d83a89.jso
 python -c "
 from trace_evidence import run_pipeline
 result = run_pipeline('path/to/trace.json')
-print(result.report.overall_status)  # PASS / WARN / FAIL
+print(result.report.overall_status)  # PASS / WARN / FAIL / WARN_INCOMPLETE / INCOMPLETE_TRACE
 result.save_to_dir('./output')
 "
 ```

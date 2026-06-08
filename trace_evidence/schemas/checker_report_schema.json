@@ -39,9 +39,11 @@
       "enum": [
         "PASS",
         "WARN",
-        "FAIL"
+        "FAIL",
+        "WARN_INCOMPLETE",
+        "INCOMPLETE_TRACE"
       ],
-      "description": "Worst status across all checks"
+      "description": "Overall report status: for complete traces, worst evidence-quality verdict (PASS/WARN/FAIL); for incomplete traces, mirrors completeness (WARN_INCOMPLETE/INCOMPLETE_TRACE)"
     },
     "summary": {
       "type": "object",

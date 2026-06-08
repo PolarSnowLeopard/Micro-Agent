@@ -268,7 +268,7 @@ ioeb 前端
 | Artifact 编译 | 元应用产物样例 | ⚠️ `artifact_compiler.py` + `/artifact` 已实现，**未 commit** |
 | 前端拉取 | 可加载、可检查 | ❌ `loadDetailArtifacts` 仅 trace + evidence，**未接 `/artifact`** |
 | complete.result | 构建完成可携带产物引用 | ❌ 无 `artifactRef` / `compiledApp` |
-| prePublish 载荷 | 用户确认后可写回 | ❌ 仅 `finalResult`（executionPath 等），无 artifact 字段 |
+| prePublish 载荷 | 预发布元数据 + artifact 写回 | ⚠️ 名称/描述/类型/I-O 由现有预发布表单收集✅；缺 artifact/trace 哈希字段❌ |
 | ioeb_backend 表 | 四类产物可持久化 | ❌ ServiceApi 无 artifact/trace 哈希列 |
 | DB 迁移 | 新字段可上线 | ❌ 无 `migrations/` 目录 |
 

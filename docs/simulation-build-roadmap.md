@@ -54,7 +54,7 @@
 |----|------|------|------|
 | ~~C1~~ | ArtifactSpec 编译器 | **完成** | `artifact_compiler.py` + schema + `/artifact`（**缺单测**） |
 | C2 | 主链路集成 | 进行中 | 仿真结束可选触发 evidence/artifact；`complete.result` + `artifactRef` |
-| C3 | 中间产物补齐 | 待做 | `parsedIntent`；状态断言；服务契约；用户确认记录 |
+| C3 | 中间产物补齐 | 待做 | `parsedIntent`；状态断言；服务契约（预发布表单元数据不算缺口） |
 | C4 | 前端展示 | 待做 | ioeb `loadDetailArtifacts` 接 `/artifact` |
 | C5 | 写回 ioeb_backend | 待做 | ServiceApi 新列 + 迁移（见 RECON §4） |
 
@@ -99,7 +99,7 @@ flowchart TD
 | 优先级 | 演进项 |
 |--------|--------|
 | **P0** | C1 单测；C4 前端 `/artifact`；演示统一 `【本地MCP】` 真链路 |
-| **P1** | C3 想定解析 / 状态断言 / 服务契约 / 用户确认；A2 CoW；B1 任务集 |
+| **P1** | C3 想定解析 / 状态断言 / 服务契约；A2 CoW；B1 任务集 |
 | **P2** | D1 + D2；C5 写回；B2 批处理 |
 | **P3** | orchestrator 拆分；evidence 三入口收敛；私有方法外泄清理 |
 

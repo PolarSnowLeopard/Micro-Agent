@@ -565,8 +565,8 @@
         },
         "checkerStatus": {
           "type": ["string", "null"],
-          "enum": ["PASS", "WARN", "FAIL", null],
-          "description": "证据检查器的总体裁决"
+          "enum": ["PASS", "WARN", "FAIL", "WARN_INCOMPLETE", "INCOMPLETE_TRACE", null],
+          "description": "证据检查器的总体裁决（与 CheckerReport.overall_status 一致，含不完整 trace 态）"
         },
         "completeness": {
           "type": ["string", "null"],

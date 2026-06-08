@@ -261,9 +261,12 @@ class TestCheckerReportOutputValidation(unittest.TestCase):
         self.assertGreater(len(report.get("checks", [])), 0)
 
     def test_checker_report_overall_status_valid(self):
-        """overall_status is one of PASS/WARN/FAIL."""
+        """overall_status matches checker_report schema enum."""
         report = self._run_pipeline_and_get_checker_report()
-        self.assertIn(report["overall_status"], ["PASS", "WARN", "FAIL"])
+        self.assertIn(
+            report["overall_status"],
+            ["PASS", "WARN", "FAIL", "WARN_INCOMPLETE", "INCOMPLETE_TRACE"],
+        )
 
 
 @unittest.skipUnless(HAS_JSONSCHEMA, "jsonschema not installed")
