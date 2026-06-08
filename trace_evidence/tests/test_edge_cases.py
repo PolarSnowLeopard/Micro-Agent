@@ -124,7 +124,7 @@ class TestCheckerEdgeCases(unittest.TestCase):
 
     def test_completely_empty_bundle(self):
         report = self._run_checker(make_bundle())
-        self.assertIn(report.overall_status, ("WARN", "FAIL"))
+        self.assertIn(report.overall_status, ("WARN", "FAIL", "WARN_INCOMPLETE", "INCOMPLETE_TRACE"))
         self.assertGreater(report.summary["total_checks"], 0)
 
     def test_single_tool_call_no_return(self):
@@ -134,7 +134,7 @@ class TestCheckerEdgeCases(unittest.TestCase):
             completion=make_completion(iterations=1),
         )
         report = self._run_checker(bundle)
-        self.assertIn(report.overall_status, ("WARN", "FAIL"))
+        self.assertIn(report.overall_status, ("WARN", "FAIL", "WARN_INCOMPLETE", "INCOMPLETE_TRACE"))
         pair_check = [c for c in report.checks if c.check_name == "tool_call_pairs"]
         self.assertEqual(len(pair_check), 1)
 
@@ -151,7 +151,7 @@ class TestCheckerEdgeCases(unittest.TestCase):
             iterations=[make_iteration()],
         )
         report = self._run_checker(bundle)
-        self.assertIn(report.overall_status, ("PASS", "WARN"))
+        self.assertIn(report.overall_status, ("PASS", "WARN", "WARN_INCOMPLETE", "INCOMPLETE_TRACE"))
 
     def test_no_planner_thoughts(self):
         bundle = make_bundle(
@@ -177,7 +177,7 @@ class TestCheckerEdgeCases(unittest.TestCase):
             verification=make_verification(),
         )
         report = self._run_checker(bundle)
-        self.assertIn(report.overall_status, ("WARN", "FAIL"))
+        self.assertIn(report.overall_status, ("WARN", "FAIL", "WARN_INCOMPLETE", "INCOMPLETE_TRACE"))
         self.assertGreater(report.summary["total_checks"], 0)
 
     def test_no_verification(self):
@@ -188,7 +188,7 @@ class TestCheckerEdgeCases(unittest.TestCase):
             verification=None,
         )
         report = self._run_checker(bundle)
-        self.assertIn(report.overall_status, ("WARN", "FAIL"))
+        self.assertIn(report.overall_status, ("WARN", "FAIL", "WARN_INCOMPLETE", "INCOMPLETE_TRACE"))
 
     def test_many_iterations_single_tool(self):
         bundle = make_bundle(

@@ -30,7 +30,11 @@ class ToolCallEvidence:
     channel: str = "unknown"  # real_mcp | sandbox | mock | unknown
     # Traceability: index into trace["events"] for verification
     trace_event_index: Optional[int] = None
-    # 以下字段当前 trace 中无法获取，显式标为 missing
+    # §5 full tool_call provenance (sourced from tool_call_record events)
+    call_id: Optional[str] = None
+    transport: Optional[str] = None  # streamable_http | stdio | ...
+    success: Optional[bool] = None
+    truncated: bool = False
     arguments: Optional[dict] = None
     result: Optional[str] = None
     error: Optional[str] = None
@@ -65,6 +69,11 @@ class PlannerThoughtEvidence:
     # v1 structured fields (from planner_decision event)
     candidate_tools: Optional[list[str]] = None
     selected_tools: Optional[list[str]] = None
+    # §6 honesty flag: True when `content` is free-form planner reasoning (CoT /
+    # natural language) rather than a machine-structured decision summary.
+    # Downstream config systems must not treat such text as structured evidence.
+    natural_language_summary: bool = False
+    trace_event_index: Optional[int] = None
 
 
 @dataclass
@@ -102,6 +111,15 @@ class VerificationEvidence:
     source: str = "original_trace"
     confidence: str = "original"
     missing_evidence: list[str] = field(default_factory=list)
+    # §7 structured verifier evidence (extracted verbatim from verifier_result.data)
+    summary: Optional[str] = None
+    checks: list[dict] = field(default_factory=list)
+    issues: list = field(default_factory=list)
+    evidence_refs: list = field(default_factory=list)
+    # Honesty flag: True when the verifier only produced free-form natural-language
+    # text without structured checks/issues — downstream must treat it as weak.
+    weak_verifier_evidence: bool = False
+    trace_event_index: Optional[int] = None
 
 
 @dataclass
@@ -259,6 +277,11 @@ class TraceEvidenceAdapter:
             ts = ev.get("timestamp", d.get("timestamp", 0))
             channel = d.get("channel", "unknown")
             # 生成 call + return 两条
+            raw_result = d.get("result")
+            result_str = raw_result if isinstance(raw_result, str) else (
+                json.dumps(raw_result, ensure_ascii=False) if raw_result is not None else None
+            )
+            truncated = bool(result_str is not None and len(result_str) > 2000)
             results.append(ToolCallEvidence(
                 tool_name=d["tool_name"],
                 service_id=d.get("service_id", self._infer_service_id(d["tool_name"])),
@@ -267,6 +290,9 @@ class TraceEvidenceAdapter:
                 source="persisted_metadata",
                 confidence="original",
                 channel=channel,
+                call_id=d.get("call_id"),
+                transport=d.get("transport"),
+                success=d.get("success"),
                 arguments=d.get("arguments"),
                 latency_ms=d.get("latency_ms"),
                 trace_event_index=_ev_idx,
@@ -279,7 +305,11 @@ class TraceEvidenceAdapter:
                 source="persisted_metadata",
                 confidence="original",
                 channel=channel,
-                result=d.get("result"),
+                call_id=d.get("call_id"),
+                transport=d.get("transport"),
+                success=d.get("success"),
+                truncated=truncated,
+                result=result_str,
                 error=d.get("error"),
                 latency_ms=d.get("latency_ms"),
                 result_hash=d.get("result_hash"),
@@ -316,19 +346,30 @@ class TraceEvidenceAdapter:
 
     def _extract_planner_thoughts(self) -> list[PlannerThoughtEvidence]:
         results = []
-        for ev in self.events:
+        for _ev_idx, ev in enumerate(self.events):
             if ev.get("type") != "planner_decision":
                 continue
             d = ev.get("data", {})
             reason = d.get("reason") or d.get("reasoning") or ""
-            n_sel = len(d.get("selected_tools", []))
-            n_cand = len(d.get("candidate_tools", []))
+            sel = d.get("selected_tools") or []
+            cand = d.get("candidate_tools") or []
+            n_sel = len(sel)
+            n_cand = len(cand)
+            # §6: a free-form `reason` is natural-language planner CoT, not a
+            # machine-structured decision. We keep it but flag it so downstream
+            # never mistakes prose for a structured selection record. When the
+            # only content is the synthesized "Selected N tools..." summary the
+            # decision is structurally derived, not free-form prose.
+            has_free_text = bool(reason)
+            content = reason or f"Selected {n_sel} tools from {n_cand} candidates"
             results.append(PlannerThoughtEvidence(
-                content=reason or f"Selected {n_sel} tools from {n_cand} candidates",
+                content=content,
                 timestamp=ev["timestamp"],
                 iteration=d.get("iteration"),
-                candidate_tools=d.get("candidate_tools"),
-                selected_tools=d.get("selected_tools"),
+                candidate_tools=cand or None,
+                selected_tools=sel or None,
+                natural_language_summary=has_free_text,
+                trace_event_index=_ev_idx,
             ))
         return results
 
@@ -365,13 +406,17 @@ class TraceEvidenceAdapter:
         return results
 
     def _extract_verification(self) -> Optional[VerificationEvidence]:
-        for ev in reversed(self.events):
+        for idx in range(len(self.events) - 1, -1, -1):
+            ev = self.events[idx]
             if ev.get("type") != "verifier_result":
                 continue
             d = ev.get("data", {})
             status = d.get("status", "UNKNOWN")
-            reason = d.get("summary") or d.get("reason") or None
-            checks = d.get("checks", [])
+            summary = d.get("summary") or None
+            checks = d.get("checks", []) or []
+            issues = d.get("issues", []) or []
+            evidence_refs = d.get("evidence_refs") or d.get("evidenceRefs") or []
+            reason = summary or d.get("reason") or None
             if not reason and checks:
                 failed = [c for c in checks if c.get("status") not in ("PASS", "PASSED")]
                 reason = (
@@ -379,16 +424,27 @@ class TraceEvidenceAdapter:
                     if failed
                     else f"All {len(checks)} checks passed"
                 )
+            # §7 honesty flag: structured iff it carries machine-checkable checks
+            # or issues. A verifier that only emitted free-form text (summary/reason
+            # but no checks/issues) is weak and must be flagged for downstream.
+            weak = not checks and not issues
             return VerificationEvidence(
                 status=status,
                 reason=reason,
                 iteration=d.get("iteration"),
                 timestamp=ev.get("timestamp"),
                 missing_evidence=[],
+                summary=summary,
+                checks=checks,
+                issues=issues,
+                evidence_refs=evidence_refs,
+                weak_verifier_evidence=weak,
+                trace_event_index=idx,
             )
         return VerificationEvidence(
             status="UNKNOWN",
             missing_evidence=["verifier_result"],
+            weak_verifier_evidence=True,
         )
 
     def _extract_completion(self) -> Optional[CompleteEvidence]:

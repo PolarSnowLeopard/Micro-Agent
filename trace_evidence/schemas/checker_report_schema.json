@@ -36,18 +36,54 @@
     },
     "overall_status": {
       "type": "string",
-      "enum": ["PASS", "WARN", "FAIL"],
+      "enum": [
+        "PASS",
+        "WARN",
+        "FAIL"
+      ],
       "description": "Worst status across all checks"
     },
     "summary": {
       "type": "object",
-      "required": ["total_checks", "passed", "warnings", "failed", "missing"],
+      "required": [
+        "total_checks",
+        "passed",
+        "warnings",
+        "failed",
+        "missing"
+      ],
       "properties": {
-        "total_checks": { "type": "integer", "minimum": 1 },
-        "passed": { "type": "integer", "minimum": 0 },
-        "warnings": { "type": "integer", "minimum": 0 },
-        "failed": { "type": "integer", "minimum": 0 },
-        "missing": { "type": "integer", "minimum": 0 }
+        "total_checks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warnings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completeness": {
+          "type": "string",
+          "description": "Completion-state verdict"
+        },
+        "quality_verdict": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Evidence-quality verdict, only meaningful when trace is COMPLETE"
+        }
       },
       "additionalProperties": false
     },
@@ -56,7 +92,11 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["check_name", "status", "detail"],
+        "required": [
+          "check_name",
+          "status",
+          "detail"
+        ],
         "properties": {
           "check_name": {
             "type": "string",
@@ -65,7 +105,12 @@
           },
           "status": {
             "type": "string",
-            "enum": ["PASS", "WARN", "FAIL", "MISSING"],
+            "enum": [
+              "PASS",
+              "WARN",
+              "FAIL",
+              "MISSING"
+            ],
             "description": "Check result status"
           },
           "detail": {
@@ -79,7 +124,9 @@
           },
           "missing_items": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "List of specific items missing or problematic"
           },
           "remediation": {
@@ -88,12 +135,32 @@
           },
           "category": {
             "type": "string",
-            "enum": ["data", "logic"],
+            "enum": [
+              "data",
+              "logic"
+            ],
             "description": "Evaluation dimension: data fidelity vs planning / control-flow logic"
           }
         },
         "additionalProperties": false
       }
+    },
+    "completeness": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "INCOMPLETE_TRACE",
+        "WARN_INCOMPLETE",
+        "UNKNOWN"
+      ],
+      "description": "Trace completion-state verdict (gates evidence-quality checks)"
+    },
+    "completeness_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Explanation for the completeness verdict"
     }
   },
   "additionalProperties": false

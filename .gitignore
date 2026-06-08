@@ -26,6 +26,7 @@ config/config.toml
 # 运行时产生的临时文件
 workspace/data/memory/*.json
 workspace/data/traces/
+workspace/data/artifacts/
 workspace/app-demo-output/
 workspace/temp/
 
@@ -42,3 +43,8 @@ trace_evidence/output/
 trace_evidence/output_headless/
 trace_evidence/output_audit/
 trace_evidence/output_audit_*/
+# current/ 基线：说明文档入库，pipeline 生成物忽略（见 current/README.md）
+trace_evidence/current/*.json
+trace_evidence/current/evidence_card.md
+trace_evidence/current/checker_report.md
+trace_evidence/current/config_attachment_draft.json

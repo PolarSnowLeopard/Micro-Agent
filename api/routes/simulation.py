@@ -1,15 +1,20 @@
-"""仿真构建路由：启动仿真、SSE 事件流、轨迹查询。
+"""仿真构建路由：启动仿真、SSE 事件流、轨迹查询、证据分析、产物编译。
 
 端点与前端 simulation_builder.js HTTP 客户端一一对应：
-  POST /api/simulation/start           → 启动会话，返回 sessionId + streamUrl
-  GET  /api/simulation/{id}/stream     → SSE 命名事件流（EventSource 兼容）
-  POST /api/simulation/{id}/cancel     → 取消
-  GET  /api/simulation/records         → 列出历史轨迹
-  POST /api/simulation/records/compare → 对比
+  POST /api/simulation/start              → 启动会话，返回 sessionId + streamUrl
+  GET  /api/simulation/{id}/stream        → SSE 命名事件流（EventSource 兼容）
+  POST /api/simulation/{id}/cancel        → 取消
+  GET  /api/simulation/records            → 列出历史轨迹
+  POST /api/simulation/records/compare    → 对比
+  GET  /api/simulation/{id}/trace         → 获取已持久化轨迹
+  POST /api/simulation/{id}/evidence      → 构建证据卡片+检查报告（自动落盘）
+  GET  /api/simulation/{id}/artifact      → 获取 ArtifactSpec v0（确定性编译）
+  POST /api/simulation/{id}/artifact      → 按需构建 ArtifactSpec 并落盘
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -42,7 +47,7 @@ class SimulationStartRequest(BaseModel):
     domain: str = "generic"
     serviceIds: list[str] = Field(default_factory=list)
     servicesMeta: list[dict] = Field(default_factory=list)
-    maxIterations: int = 3
+    maxIterations: int = 5
     scenarioDescription: str = ""
     mode: str = "production"
     strategy: dict = Field(default_factory=dict)
@@ -156,8 +161,8 @@ async def cancel_simulation(session_id: str):
 # --------------- 轨迹查询 ---------------
 
 @router.get("/records")
-async def list_records():
-    return await _trace_store.list_all()
+async def list_records(appName: str | None = None):
+    return await _trace_store.list_all(app_name=appName)
 
 
 @router.post("/records/compare")
@@ -187,6 +192,14 @@ async def build_evidence(session_id: str):
         logger.warning(f"证据分析失败 {session_id}: {exc}")
         raise HTTPException(422, str(exc)) from exc
 
+    # ---- 持久化证据产物（消除"算完即弃"缺口） ----
+    evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
+    try:
+        manifest = result.save_to_dir(evidence_dir)
+        logger.info(f"证据产物已落盘: {evidence_dir} ({len(manifest)} 文件)")
+    except Exception as exc:
+        logger.warning(f"证据产物落盘失败 (non-fatal): {exc}")
+
     report = result.report
     from trace_evidence.evidence_checker import summarize_evidence_dimensions
 
@@ -210,4 +223,101 @@ async def build_evidence(session_id: str):
         "cardSummary": result.card.summary,
         "verification": result.card.verification,
         "missingEvidence": result.bundle.missing_evidence,
+    }
+
+
+@router.get("/{session_id}/artifact")
+async def get_artifact(session_id: str):
+    """获取仿真产物的 ArtifactSpec v0。从已持久化 trace 编译，幂等、确定性。"""
+    record = await _trace_store.load(session_id)
+    if not record:
+        raise HTTPException(404, "trace not found")
+
+    from micro_agent.simulation.artifact_compiler import compile_artifact_spec
+
+    try:
+        spec = compile_artifact_spec(record.to_dict())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        logger.warning(f"ArtifactSpec 编译失败 {session_id}: {exc}")
+        raise HTTPException(500, f"ArtifactSpec 编译失败: {exc}") from exc
+
+    return spec.to_dict()
+
+
+@router.post("/{session_id}/artifact")
+async def build_artifact(session_id: str):
+    """按需构建 ArtifactSpec v0 并落盘到 workspace/data/artifacts/{session_id}/。"""
+    record = await _trace_store.load(session_id)
+    if not record:
+        raise HTTPException(404, "trace not found")
+
+    from micro_agent.simulation.artifact_compiler import compile_artifact_spec
+
+    # 尝试加载 evidence PipelineResult 以充实 evidence 段
+    evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
+    pipeline_result = None
+    try:
+        import json as _json
+
+        pr_path = evidence_dir / "pipeline_result.json"
+        if pr_path.exists():
+            from trace_evidence import TraceEvidenceAdapter
+            from trace_evidence import build_evidence_card
+            from trace_evidence.evidence_checker import CheckerReport
+            from trace_evidence.config_attachment import ConfigAttachmentDraft
+
+            # Load evidence via adapter — creates the bundle
+            adapter = TraceEvidenceAdapter(record.to_dict())
+            bundle = adapter.extract()
+            card = build_evidence_card(bundle)
+
+            # Rebuild a minimal PipelineResult-like object for the compiler
+            class _EvMeta:
+                pass
+
+            meta = _EvMeta()
+            meta.bundle = bundle
+            meta.card = card
+
+            checker_data = _json.loads((evidence_dir / "checker_report.json").read_text("utf-8"))
+            report = CheckerReport(
+                schema_version=checker_data.get("schema_version", "1.0.0"),
+                evidence_id=checker_data.get("evidence_id", card.evidence_id),
+                session_id=checker_data.get("session_id", session_id),
+                checked_at=checker_data.get("checked_at", ""),
+                overall_status=checker_data.get("overall_status", "WARN"),
+                summary=checker_data.get("summary", {}),
+                checks=checker_data.get("checks", []),
+            )
+            meta.report = report
+            pipeline_result = meta
+    except Exception:
+        pass  # evidence enrichment is best-effort
+
+    try:
+        spec = compile_artifact_spec(record.to_dict(), pipeline_result)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        logger.warning(f"ArtifactSpec 编译失败 {session_id}: {exc}")
+        raise HTTPException(500, f"ArtifactSpec 编译失败: {exc}") from exc
+
+    # 落盘
+    art_dir = Path(config.workspace) / "data" / "artifacts" / session_id
+    art_dir.mkdir(parents=True, exist_ok=True)
+    art_path = art_dir / "artifact_spec.json"
+    art_path.write_text(
+        json.dumps(spec.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info(f"ArtifactSpec 已落盘: {art_path}")
+
+    return {
+        "artifactId": spec.artifactId,
+        "schemaVersion": spec.schemaVersion,
+        "sourceSessionId": session_id,
+        "solidifiable": spec.solidifiable,
+        "artifactPath": str(art_path),
     }

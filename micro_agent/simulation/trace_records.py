@@ -50,7 +50,7 @@ def build_trace_metadata(cfg: dict[str, Any], tool_call_count: int, *, headless:
             "appId": cfg.get("appId", ""),
             "serviceIds": cfg.get("serviceIds", []),
             "servicesMeta": cfg.get("servicesMeta", []),
-            "maxIterations": cfg.get("maxIterations", 3),
+            "maxIterations": cfg.get("maxIterations", 5),
             "scenarioDescription": cfg.get("scenarioDescription", ""),
         },
         "runtime": runtime,

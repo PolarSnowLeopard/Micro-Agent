@@ -165,6 +165,11 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
         verification = {
             "status": bundle.verification.status,
             "reason": bundle.verification.reason,
+            "summary": bundle.verification.summary,
+            "checks": bundle.verification.checks,
+            "issues": bundle.verification.issues,
+            "evidence_refs": bundle.verification.evidence_refs,
+            "weak_verifier_evidence": bundle.verification.weak_verifier_evidence,
             "has_raw_text": bundle.verification.raw_text is not None,
             "missing": bundle.verification.missing_evidence,
         }
@@ -258,14 +263,19 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
         ret_key = (tc.tool_name, tc.timestamp, tc.trace_event_index)
         ret = return_lookup.get(ret_key)
         detail = {
+            "call_id": tc.call_id,
             "tool_name": tc.tool_name,
             "service_id": tc.service_id,
             "channel": tc.channel,
+            "transport": tc.transport,
             "timestamp_iso": (
                 datetime.fromtimestamp(_normalize_ts(tc.timestamp), tz=timezone.utc).strftime("%H:%M:%S")
                 if tc.timestamp else "N/A"
             ),
             "latency_ms": tc.latency_ms or (ret.latency_ms if ret else None),
+            "success": tc.success if tc.success is not None else (ret.success if ret else None),
+            "result_hash": ret.result_hash if ret else tc.result_hash,
+            "truncated": (ret.truncated if ret else tc.truncated),
             "has_result": (ret.result is not None) if ret else (tc.result is not None),
             "has_error": (ret.error is not None) if ret else (tc.error is not None),
             "source": tc.source,
@@ -294,6 +304,9 @@ def build_evidence_card(bundle: TraceEvidenceBundle) -> EvidenceCard:
             event_entry["candidate_tools"] = pt.candidate_tools
         if getattr(pt, "selected_tools", None):
             event_entry["selected_tools"] = pt.selected_tools
+        # §6 honesty flag: surface whether this preview is free-form planner prose
+        if getattr(pt, "natural_language_summary", False):
+            event_entry["natural_language_summary"] = True
         planner_events.append(event_entry)
 
     return EvidenceCard(

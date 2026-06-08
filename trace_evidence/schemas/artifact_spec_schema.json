@@ -1,0 +1,818 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "artifact_spec_v0",
+  "title": "ArtifactSpec v0 — Meta-App Artifact Specification",
+  "description": "结构化元应用产物规格：从仿真轨迹中萃取可写回元应用配置、可溯源、可被调度智能体复用的结构化产物。v0 保守设计，仅断言能从现有 v1.0.0 trace 中确定性推导的字段。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "artifactId",
+    "sourceSessionId",
+    "createdAt",
+    "scenario",
+    "stateMachineTrace",
+    "provenance",
+    "solidifiable",
+    "solidificationReport"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "ArtifactSpec schema 语义版本。v0 基线为 0.1.0，后续递增。"
+    },
+    "artifactId": {
+      "type": "string",
+      "pattern": "^art-[a-f0-9]{6}-[a-f0-9]{8}$",
+      "description": "产物唯一标识：art-{session_prefix}-{content_hash_short}"
+    },
+    "sourceSessionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "来源仿真 session_id，可追溯到 TraceRecord"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ArtifactSpec 生成时间（ISO 8601）"
+    },
+    "metaApp": {
+      "type": "object",
+      "required": ["appName", "domain"],
+      "properties": {
+        "appName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "元应用名称（来自 trace metadata 或 complete.result.appName）"
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "应用域（来自 trace metadata）"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["production", "research", "headless"],
+          "description": "构建模式"
+        },
+        "appId": {
+          "type": ["string", "null"],
+          "description": "元应用 ID（来自 config_snapshot.appId）"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "scenario": {
+      "type": "object",
+      "required": ["title", "domain", "sourceDescription"],
+      "description": "场景解析的最终结论。v0 中 parsedIntent 为可选（当前 trace 未产出结构化意图），involvedServices 从 config_snapshot 推导。",
+      "properties": {
+        "scenarioId": {
+          "type": ["string", "null"],
+          "description": "场景字典 ID。v0 暂以 domain + appName 哈希衍生，待产品侧建立场景字典后替换。"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "场景标题（从 appName + scenarioDescription 提取）"
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "场景自然语言描述（从 trace metadata.config_snapshot.scenarioDescription 提取）"
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "域标识（health / aml / aircraft / agriculture / evtol / ecommerce / homeAI / generic）"
+        },
+        "parsedIntent": {
+          "type": ["object", "null"],
+          "description": "结构化意图解析结果。v0 为 null — Planner 当前产出自由文本 reason，未做结构化意图提取。后续版本可由 Planner 直接产出结构化 intent。",
+          "properties": {
+            "goal": {"type": "string"},
+            "constraints": {"type": "array", "items": {"type": "string"}},
+            "preferences": {"type": "array", "items": {"type": "string"}}
+          },
+          "additionalProperties": true
+        },
+        "involvedServices": {
+          "type": "array",
+          "minItems": 1,
+          "description": "场景涉及的 MCP 服务清单（从 metadata.config_snapshot.servicesMeta 提取）",
+          "items": {
+            "type": "object",
+            "required": ["serviceId", "name"],
+            "properties": {
+              "serviceId": {"type": "string", "minLength": 1},
+              "name": {"type": "string", "minLength": 1},
+              "description": {"type": ["string", "null"]},
+              "channel": {"type": ["string", "null"], "description": "通信方式 sse/stdio/streamable_http"},
+              "isFake": {"type": "boolean", "description": "是否为模拟服务"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "sourceDescription": {
+          "type": "string",
+          "description": "原始场景描述文本（来自 config_snapshot.scenarioDescription），保留作为证据链"
+        },
+        "evidenceRef": {
+          "type": "object",
+          "description": "指向 trace 中场景相关事件的证据引用",
+          "properties": {
+            "traceEventTypes": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "用于推导场景信息的事件类型列表"
+            },
+            "configSnapshotHash": {
+              "type": ["string", "null"],
+              "description": "metadata.config_snapshot 的 SHA-256"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "stateMachineTrace": {
+      "type": "object",
+      "required": ["states", "transitions", "iterations"],
+      "description": "类状态机的轨迹数据。把双 Agent (Planner/Verifier) 的调度回环抽象为状态流转，每个 transition 绑定一次或多次 MCP 调用，异常态标记断言失败/语义不通过/工具报错，退出条件标记是否可固化。",
+      "properties": {
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "description": "状态节点列表。每个状态记录进入时间、退出条件与关联的 trace 证据。",
+          "items": {
+            "type": "object",
+            "required": ["stateId", "state", "enteredAt"],
+            "properties": {
+              "stateId": {
+                "type": "string",
+                "pattern": "^state-[a-f0-9]{8}$",
+                "description": "状态节点唯一标识"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "INITIALIZING",
+                  "DISCOVERING",
+                  "PLANNING",
+                  "EXECUTING",
+                  "VERIFYING",
+                  "PASSED",
+                  "FAILED",
+                  "RETRYING",
+                  "COMPLETED",
+                  "TERMINAL_FAILED",
+                  "CANCELLED"
+                ],
+                "description": "状态枚举。INITIALIZING→DISCOVERING→PLANNING→EXECUTING→VERIFYING→PASSED/FAILED→RETRYING(回 PLANNING)/COMPLETED/TERMINAL_FAILED"
+              },
+              "iteration": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "所属迭代轮次。0 = 仿真初始化阶段。"
+              },
+              "enteredAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "进入此状态的 ISO 8601 时间戳"
+              },
+              "exitedAt": {
+                "type": ["string", "null"],
+                "format": "date-time",
+                "description": "离开此状态的时间戳。终态(COMPLETED/TERMINAL_FAILED/CANCELLED)可能为 null。"
+              },
+              "durationMs": {
+                "type": ["number", "null"],
+                "description": "状态持续时间（毫秒）"
+              },
+              "metadata": {
+                "type": "object",
+                "description": "状态上下文信息（因状态类型而异）",
+                "properties": {
+                  "phaseName": {
+                    "type": "string",
+                    "enum": ["init", "data", "logic", "check", "generation"],
+                    "description": "关联的 phase 名称（与 orchestrator phase 对齐）"
+                  },
+                  "servicesDiscovered": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "DISCOVERING 状态中发现的在线服务 ID 列表"
+                  },
+                  "selectedTools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "PLANNING 状态中选中的工具列表"
+                  },
+                  "verifierStatus": {
+                    "type": "string",
+                    "enum": ["PASSED", "FAILED"],
+                    "description": "VERIFYING 状态的裁决结果"
+                  },
+                  "toolSuccessCount": {"type": "integer", "minimum": 0},
+                  "toolFailureCount": {"type": "integer", "minimum": 0},
+                  "verifierIssues": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "VERIFYING/FAILED 状态中 Verifier 提出的问题"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "exception": {
+                "type": ["object", "null"],
+                "description": "异常态标记。非 null 表示此状态是异常状态（断言失败/语义不通过/工具报错）。",
+                "properties": {
+                  "exceptionType": {
+                    "type": "string",
+                    "enum": [
+                      "ASSERTION_FAILED",
+                      "SEMANTIC_FAILED",
+                      "TOOL_ERROR",
+                      "INFRASTRUCTURE_ERROR",
+                      "TIMEOUT",
+                      "MAX_ITERATIONS_EXHAUSTED"
+                    ]
+                  },
+                  "message": {"type": "string"},
+                  "sourceCallId": {
+                    "type": ["string", "null"],
+                    "description": "触发异常的工具调用 call_id"
+                  },
+                  "recoverable": {
+                    "type": "boolean",
+                    "description": "是否为可恢复异常（true = Planner 可重试，false = 终端）"
+                  }
+                },
+                "required": ["exceptionType", "message", "recoverable"]
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "指向 trace events 的引用键（event type + index 或 call_id）"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "minItems": 1,
+          "description": "状态转移列表。每个 transition 从 fromState 到 toState，可绑定 0 或多个工具调用。",
+          "items": {
+            "type": "object",
+            "required": ["transitionId", "fromState", "toState", "trigger"],
+            "properties": {
+              "transitionId": {
+                "type": "string",
+                "pattern": "^trans-[a-f0-9]{8}$",
+                "description": "转移唯一标识"
+              },
+              "fromState": {"type": "string", "minLength": 1},
+              "toState": {"type": "string", "minLength": 1},
+              "trigger": {
+                "type": "string",
+                "description": "触发此转移的事件描述",
+                "enum": [
+                  "simulation_started",
+                  "services_discovered",
+                  "planner_decision_emitted",
+                  "tools_executed",
+                  "verification_complete",
+                  "verification_passed",
+                  "verification_failed",
+                  "planner_retry",
+                  "max_iterations_reached",
+                  "simulation_cancelled",
+                  "infrastructure_error"
+                ]
+              },
+              "iteration": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "此转移发生在第几轮迭代"
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "转移发生的 ISO 8601 时间戳"
+              },
+              "boundToolCalls": {
+                "type": "array",
+                "description": "绑定到此转移的工具调用 call_id 列表（EXECUTING→VERIFYING 通常绑定全部本轮调用）",
+                "items": {
+                  "type": "object",
+                  "required": ["callId"],
+                  "properties": {
+                    "callId": {"type": "string", "minLength": 1},
+                    "toolName": {"type": "string"},
+                    "serviceId": {"type": "string"},
+                    "success": {"type": "boolean"},
+                    "latencyMs": {"type": ["number", "null"]},
+                    "resultHash": {"type": ["string", "null"]}
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "指向 trace 中对应事件（planner_decision/verifier_result/tool_call_record）的引用"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "iterations": {
+          "type": "array",
+          "minItems": 1,
+          "description": "每轮迭代的调度→执行→验证快照。这是 Planner 出链→Verifier 审→纠偏→再出链回环的逐轮记录，是状态机异常态/退出固化判断的数据来源。",
+          "items": {
+            "type": "object",
+            "required": ["iterationNumber", "states", "planner", "verifier", "toolCalls"],
+            "properties": {
+              "iterationNumber": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "迭代轮次（从 1 开始）"
+              },
+              "states": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "description": "本轮迭代经过的状态 stateId 列表（按时间顺序）"
+              },
+              "planner": {
+                "type": "object",
+                "required": ["selectedTools"],
+                "description": "本轮 Planner 决策快照",
+                "properties": {
+                  "iteration": {"type": "integer", "minimum": 1},
+                  "candidateTools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "候选工具列表"
+                  },
+                  "selectedTools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "description": "最终选中的工具列表（按调度顺序）"
+                  },
+                  "executionPath": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "预期执行路径（含服务名和工具名的可读描述）"
+                  },
+                  "reasonSummary": {
+                    "type": ["string", "null"],
+                    "description": "Planner 决策理由摘要（从自由文本 reason 截取首段，最多 500 字符）"
+                  },
+                  "dispatchSteps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["tool", "serviceId"],
+                      "properties": {
+                        "tool": {"type": "string"},
+                        "serviceId": {"type": "string"},
+                        "latencyMs": {"type": ["number", "null"]}
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "调度步骤（从 planner_decision.dispatch.steps 提取）"
+                  },
+                  "totalExpectedCalls": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Planner 预期的总调用数"
+                  },
+                  "evidenceRef": {
+                    "type": "string",
+                    "description": "指向 trace 中 planner_decision 事件的引用"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "verifier": {
+                "type": ["object", "null"],
+                "description": "本轮 Verifier 裁决快照。当 VERIFYING 状态未产出 verifier_result 时为 null。",
+                "properties": {
+                  "iteration": {"type": "integer", "minimum": 1},
+                  "status": {
+                    "type": "string",
+                    "enum": ["PASSED", "FAILED"]
+                  },
+                  "summary": {
+                    "type": ["string", "null"],
+                    "description": "Verifier 裁决摘要（最多 500 字符）"
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["check", "status"],
+                      "properties": {
+                        "check": {"type": "string"},
+                        "status": {"type": "string"},
+                        "evidenceRefs": {
+                          "type": "array",
+                          "items": {"type": "string"}
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "issues": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Verifier 识别的问题列表"
+                  },
+                  "issueCount": {"type": "integer", "minimum": 0},
+                  "evidenceRef": {
+                    "type": ["string", "null"],
+                    "description": "指向 trace 中 verifier_result 事件的引用"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "toolCalls": {
+                "type": "array",
+                "description": "本轮实际发生的 MCP 调用记录（按时间顺序）",
+                "items": {
+                  "type": "object",
+                  "required": ["callId", "toolName", "serviceId", "channel", "success"],
+                  "properties": {
+                    "callId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "工具调用唯一标识"
+                    },
+                    "toolName": {"type": "string", "minLength": 1},
+                    "serviceId": {"type": "string", "minLength": 1},
+                    "serviceName": {"type": ["string", "null"]},
+                    "channel": {
+                      "type": "string",
+                      "enum": ["real_mcp", "sandbox"],
+                      "description": "调用通道"
+                    },
+                    "transport": {
+                      "type": ["string", "null"],
+                      "enum": ["sse", "stdio", "streamable_http", null],
+                      "description": "MCP 传输协议"
+                    },
+                    "arguments": {
+                      "type": "object",
+                      "description": "工具调用参数（原始参数，可能含敏感信息需脱敏）"
+                    },
+                    "resultPreview": {
+                      "type": ["string", "null"],
+                      "description": "工具返回结果预览（截断至 2000 字符）"
+                    },
+                    "resultHash": {
+                      "type": ["string", "null"],
+                      "description": "结果哈希（SHA-256 前 16 位 hex）"
+                    },
+                    "error": {
+                      "type": ["string", "null"],
+                      "description": "错误信息（仅 success=false 时存在）"
+                    },
+                    "latencyMs": {
+                      "type": ["number", "null"],
+                      "minimum": 0
+                    },
+                    "timestamp": {
+                      "type": ["number", "null"],
+                      "description": "Unix epoch 时间戳"
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "description": "调用是否成功"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "exception": {
+                "type": ["object", "null"],
+                "description": "本轮异常信息。当 verifier.status=FAILED 或存在工具调用失败时非 null。",
+                "properties": {
+                  "hasToolError": {"type": "boolean"},
+                  "hasVerifierFailure": {"type": "boolean"},
+                  "failedToolCalls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "失败的 call_id 列表"
+                  },
+                  "verifierIssues": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "totalIterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "总迭代轮数（来自 trace.iterations）"
+        },
+        "finalStatus": {
+          "type": "string",
+          "enum": ["SUCCESS", "FAILED", "CANCELLED", "UNKNOWN"],
+          "description": "仿真的最终状态（来自 trace.success + complete 事件）"
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "仿真总耗时（毫秒，来自 trace.elapsed_ms）"
+        },
+        "strategy": {
+          "type": "object",
+          "description": "构建策略（来自 trace.strategy）",
+          "properties": {
+            "minIterations": {"type": "integer", "minimum": 0},
+            "verificationMode": {"type": "string"}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "evidence": {
+      "type": "object",
+      "description": "证据产物快照。由 trace_evidence pipeline 产出，可内嵌或引用。v0 为可选 — 若仿真未跑 evidence pipeline 则此字段为 null。",
+      "properties": {
+        "evidenceId": {
+          "type": ["string", "null"],
+          "pattern": "^ev-[a-f0-9]{6}-[a-f0-9]{8}$",
+          "description": "Evidence card 唯一标识"
+        },
+        "evidenceFingerprint": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Evidence card SHA-256 指纹"
+        },
+        "checkerStatus": {
+          "type": ["string", "null"],
+          "enum": ["PASS", "WARN", "FAIL", null],
+          "description": "证据检查器的总体裁决"
+        },
+        "completeness": {
+          "type": ["string", "null"],
+          "enum": ["COMPLETE", "INCOMPLETE_TRACE", "WARN_INCOMPLETE", "UNKNOWN", null],
+          "description": "证据完整性裁决"
+        },
+        "missingEvidenceCategories": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "缺失的证据类别"
+        },
+        "evidenceRef": {
+          "type": ["string", "null"],
+          "description": "指向持久化证据产物文件的路径或 URL"
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "provenance": {
+      "type": "object",
+      "required": ["sourceSessionId", "sourceTraceVersion", "artifactHash"],
+      "description": "溯源哈希字段。用于与服务器侧数据匹配/溯源，确保产物可审计。",
+      "properties": {
+        "sourceSessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "来源仿真 session_id"
+        },
+        "sourceTraceVersion": {
+          "type": "string",
+          "pattern": "^v\\d+\\.\\d+\\.\\d+$",
+          "description": "来源 trace 的版本（当前均为 v1.0.0）"
+        },
+        "traceHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "原始 trace 文件完整内容的 SHA-256 哈希"
+        },
+        "configSnapshotHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "metadata.config_snapshot 部分的 SHA-256 哈希"
+        },
+        "artifactHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "本 ArtifactSpec（不含 artifactHash 字段自身）的 SHA-256 哈希。用于校验产物未被篡改。计算时 artifactHash 字段设为空字符串。"
+        },
+        "compilerVersion": {
+          "type": ["string", "null"],
+          "description": "编译器的代码版本/commit hash"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "产物创建时间"
+        },
+        "toolCallProvenance": {
+          "type": "array",
+          "description": "每个工具调用的溯源摘要，方便按 call_id 快速检索。",
+          "items": {
+            "type": "object",
+            "required": ["callId", "resultHash"],
+            "properties": {
+              "callId": {"type": "string", "minLength": 1},
+              "toolName": {"type": "string"},
+              "serviceId": {"type": "string"},
+              "channel": {"type": "string"},
+              "resultHash": {"type": ["string", "null"]},
+              "timestamp": {"type": ["number", "null"]}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "solidifiable": {
+      "type": "boolean",
+      "description": "产物是否可固化（可写回元应用配置并部署）。false 表示需要智能体/人工介入。"
+    },
+
+    "solidificationReport": {
+      "type": "object",
+      "required": ["solidifiable", "conditions", "gates"],
+      "description": "固化可行性报告。逐项列出固化必须满足的条件及其通过/失败状态。一个 gate 未通过即整体 solidifiable=false。",
+      "properties": {
+        "solidifiable": {"type": "boolean"},
+        "conditions": {
+          "type": "object",
+          "required": ["sufficientIterations", "verifierPassed", "evidenceComplete", "noUnresolvedToolErrors", "noInfrastructureErrors"],
+          "properties": {
+            "sufficientIterations": {
+              "type": "object",
+              "required": ["passed", "value", "required"],
+              "properties": {
+                "passed": {"type": "boolean"},
+                "value": {"type": "integer"},
+                "required": {"type": "integer"},
+                "detail": {"type": "string"}
+              },
+              "additionalProperties": false
+            },
+            "verifierPassed": {
+              "type": "object",
+              "required": ["passed"],
+              "properties": {
+                "passed": {"type": "boolean"},
+                "status": {"type": "string"},
+                "detail": {"type": "string"}
+              },
+              "additionalProperties": false
+            },
+            "evidenceComplete": {
+              "type": "object",
+              "required": ["passed"],
+              "properties": {
+                "passed": {"type": "boolean"},
+                "completenessStatus": {"type": ["string", "null"]},
+                "missingCategories": {
+                  "type": "array",
+                  "items": {"type": "string"}
+                },
+                "detail": {"type": "string"}
+              },
+              "additionalProperties": false
+            },
+            "noUnresolvedToolErrors": {
+              "type": "object",
+              "required": ["passed", "failedCalls"],
+              "properties": {
+                "passed": {"type": "boolean"},
+                "failedCalls": {"type": "integer"},
+                "failedCallIds": {
+                  "type": "array",
+                  "items": {"type": "string"}
+                },
+                "detail": {"type": "string"}
+              },
+              "additionalProperties": false
+            },
+            "noInfrastructureErrors": {
+              "type": "object",
+              "required": ["passed"],
+              "properties": {
+                "passed": {"type": "boolean"},
+                "detail": {"type": "string"}
+              },
+              "additionalProperties": false
+            },
+            "realMcpCallsPresent": {
+              "type": "object",
+              "required": ["passed", "realMcpCallCount"],
+              "properties": {
+                "passed": {"type": "boolean"},
+                "realMcpCallCount": {"type": "integer"},
+                "detail": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "gates": {
+          "type": "array",
+          "description": "固化门控的逐项检查结果",
+          "items": {
+            "type": "object",
+            "required": ["gate", "passed", "detail"],
+            "properties": {
+              "gate": {
+                "type": "string",
+                "description": "门控标识"
+              },
+              "passed": {"type": "boolean"},
+              "detail": {"type": "string"},
+              "remediation": {
+                "type": "string",
+                "description": "不通过时的修复建议"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "writeBackDraft": {
+      "type": ["object", "null"],
+      "description": "向 ioeb_backend 写回元应用配置的预填充草案。v0 为可选 — 仅当产物通过固化检查（solidifiable=true）时生成。",
+      "properties": {
+        "targetTable": {
+          "type": "string",
+          "enum": ["service_apis"],
+          "description": "目标数据库表（当前 ioeb_backend 复用 ServiceApi 表承载元应用配置）"
+        },
+        "existingFields": {
+          "type": "object",
+          "description": "可直写回现有 ServiceApi 字段的值",
+          "properties": {
+            "name": {"type": "string", "description": "→ ServiceApi.name"},
+            "subtitle": {"type": "string", "description": "→ ServiceApi.subtitle"},
+            "services": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "→ ServiceApi.services（逗号分隔的 service ID 列表）"
+            },
+            "inputName": {"type": "string", "description": "→ ServiceApi.input_name"},
+            "outputName": {"type": "string", "description": "→ ServiceApi.output_name"},
+            "outputVisualization": {"type": "boolean", "description": "→ ServiceApi.output_visualization"},
+            "submitButtonText": {"type": "string", "description": "→ ServiceApi.submit_button_text"},
+            "des": {"type": "string", "description": "→ ServiceApi.des（API 描述，此处复用为元应用描述）"}
+          },
+          "additionalProperties": false
+        },
+        "newFields": {
+          "type": "object",
+          "description": "需 ioeb_backend schema 迁移后写入的新字段（v0 暂不可用）",
+          "properties": {
+            "artifactSpecJson": {"type": "string", "description": "→ ServiceApi.artifact_spec_json（ArtifactSpec 完整 JSON）"},
+            "sourceSessionId": {"type": "string", "description": "→ ServiceApi.source_session_id"},
+            "traceHash": {"type": "string", "description": "→ ServiceApi.trace_hash"},
+            "artifactHash": {"type": "string", "description": "→ ServiceApi.artifact_hash"},
+            "schemaVersion": {"type": "string", "description": "→ ServiceApi.schema_version"}
+          },
+          "additionalProperties": false
+        },
+        "tools": {
+          "type": "array",
+          "description": "→ ServiceApiTool 列表（从 stateMachineTrace 中提取所有被调用的工具）",
+          "items": {
+            "type": "object",
+            "required": ["name", "description"],
+            "properties": {
+              "name": {"type": "string"},
+              "description": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

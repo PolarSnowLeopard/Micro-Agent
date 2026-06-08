@@ -99,7 +99,17 @@ class CheckerReport:
     evidence_id: str
     session_id: str
     checked_at: str
-    overall_status: str = ""  # PASS / WARN / FAIL
+    # §4 completeness triage (assessed BEFORE evidence-quality verdict):
+    #   COMPLETE          -> trace reached planning + verification phases
+    #   INCOMPLETE_TRACE  -> trace never reached planning (no planner/verifier) — structurally truncated
+    #   WARN_INCOMPLETE   -> partial: reached planning but not verification (or vice versa)
+    # A missing planner/verifier on an incomplete trace is NOT a regression; it is expected.
+    completeness: str = "COMPLETE"  # COMPLETE / WARN_INCOMPLETE / INCOMPLETE_TRACE
+    completeness_reason: str = ""
+    # overall_status semantics depend on completeness:
+    #   - incomplete traces  -> overall mirrors completeness (INCOMPLETE_TRACE / WARN_INCOMPLETE)
+    #   - complete traces     -> overall is the evidence-quality verdict (PASS / WARN / FAIL)
+    overall_status: str = ""  # PASS / WARN / FAIL / WARN_INCOMPLETE / INCOMPLETE_TRACE
     checks: list[CheckResult] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
 
@@ -109,6 +119,8 @@ class CheckerReport:
             "evidence_id": self.evidence_id,
             "session_id": self.session_id,
             "checked_at": self.checked_at,
+            "completeness": self.completeness,
+            "completeness_reason": self.completeness_reason,
             "overall_status": self.overall_status,
             "summary": self.summary,
             "checks": [asdict(c) for c in self.checks],
@@ -160,16 +172,50 @@ class EvidenceChecker:
         for check in self.checks:
             check.category = check_category(check.check_name)
 
+        # §4 completeness triage — assessed BEFORE the evidence-quality verdict.
+        # A trace that never reached planning/verification is structurally
+        # incomplete, NOT a quality regression. We must not penalise it for
+        # missing planner/verifier evidence.
+        has_planner = bool(self.bundle.planner_thoughts)
+        has_verifier = self.bundle.verification is not None or bool(self.card.verification)
+        if not has_planner and not has_verifier:
+            completeness = "INCOMPLETE_TRACE"
+            completeness_reason = (
+                "Trace never reached the planning phase (no planner_decision and "
+                "no verifier_result events). Missing planner/verifier evidence is "
+                "expected here and is not treated as a regression."
+            )
+        elif not has_planner or not has_verifier:
+            missing = "verification" if has_planner else "planning"
+            completeness = "WARN_INCOMPLETE"
+            completeness_reason = (
+                f"Trace reached only part of the loop — the {missing} phase produced "
+                "no structured evidence. Evaluated as partial, not a quality failure."
+            )
+        else:
+            completeness = "COMPLETE"
+            completeness_reason = "Trace reached both planning and verification phases."
+
         # 综合评定
         statuses = [c.status for c in self.checks]
         if "FAIL" in statuses:
-            overall = "FAIL"
+            quality_verdict = "FAIL"
         elif "MISSING" in statuses or "WARN" in statuses:
-            overall = "WARN"
+            quality_verdict = "WARN"
         else:
-            overall = "PASS"
+            quality_verdict = "PASS"
+
+        # Only complete traces are graded on evidence quality. Incomplete traces
+        # report their completeness state as the overall status so downstream
+        # consumers do not mistake a truncated run for a quality regression.
+        if completeness == "COMPLETE":
+            overall = quality_verdict
+        else:
+            overall = completeness
 
         summary = {
+            "completeness": completeness,
+            "quality_verdict": quality_verdict,
             "total_checks": len(self.checks),
             "passed": sum(1 for s in statuses if s == "PASS"),
             "warnings": sum(1 for s in statuses if s == "WARN"),
@@ -181,6 +227,8 @@ class EvidenceChecker:
             evidence_id=self.card.evidence_id,
             session_id=self.bundle.session_id,
             checked_at=datetime.now(tz=timezone.utc).isoformat(),
+            completeness=completeness,
+            completeness_reason=completeness_reason,
             overall_status=overall,
             checks=self.checks,
             summary=summary,

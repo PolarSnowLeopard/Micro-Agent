@@ -1,0 +1,21 @@
+# Reproduce the current Trace Evidence baseline
+# Project: fdueblab/Micro-Agent
+# Interpreter: .venv/bin/python
+# Prereq: 3 MCP services online (medical-calc / linezolid / ACA)
+
+# Step 1 — produce a real-MCP trace via headless meta-app simulation run
+.venv/bin/python trace_evidence/headless_run.py
+
+# Step 2 — run the evidence pipeline (extract bundle -> evidence card -> checker -> config draft)
+#          pointing the output at trace_evidence/current/
+.venv/bin/python trace_evidence/run_pipeline.py \
+    workspace/data/traces/sim-headless-a77ddf82cc70.json \
+    --output-dir trace_evidence/current
+
+# Pipeline output files were then normalized to fixed canonical names
+# (evidence_card.json/.md, config_attachment_draft.json, checker_report.json/.md)
+# and the now-resolvable executionEvidence paths were backfilled into
+# config_attachment_draft.json (tracePath / evidenceCardPath / checkerReportPath).
+
+# Verify infrastructure (unit tests)
+.venv/bin/python -m pytest trace_evidence/tests -q

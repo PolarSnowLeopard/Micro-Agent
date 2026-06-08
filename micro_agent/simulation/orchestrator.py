@@ -123,7 +123,7 @@ class SimulationOrchestrator:
         self.scenario: str = cfg.get("scenarioDescription", "")
         self.services_meta: list[dict] = cfg.get("servicesMeta", [])
         self.service_ids: list[str] = cfg.get("serviceIds", [])
-        self.max_iterations: int = cfg.get("maxIterations", 3)
+        self.max_iterations: int = cfg.get("maxIterations", 5)
         self.mode: str = cfg.get("mode", "production")
         self.strategy: dict = cfg.get("strategy", {})
 
@@ -151,6 +151,24 @@ class SimulationOrchestrator:
         except (TypeError, ValueError):
             return 1
 
+    def _strategy_value(self, key: str, default: str = "") -> str:
+        return str(self.strategy.get(key, default) or default).strip().lower()
+
+    def _sandbox_force_mock(self) -> bool:
+        return self._strategy_value("sandbox") == "full_mock"
+
+    def _sandbox_no_fallback(self) -> bool:
+        return self._strategy_value("sandbox") == "none"
+
+    def _repair_enabled(self) -> bool:
+        return self._strategy_value("repair", "llm_repair") != "none"
+
+    def _verification_mode(self) -> str:
+        mode = self._strategy_value("verification", "multi_agent")
+        if mode in ("multi_agent", "single_agent", "rule_based"):
+            return mode
+        return "multi_agent"
+
     # ====================== 工具注册（双通道） ======================
 
     async def _register_tools(self) -> None:
@@ -167,7 +185,7 @@ class SimulationOrchestrator:
             service_name = str(svc.get("name") or "?")
             mcp_url = _resolve_mcp_url(svc)
 
-            if _should_use_real_mcp(svc):
+            if not self._sandbox_force_mock() and _should_use_real_mcp(svc):
                 await self._register_mcp_service(svc, service_id, service_name, mcp_url)
             else:
                 self._register_sandbox_service(svc, service_id, service_name)
@@ -236,6 +254,11 @@ class SimulationOrchestrator:
                 f"{[t.name for t in logged]}"
             )
         except Exception as exc:
+            if self._sandbox_no_fallback():
+                raise _BuildFailedError(
+                    f"MCP 连接失败 [{service_name}] {mcp_url}: {exc}",
+                    "策略为「无沙箱」时不回退模拟通道；请检查 MCP 服务或改为 CoW/全模拟",
+                ) from exc
             logger.warning(
                 f"MCP 连接失败 [{service_name}] {mcp_url}: {exc}，回退 SandboxTool"
             )
@@ -458,6 +481,20 @@ class SimulationOrchestrator:
     async def _phase_intelligent_build(self) -> AsyncIterator[SimulationEvent]:
         yield SimulationEvent("step", {"step": 2, "name": "智能构建"})
         yield self._log("INFO", "开始智能构建")
+        if self.strategy:
+            yield self._log(
+                "INFO",
+                f"研究策略: sandbox={self.strategy.get('sandbox', 'cow')} "
+                f"planning={self.strategy.get('planning', 'llm_autonomous')} "
+                f"verification={self.strategy.get('verification', 'multi_agent')} "
+                f"repair={self.strategy.get('repair', 'llm_repair')} "
+                f"solidify={self.strategy.get('solidify', 'golden_trace')}",
+            )
+            if self._strategy_value("planning") == "preset_workflow":
+                yield self._log(
+                    "WARN",
+                    "预设流程规划尚未实现，本轮仍使用 LLM 自主规划",
+                )
 
         self._final_iteration = 1
         planner_trace: list[AgentEvent] = []
@@ -491,6 +528,9 @@ class SimulationOrchestrator:
                         "请检查 LLM API Key / 网络配置后重试",
                     )
                 yield SimulationEvent("issue", {"message": f"规划失败: {error_detail}", "fix": "下一轮重试"})
+                if not self._repair_enabled():
+                    yield self._log("WARN", f"第 {iteration} 轮规划失败，策略禁用修复，终止构建")
+                    break
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
                 yield self._log("WARN", f"第 {iteration} 轮规划失败，进入下一轮")
                 continue
@@ -535,33 +575,52 @@ class SimulationOrchestrator:
                 yield e
 
             yield SimulationEvent("phase", {"phase": "check", "status": "running"})
-            yield self._log("INFO", "验证 Agent 执行中…")
-
-            verifier = self._build_verifier()
             verification_result = ""
             verifier_trace: list[AgentEvent] = []
-            async for event in verifier.run(self._verifier_prompt(planner_trace)):
-                verifier_trace.append(event)
-                if event.type == "done":
-                    verification_result = event.data.get("result", "")
-                yield self._log("INFO", self._format_agent_event("Verifier", event))
+            if self._verification_mode() == "rule_based":
+                yield self._log("INFO", "规则验证：检查工具调用是否全部成功")
+                call_records = self._collect_call_records()
+                failed = [r for r in call_records if r.error or not r.success]
+                if not call_records:
+                    passed, issue = False, "未执行任何工具调用"
+                elif failed:
+                    passed, issue = False, f"{len(failed)} 次工具调用失败"
+                else:
+                    passed, issue = True, ""
+                verification_result = (
+                    "规则验证通过：全部工具调用成功"
+                    if passed
+                    else f"规则验证未通过：{issue}"
+                )
+            else:
+                yield self._log("INFO", "验证 Agent 执行中…")
+                verifier = self._build_verifier()
+                async for event in verifier.run(self._verifier_prompt(planner_trace)):
+                    verifier_trace.append(event)
+                    if event.type == "done":
+                        verification_result = event.data.get("result", "")
+                    yield self._log("INFO", self._format_agent_event("Verifier", event))
+
+                verifier_had_error = any(e.type == "error" for e in verifier_trace)
+                if verifier_had_error:
+                    error_detail = self._extract_agent_error(verifier_trace)
+                    yield self._log("ERROR", f"验证 Agent 异常: {error_detail}")
+                    if self._is_infra_error(error_detail):
+                        raise _BuildFailedError(
+                            f"验证 Agent 不可用: {error_detail}",
+                            "请检查 LLM API Key / 网络配置后重试",
+                        )
+                    yield SimulationEvent("issue", {"message": f"验证异常: {error_detail}", "fix": "下一轮重试"})
+                    yield SimulationEvent("phase", {"phase": "check", "status": "done"})
+                    if not self._repair_enabled():
+                        yield self._log("WARN", "策略禁用修复，终止构建")
+                        break
+                    yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
+                    continue
+
+                passed, issue = self._parse_verification(verification_result)
 
             yield SimulationEvent("phase", {"phase": "check", "status": "done"})
-
-            verifier_had_error = any(e.type == "error" for e in verifier_trace)
-            if verifier_had_error:
-                error_detail = self._extract_agent_error(verifier_trace)
-                yield self._log("ERROR", f"验证 Agent 异常: {error_detail}")
-                if self._is_infra_error(error_detail):
-                    raise _BuildFailedError(
-                        f"验证 Agent 不可用: {error_detail}",
-                        "请检查 LLM API Key / 网络配置后重试",
-                    )
-                yield SimulationEvent("issue", {"message": f"验证异常: {error_detail}", "fix": "下一轮重试"})
-                yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
-                continue
-
-            passed, issue = self._parse_verification(verification_result)
 
             # P0-1: Emit structured verifier_result event
             call_records = self._collect_call_records()
@@ -607,6 +666,9 @@ class SimulationOrchestrator:
                 break
             else:
                 yield SimulationEvent("issue", {"message": issue, "fix": "下一轮自动修复"})
+                if not self._repair_enabled():
+                    yield self._log("WARN", f"第 {iteration} 轮发现问题: {issue}，策略禁用修复，终止构建")
+                    break
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
                 yield self._log("WARN", f"第 {iteration} 轮发现问题: {issue}")
 

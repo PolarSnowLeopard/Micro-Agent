@@ -71,8 +71,22 @@ class ConfigAttachmentDraft:
 def build_config_attachment_draft(
     bundle: TraceEvidenceBundle,
     card: EvidenceCard,
+    *,
+    trace_path: str | None = None,
+    evidence_card_path: str | None = None,
+    checker_report_path: str | None = None,
+    checker_status: str | None = None,
+    quality: str | None = None,
 ) -> ConfigAttachmentDraft:
-    """从证据包和卡片构建配置挂载草稿"""
+    """从证据包和卡片构建配置挂载草稿
+
+    §8 executionEvidence 字段说明:
+    - 路径/checker 状态由 pipeline 在写盘时注入 (bundle/card 自身不知道落盘位置)；
+      未提供时相应字段记入 missingEvidenceIds，绝不伪造。
+    - toolCallEvidenceIds 使用 trace 中真实的 call_id。
+    - planner/verifier 事件无原生 id，使用按迭代派生的可追溯引用
+      (planner_decision#iterN / verifier_result#iterN)，可在 trace["events"] 中核对。
+    """
 
     # 从 tool_calls 构建 dispatch_sequence
     dispatch_sequence = []
@@ -105,10 +119,60 @@ def build_config_attachment_draft(
         "Use evidence_id to trace back to full evidence bundle.",
     ]
 
-    # P0-⑤ executionEvidence 槽位: 打包执行证据供下游配置系统消费
+    # §8 executionEvidence: 供下游元应用配置系统消费的可追溯证据引用
+    # toolCallEvidenceIds: trace 中真实存在的 call_id (call 方向，去重保序)
+    tool_call_ids: list[str] = []
+    _seen_calls: set[str] = set()
+    for tc in bundle.tool_calls:
+        cid = getattr(tc, "call_id", None)
+        if cid and cid not in _seen_calls and tc.service_id not in ("internal", "unresolved"):
+            _seen_calls.add(cid)
+            tool_call_ids.append(cid)
+
+    # planner/verifier 事件无原生 id -> 按迭代派生可追溯引用 (可在 trace.events 核对)
+    planner_ids: list[str] = []
+    for pt in getattr(bundle, "planner_thoughts", []) or []:
+        it = getattr(pt, "iteration", None)
+        ref = f"planner_decision#iter{it}" if it is not None else "planner_decision"
+        if ref not in planner_ids:
+            planner_ids.append(ref)
+    verification_ids: list[str] = []
+    _verif = getattr(bundle, "verification", None)
+    if _verif and getattr(_verif, "status", "UNKNOWN") != "UNKNOWN":
+        vit = getattr(_verif, "iteration", None)
+        verification_ids.append(
+            f"verifier_result#iter{vit}" if vit is not None else "verifier_result"
+        )
+
+    # 缺失项: 不造假 id, 明确列出哪些证据不可追溯
+    missing_ids: list[str] = []
+    if not tool_call_ids:
+        missing_ids.append("toolCallEvidenceIds")
+    if not planner_ids:
+        missing_ids.append("plannerDecisionEvidenceIds")
+    if not verification_ids:
+        missing_ids.append("verificationEvidenceIds")
+    # 路径/checker 状态由 pipeline 注入; 未提供则记缺失而非伪造
+    if not trace_path:
+        missing_ids.append("tracePath")
+    if not evidence_card_path:
+        missing_ids.append("evidenceCardPath")
+    if not checker_report_path:
+        missing_ids.append("checkerReportPath")
+
     execution_evidence = {
         "traceSessionId": bundle.session_id,
+        "tracePath": trace_path,
+        "evidenceCardPath": evidence_card_path,
+        "checkerReportPath": checker_report_path,
         "evidenceId": card.evidence_id,
+        "toolCallEvidenceIds": tool_call_ids,
+        "plannerDecisionEvidenceIds": planner_ids,
+        "verificationEvidenceIds": verification_ids,
+        "missingEvidenceIds": missing_ids,
+        "quality": quality,
+        "checkerStatus": checker_status,
+        # 辅助上下文 (非 §8 必填, 便于下游消费)
         "verdict": card.verification.get("status", "unknown") if card.verification else "unknown",
         "executionPath": bundle.completion.execution_path if bundle.completion else [],
         "toolChannels": bundle.completion.tool_channels if bundle.completion else [],
@@ -117,10 +181,6 @@ def build_config_attachment_draft(
             for d in dispatch_sequence
         ],
         "metrics": runtime_metrics,
-        "integrity": {
-            "checkerVersion": "v1.0.0",
-            "summary": card.summary if card.summary else {},
-        },
         "generatedAt": datetime.now(tz=timezone.utc).isoformat(),
         "draft": True,
     }

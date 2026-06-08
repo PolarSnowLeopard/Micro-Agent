@@ -49,7 +49,9 @@ class TraceStore(ABC):
     async def load(self, session_id: str) -> Optional[TraceRecord]: ...
 
     @abstractmethod
-    async def list_all(self, limit: int = 50) -> list[dict]: ...
+    async def list_all(
+        self, limit: int = 50, app_name: str | None = None
+    ) -> list[dict]: ...
 
     @abstractmethod
     async def compare(self, session_ids: list[str]) -> list[dict]: ...
@@ -85,12 +87,16 @@ class FileTraceStore(TraceStore):
             logger.warning(f"加载轨迹失败 {session_id}: {e}")
             return None
 
-    async def list_all(self, limit: int = 50) -> list[dict]:
+    async def list_all(self, limit: int = 50, app_name: str | None = None) -> list[dict]:
         records = []
         files = sorted(self._dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for f in files[:limit]:
+        for f in files:
+            if len(records) >= limit:
+                break
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
+                if app_name and data.get("app_name") != app_name:
+                    continue
                 records.append({
                     "recordId": data.get("session_id", f.stem),
                     "appName": data.get("app_name", ""),
