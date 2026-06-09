@@ -5,7 +5,7 @@
 - **目标与成果缺口**：`GOAL_META_APP_SPEC.md` §8（PPT §7–10 对标）
 - **读写链审计**：`workspace/RECON_META_APP_READ_WRITE_CHAIN.md` §7
 
-*更新：2026-06-08*
+*更新：2026-06-10*
 
 ---
 
@@ -13,12 +13,14 @@
 
 | 能力 | 说明 |
 |------|------|
-| `SimulationOrchestrator` | 四阶段编排；Planner + Verifier；`strategy` 部分真分支（sandbox/repair/verification） |
-| Trace v1.0.0 | `tool_call_record` / `planner_decision` / `verifier_result`；`FileTraceStore`；`list_records(appName)` 过滤 |
+| `SimulationOrchestrator` | 四阶段编排；Planner + Verifier；`verifier_result` 携带 `plannerDecision`；启动可复用对话期 `parsedIntent` |
+| **想定追问** | `POST /api/agent/scenario_intake`（grill-me，FileMemory）；`parsedIntent` 契约见 `intent_schema` |
+| Trace v1.0.0 | `tool_call_record` / `planner_decision` / `verifier_result` / `scenario_parsed`；`FileTraceStore` |
 | 真实 MCP | `LoggingMCPTool`，`channel=real_mcp`（ioeb `【本地MCP】(n)` 路径） |
-| `trace_evidence` | adapter→card→checker→config；`POST /evidence` 可 `save_to_dir`；`trace_evidence/current/` 有 PASS 基线说明 |
-| `artifact_compiler` | trace → ArtifactSpec v0 + `solidificationReport`；`GET/POST /artifact` 编译并落盘 |
-| API 路由 | `/trace`、`/evidence`、`/artifact`、`/records`（含 compare） |
+| `trace_evidence` | adapter→card→checker→config；仿真结束**自动** `run_pipeline` 落盘 + 手动 `POST /evidence` |
+| `artifact_compiler` | trace → ArtifactSpec v0 + `solidificationReport`；仿真结束自动编译落盘 + `GET/POST /artifact` |
+| API 路由 | `/trace`、`/evidence`、`/artifact`、`/records`；Agent `/scenario_intake`、推荐带 `parsed_intent` |
+| 单测 | 111 passed（含 `test_artifact_compiler` 39 项、`test_scenario_intake` 5 项） |
 
 **演示注意**：`课题` 走 ioeb inmemory mock，无真实 trace/evidence/artifact；对外演示用 `【本地MCP】(n)`。
 
@@ -52,10 +54,10 @@
 
 | ID | 任务 | 状态 | 要点 |
 |----|------|------|------|
-| ~~C1~~ | ArtifactSpec 编译器 | **完成** | `artifact_compiler.py` + schema + `/artifact`（**缺单测**） |
-| C2 | 主链路集成 | 进行中 | 仿真结束可选触发 evidence/artifact；`complete.result` + `artifactRef` |
-| C3 | 中间产物补齐 | 待做 | `parsedIntent`；状态断言；服务契约（预发布表单元数据不算缺口） |
-| C4 | 前端展示 | 待做 | ioeb `loadDetailArtifacts` 接 `/artifact` |
+| ~~C1~~ | ArtifactSpec 编译器 | **完成** | `artifact_compiler.py` + schema + `/artifact` + 单测 |
+| C2 | 主链路集成 | **大部分完成** | 仿真 SSE 结束自动 evidence + artifact 落盘；`complete` 注入 `sessionId`；`artifactRef` 写回仍待做 |
+| C3 | 中间产物补齐 | 进行中 | `parsedIntent`✅（对话 intake + 仿真 `scenario_parsed`）；`serviceContracts`✅；状态断言仍待做 |
+| C4 | 前端展示 | **ioeb 已接（跨仓）** | 仿真详情 `/artifact`、`parsedIntent` 编辑、SmartChat 想定追问；prePublish 写回仍待做 |
 | C5 | 写回 ioeb_backend | 待做 | ServiceApi 新列 + 迁移（见 RECON §4） |
 
 **建议顺序**：C2 → C4 → C3 → C5；C1 补单测与 P0 并行。
@@ -98,8 +100,8 @@ flowchart TD
 
 | 优先级 | 演进项 |
 |--------|--------|
-| **P0** | C1 单测；C4 前端 `/artifact`；演示统一 `【本地MCP】` 真链路 |
-| **P1** | C3 想定解析 / 状态断言 / 服务契约；A2 CoW；B1 任务集 |
+| **P0** | ~~C1 单测~~；演示统一 `【本地MCP】` 真链路 + mock 假追问 |
+| **P1** | 状态断言；intake  transcript 进 artifact；A2 CoW；B1 任务集 |
 | **P2** | D1 + D2；C5 写回；B2 批处理 |
 | **P3** | orchestrator 拆分；evidence 三入口收敛；私有方法外泄清理 |
 
@@ -116,7 +118,7 @@ flowchart TD
 | 基线说明 | `trace_evidence/current/README.md` 等 | ✅ 说明入库；生成物见 `.gitignore` |
 | 迭代日志 / 基础设施报告 | `trace_evidence/PROGRESS.md`、`INFRASTRUCTURE_REPORT.md` | ❌ ignore |
 | pipeline 输出目录 | `trace_evidence/output*` | ❌ ignore |
-| 运行时数据 | `workspace/data/traces/`、`artifacts/` | ❌ ignore |
+| 运行时数据 | `workspace/data/traces/`、`artifacts/`、`evidence/` | ❌ ignore |
 
 HTTP/SSE 字段契约仍以 ioeb `design_docs/build-design4llm.md` 为准（跨仓，不在此维护）。
 

@@ -27,6 +27,7 @@ config/config.toml
 workspace/data/memory/*.json
 workspace/data/traces/
 workspace/data/artifacts/
+workspace/data/evidence/
 workspace/app-demo-output/
 workspace/temp/
 

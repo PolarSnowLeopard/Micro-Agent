@@ -88,11 +88,25 @@
         },
         "parsedIntent": {
           "type": ["object", "null"],
-          "description": "结构化意图解析结果。v0 为 null — Planner 当前产出自由文本 reason，未做结构化意图提取。后续版本可由 Planner 直接产出结构化 intent。",
+          "description": "结构化意图解析结果。主路径为对话追问 ready 后产出；仿真启动可复用或 LLM 解析 scenarioDescription 写入 scenario_parsed 事件。编译器只读取该事件，不在编译期调用 LLM。",
           "properties": {
-            "goal": {"type": "string"},
-            "constraints": {"type": "array", "items": {"type": "string"}},
-            "preferences": {"type": "array", "items": {"type": "string"}}
+            "goal": {"type": "string", "description": "核心业务目标"},
+            "situationBrief": {"type": "string", "description": "必要的业务情境摘要（可空）"},
+            "constraints": {"type": "array", "items": {"type": "string"}, "description": "约束（合规/隐私/顺序等）"},
+            "acceptanceCriteria": {"type": "array", "items": {"type": "string"}, "description": "验收/采纳标准（可检查，非最终成败判定）"},
+            "successCriteria": {"type": "array", "items": {"type": "string"}, "description": "已废弃，请用 acceptanceCriteria（旧 trace 兼容）"},
+            "ioExpectation": {
+              "type": "object",
+              "description": "预期输入输出",
+              "properties": {
+                "inputs": {"type": "array", "items": {"type": "string"}},
+                "outputs": {"type": "array", "items": {"type": "string"}}
+              },
+              "additionalProperties": true
+            },
+            "preferences": {"type": "array", "items": {"type": "string"}},
+            "parserModel": {"type": "string", "description": "产出该解析的 LLM 模型标识，作为证据来源"},
+            "parsedAt": {"type": ["string", "null"], "description": "解析时间（ISO 8601）"}
           },
           "additionalProperties": true
         },
@@ -152,7 +166,7 @@
             "properties": {
               "stateId": {
                 "type": "string",
-                "pattern": "^state-[a-f0-9]{8}$",
+                "pattern": "^state-[a-f0-9]{6}-[a-f0-9]{8}$",
                 "description": "状态节点唯一标识"
               },
               "state": {
@@ -271,7 +285,7 @@
             "properties": {
               "transitionId": {
                 "type": "string",
-                "pattern": "^trans-[a-f0-9]{8}$",
+                "pattern": "^trans-[a-f0-9]{6}-[a-f0-9]{8}$",
                 "description": "转移唯一标识"
               },
               "fromState": {"type": "string", "minLength": 1},
@@ -550,7 +564,7 @@
     },
 
     "evidence": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "证据产物快照。由 trace_evidence pipeline 产出，可内嵌或引用。v0 为可选 — 若仿真未跑 evidence pipeline 则此字段为 null。",
       "properties": {
         "evidenceId": {
@@ -812,6 +826,60 @@
         }
       },
       "additionalProperties": false
+    },
+
+    "serviceContracts": {
+      "type": "array",
+      "description": "服务与契约（PPT §8.2 独立产物类别）。每个参与服务一条：声明工具来自 servicesMeta，实测工具从 tool_call_record 确定性聚合（调用次数/成功率/通道）。v0 精简版不含参数 schema 归纳与 I/O 样例。",
+      "items": {
+        "type": "object",
+        "required": ["serviceId", "serviceName"],
+        "properties": {
+          "serviceId": {"type": "string", "minLength": 1},
+          "serviceName": {"type": "string", "minLength": 1},
+          "channel": {"type": ["string", "null"], "description": "real_mcp / sandbox 等实测通道；无实测调用时为 null"},
+          "transport": {"type": ["string", "null"], "description": "sse / stdio / streamable_http / in_process"},
+          "declaredTools": {
+            "type": "array",
+            "description": "服务声明的工具（来自 config_snapshot.servicesMeta[].tools）",
+            "items": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "toolId": {"type": ["string", "null"]},
+                "name": {"type": "string", "minLength": 1},
+                "description": {"type": ["string", "null"]}
+              },
+              "additionalProperties": false
+            }
+          },
+          "observedTools": {
+            "type": "array",
+            "description": "实际被调用的工具，从 tool_call_record 聚合",
+            "items": {
+              "type": "object",
+              "required": ["toolName", "callCount"],
+              "properties": {
+                "toolName": {"type": "string", "minLength": 1},
+                "callCount": {"type": "integer", "minimum": 1},
+                "successCount": {"type": "integer", "minimum": 0},
+                "failureCount": {"type": "integer", "minimum": 0},
+                "successRate": {"type": "number", "minimum": 0, "maximum": 1},
+                "avgLatencyMs": {"type": ["number", "null"], "minimum": 0},
+                "evidenceRefs": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "支撑该统计的 tool_call_record call_id 列表"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "totalCalls": {"type": "integer", "minimum": 0},
+          "overallSuccessRate": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false

@@ -5,6 +5,7 @@
   POST /api/agent/service_packaging          文件上传 → 服务封装（含 ZIP 回传 + 会话记忆）
   POST /api/agent/mcp_test                   表单 → MCP 测试
   POST /api/agent/service_evaluation         表单+文件 → 服务评测
+  POST /api/agent/scenario_intake               表单 → 想定场景追问（grill-me）
   POST /api/agent/mcp_service_recommendation 表单 → MCP 服务推荐
   POST /api/agent/meta_app_validation        表单+文件 → 元应用数据验证
   POST /api/agent/aml_report                 文件/URL → AML 报告生成
@@ -215,6 +216,30 @@ async def service_evaluation(
 
 
 # ============================================================
+#  端点：想定场景追问（grill-me，一次一问）
+# ============================================================
+
+@router.post("/scenario_intake")
+async def scenario_intake(
+    message: str = Form(...),
+    domain: str = Form(default="generic"),
+    session_id: Optional[str] = Form(default=None),
+):
+    from micro_agent.scenario import run_scenario_intake_turn
+
+    try:
+        result = await run_scenario_intake_turn(
+            message=message,
+            domain=domain,
+            session_id=session_id or None,
+        )
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"scenario_intake 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ============================================================
 #  端点：MCP 服务推荐
 # ============================================================
 
@@ -222,15 +247,26 @@ async def service_evaluation(
 async def mcp_service_recommendation(
     message: str = Form(...),
     service_type: str = Form(...),
+    scenario_summary: str = Form(default=""),
+    parsed_intent: str = Form(default=""),
+    user_remark: str = Form(default=""),
+    session_id: Optional[str] = Form(default=None),
 ):
     prompt = render_prompt(
         "mcp_service_recommendation.md.j2",
-        message=message, service_type=service_type, workspace=WORKSPACE,
+        message=message,
+        service_type=service_type,
+        workspace=WORKSPACE,
+        scenario_summary=scenario_summary,
+        parsed_intent=parsed_intent,
+        user_remark=user_remark,
     )
-    agent, _ = await build_agent(
+    agent, resolved_session = await build_agent(
         name="mcp_service_recommendation",
         system_prompt=get_task("mcp_service_recommendation").system_prompt,
         use_mcp=True,
+        enable_session=bool(session_id),
+        session_id=session_id or None,
     )
     assert isinstance(agent, MCPAgent)
     try:
@@ -262,6 +298,7 @@ async def mcp_service_recommendation(
         ctx,
         output_files=[{"name": "recommendation_result", "file": output_file}],
         cleanup=partial(cleanup_paths, output_file),
+        session_id=resolved_session,
     )
 
 

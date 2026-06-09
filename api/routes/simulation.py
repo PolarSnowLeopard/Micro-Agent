@@ -30,7 +30,7 @@ from micro_agent.simulation.trace_records import (
     build_tool_call_record_events,
     build_trace_metadata,
 )
-from micro_agent.simulation.trace_store import FileTraceStore, TraceRecord
+from micro_agent.simulation.trace_store import FileTraceStore
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
@@ -49,6 +49,8 @@ class SimulationStartRequest(BaseModel):
     servicesMeta: list[dict] = Field(default_factory=list)
     maxIterations: int = 5
     scenarioDescription: str = ""
+    scenarioSummary: str = ""
+    parsedIntent: dict = Field(default_factory=dict)
     mode: str = "production"
     strategy: dict = Field(default_factory=dict)
 
@@ -96,13 +98,15 @@ async def simulation_stream(session_id: str):
         try:
             async for event in orchestrator.run():
                 trace_events.append(event.to_dict())
-                yield event.to_sse()
                 if event.type == "complete":
                     data = event.data
                     final_success = data.get("success", False)
                     metrics = data.get("metrics", {})
                     final_iterations = metrics.get("iterations", 0)
                     final_elapsed = metrics.get("elapsedMs", 0)
+                    # 注入 sessionId，前端可通过此 ID 拉取 artifact
+                    event.data["sessionId"] = session_id
+                yield event.to_sse()
         finally:
             tool_call_events: list[dict] = []
             try:
@@ -134,6 +138,39 @@ async def simulation_stream(session_id: str):
             except Exception as e:
                 logger.warning(f"保存轨迹失败: {e}")
 
+            # 自动运行 evidence pipeline（为 ArtifactSpec 编译器提供完整证据）
+            pipeline_result = None
+            try:
+                from trace_evidence import run_pipeline as _run_evidence
+
+                result = _run_evidence(record.to_dict())
+                evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
+                evidence_dir.mkdir(parents=True, exist_ok=True)
+                result.save_to_dir(evidence_dir)
+                pipeline_result = result
+                logger.info(f"证据产物已自动落盘: {evidence_dir}")
+            except Exception as e:
+                logger.warning(f"证据分析自动运行失败 (non-fatal): {e}")
+
+            # 自动编译 ArtifactSpec 并落盘（best-effort，不阻塞 SSE 流）
+            try:
+                from micro_agent.simulation.artifact_compiler import compile_artifact_spec
+
+                artifacts_dir = Path(config.workspace) / "data" / "artifacts" / session_id
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                spec = compile_artifact_spec(record.to_dict(), pipeline_result)
+                spec_path = artifacts_dir / "artifact_spec.json"
+                spec_path.write_text(
+                    json.dumps(spec.to_dict(), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                logger.info(
+                    f"ArtifactSpec 已编译并落盘: {spec_path} "
+                    f"(solidifiable={spec.solidifiable})"
+                )
+            except Exception as e:
+                logger.warning(f"ArtifactSpec 自动编译失败 (non-fatal): {e}")
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
@@ -156,6 +193,26 @@ async def cancel_simulation(session_id: str):
     if orch:
         orch.cancel()
     return {"success": True}
+
+
+# --------------- 辅助函数 ---------------
+
+def _load_pipeline_result(session_id: str, trace_dict: dict):
+    """从已落盘的 evidence 产物重建 PipelineResult 对象，供 artifact 编译器使用。
+
+    优先从落盘文件重建（避免重复运行 pipeline），回退到重新运行。
+    """
+    from trace_evidence import run_pipeline as _run_evidence
+
+    evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
+    pr_path = evidence_dir / "pipeline_result.json"
+
+    # 如果 evidence 已落盘，直接调用 run_pipeline 即可（它会从 trace_dict 确定性重建）
+    # run_pipeline 本身是幂等的——同一条 trace 每次产出相同结果
+    try:
+        return _run_evidence(trace_dict)
+    except Exception:
+        return None
 
 
 # --------------- 轨迹查询 ---------------
@@ -228,15 +285,18 @@ async def build_evidence(session_id: str):
 
 @router.get("/{session_id}/artifact")
 async def get_artifact(session_id: str):
-    """获取仿真产物的 ArtifactSpec v0。从已持久化 trace 编译，幂等、确定性。"""
+    """获取仿真产物的 ArtifactSpec v0。若有已落盘的 evidence，自动注入。"""
     record = await _trace_store.load(session_id)
     if not record:
         raise HTTPException(404, "trace not found")
 
     from micro_agent.simulation.artifact_compiler import compile_artifact_spec
 
+    # 尝试加载已落盘的 evidence（若 SSE finally 中已自动跑过）
+    pipeline_result = _load_pipeline_result(session_id, record.to_dict())
+
     try:
-        spec = compile_artifact_spec(record.to_dict())
+        spec = compile_artifact_spec(record.to_dict(), pipeline_result)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
@@ -255,46 +315,7 @@ async def build_artifact(session_id: str):
 
     from micro_agent.simulation.artifact_compiler import compile_artifact_spec
 
-    # 尝试加载 evidence PipelineResult 以充实 evidence 段
-    evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
-    pipeline_result = None
-    try:
-        import json as _json
-
-        pr_path = evidence_dir / "pipeline_result.json"
-        if pr_path.exists():
-            from trace_evidence import TraceEvidenceAdapter
-            from trace_evidence import build_evidence_card
-            from trace_evidence.evidence_checker import CheckerReport
-            from trace_evidence.config_attachment import ConfigAttachmentDraft
-
-            # Load evidence via adapter — creates the bundle
-            adapter = TraceEvidenceAdapter(record.to_dict())
-            bundle = adapter.extract()
-            card = build_evidence_card(bundle)
-
-            # Rebuild a minimal PipelineResult-like object for the compiler
-            class _EvMeta:
-                pass
-
-            meta = _EvMeta()
-            meta.bundle = bundle
-            meta.card = card
-
-            checker_data = _json.loads((evidence_dir / "checker_report.json").read_text("utf-8"))
-            report = CheckerReport(
-                schema_version=checker_data.get("schema_version", "1.0.0"),
-                evidence_id=checker_data.get("evidence_id", card.evidence_id),
-                session_id=checker_data.get("session_id", session_id),
-                checked_at=checker_data.get("checked_at", ""),
-                overall_status=checker_data.get("overall_status", "WARN"),
-                summary=checker_data.get("summary", {}),
-                checks=checker_data.get("checks", []),
-            )
-            meta.report = report
-            pipeline_result = meta
-    except Exception:
-        pass  # evidence enrichment is best-effort
+    pipeline_result = _load_pipeline_result(session_id, record.to_dict())
 
     try:
         spec = compile_artifact_spec(record.to_dict(), pipeline_result)

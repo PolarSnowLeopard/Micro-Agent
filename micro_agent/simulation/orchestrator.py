@@ -13,6 +13,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from loguru import logger
@@ -120,7 +121,10 @@ class SimulationOrchestrator:
     def __init__(self, cfg: dict[str, Any]):
         self.app_name: str = cfg.get("appName", "元应用")
         self.domain: str = cfg.get("domain", "generic")
-        self.scenario: str = cfg.get("scenarioDescription", "")
+        self.scenario_summary: str = cfg.get("scenarioSummary", "")
+        self.scenario: str = cfg.get("scenarioDescription", "") or self.scenario_summary
+        pre = cfg.get("parsedIntent")
+        self.parsed_intent_pre: dict | None = pre if isinstance(pre, dict) and pre else None
         self.services_meta: list[dict] = cfg.get("servicesMeta", [])
         self.service_ids: list[str] = cfg.get("serviceIds", [])
         self.max_iterations: int = cfg.get("maxIterations", 5)
@@ -145,7 +149,18 @@ class SimulationOrchestrator:
         self._cancelled = True
 
     def _min_iterations(self) -> int:
+        """已废弃：不再用于强制重跑 Planner。保留读取以兼容旧 trace / 研究配置。"""
         raw = self.strategy.get("minIterations")
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return 1
+
+    def _stability_passes_required(self) -> int:
+        """同一调度轨迹需连续通过 Verifier 的次数（初版可固化前的稳定性复检）。"""
+        raw = self.strategy.get("stabilityPasses")
+        if raw is None:
+            return 1
         try:
             return max(1, int(raw))
         except (TypeError, ValueError):
@@ -290,6 +305,10 @@ class SimulationOrchestrator:
         self._started_at = time.time()
         try:
             await self._register_tools()
+
+            parsed_intent = await self._parse_scenario_intent()
+            if parsed_intent:
+                yield SimulationEvent("scenario_parsed", parsed_intent)
 
             async for e in self._phase_service_match():
                 yield e
@@ -497,22 +516,23 @@ class SimulationOrchestrator:
                 )
 
         self._final_iteration = 1
-        planner_trace: list[AgentEvent] = []
+        repair_planner_trace: list[AgentEvent] = []
 
         for iteration in range(1, self.max_iterations + 1):
             self._check_cancel()
             self._final_iteration = iteration
+            call_offset = len(self._collect_call_records())
             yield SimulationEvent("iteration", {"iteration": iteration, "status": "running"})
             yield self._log("INFO", f"第 {iteration} 轮开始")
 
             yield SimulationEvent("phase", {"phase": "data", "status": "running"})
             yield self._log("INFO", "规划 Agent 执行中…")
 
-            planner = self._build_planner(iteration, planner_trace)
-            planner_trace = []
+            planner = self._build_planner(iteration, repair_planner_trace)
+            current_planner_trace: list[AgentEvent] = []
             planner_had_error = False
-            async for event in planner.run(self._planner_prompt(iteration, planner_trace)):
-                planner_trace.append(event)
+            async for event in planner.run(self._planner_prompt(iteration, repair_planner_trace)):
+                current_planner_trace.append(event)
                 yield self._log("INFO", self._format_agent_event("Planner", event))
                 if event.type == "error":
                     planner_had_error = True
@@ -520,152 +540,80 @@ class SimulationOrchestrator:
             yield SimulationEvent("phase", {"phase": "data", "status": "done"})
 
             if planner_had_error:
-                error_detail = self._extract_agent_error(planner_trace)
+                error_detail = self._extract_agent_error(current_planner_trace)
                 yield self._log("ERROR", f"规划 Agent 异常: {error_detail}")
                 if self._is_infra_error(error_detail):
                     raise _BuildFailedError(
                         f"规划 Agent 不可用: {error_detail}",
                         "请检查 LLM API Key / 网络配置后重试",
                     )
-                yield SimulationEvent("issue", {"message": f"规划失败: {error_detail}", "fix": "下一轮重试"})
+                yield SimulationEvent("issue", {
+                    "iteration": iteration,
+                    "message": f"规划失败: {error_detail}",
+                    "fix": "下一轮重试",
+                    "phase": "planning",
+                })
                 if not self._repair_enabled():
                     yield self._log("WARN", f"第 {iteration} 轮规划失败，策略禁用修复，终止构建")
                     break
+                repair_planner_trace = current_planner_trace
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
                 yield self._log("WARN", f"第 {iteration} 轮规划失败，进入下一轮")
                 continue
 
-            # P0-3: Emit planner_decision event with structured decision trace
-            iter_records = self._collect_call_records()
-            selected_tools = list(dict.fromkeys(r.tool_name for r in iter_records))
-            candidate_tools = [n for n in self._tools.list_names() if n != "terminate"]
-            exec_path = self._extract_execution_path()
-            dispatch_config = self._build_dispatch_config(iter_records)
-            planner_content = ""
-            for ev in planner_trace:
-                if ev.type == "done":
-                    planner_content = ev.data.get("result", "")[:500]
-                    break
-            yield SimulationEvent("planner_decision", {
-                "iteration": iteration,
-                "candidate_tools": candidate_tools,
-                "selected_tools": selected_tools,
-                "reason": planner_content[:200],
-                "executionPath": exec_path,
-                "dispatch": dispatch_config,
-                "tool_call_details": [
-                    {
-                        "call_id": r.call_id,
-                        "tool": r.tool_name,
-                        "service": r.service_name or r.service_id,
-                        "channel": r.channel,
-                        "transport": r.transport,
-                        "arguments": r.arguments,
-                        "result_preview": (r.result or "")[:200],
-                        "error": r.error,
-                        "latency_ms": r.latency_ms,
-                        "success": r.success,
-                        "timestamp": r.timestamp,
-                    }
-                    for r in iter_records
-                ],
-            })
+            iter_records = self._collect_call_records()[call_offset:]
+            planner_decision = self._build_planner_decision_payload(
+                iteration, iter_records, current_planner_trace
+            )
+            yield SimulationEvent("planner_decision", planner_decision)
 
             async for e in self._emit_logic_simulation():
                 yield e
 
-            yield SimulationEvent("phase", {"phase": "check", "status": "running"})
-            verification_result = ""
-            verifier_trace: list[AgentEvent] = []
-            if self._verification_mode() == "rule_based":
-                yield self._log("INFO", "规则验证：检查工具调用是否全部成功")
-                call_records = self._collect_call_records()
-                failed = [r for r in call_records if r.error or not r.success]
-                if not call_records:
-                    passed, issue = False, "未执行任何工具调用"
-                elif failed:
-                    passed, issue = False, f"{len(failed)} 次工具调用失败"
-                else:
-                    passed, issue = True, ""
-                verification_result = (
-                    "规则验证通过：全部工具调用成功"
-                    if passed
-                    else f"规则验证未通过：{issue}"
-                )
-            else:
-                yield self._log("INFO", "验证 Agent 执行中…")
-                verifier = self._build_verifier()
-                async for event in verifier.run(self._verifier_prompt(planner_trace)):
-                    verifier_trace.append(event)
-                    if event.type == "done":
-                        verification_result = event.data.get("result", "")
-                    yield self._log("INFO", self._format_agent_event("Verifier", event))
-
-                verifier_had_error = any(e.type == "error" for e in verifier_trace)
-                if verifier_had_error:
-                    error_detail = self._extract_agent_error(verifier_trace)
-                    yield self._log("ERROR", f"验证 Agent 异常: {error_detail}")
-                    if self._is_infra_error(error_detail):
-                        raise _BuildFailedError(
-                            f"验证 Agent 不可用: {error_detail}",
-                            "请检查 LLM API Key / 网络配置后重试",
-                        )
-                    yield SimulationEvent("issue", {"message": f"验证异常: {error_detail}", "fix": "下一轮重试"})
-                    yield SimulationEvent("phase", {"phase": "check", "status": "done"})
-                    if not self._repair_enabled():
-                        yield self._log("WARN", "策略禁用修复，终止构建")
-                        break
-                    yield SimulationEvent("iteration", {"iteration": iteration, "status": "retry"})
-                    continue
-
-                passed, issue = self._parse_verification(verification_result)
-
-            yield SimulationEvent("phase", {"phase": "check", "status": "done"})
-
-            # P0-1: Emit structured verifier_result event
-            call_records = self._collect_call_records()
-            evidence_ids = [r.call_id for r in call_records if r.call_id]
-            verifier_checks = []
-            if passed:
-                verifier_checks.append({
-                    "check": "overall_verification",
-                    "status": "PASSED",
-                    "evidence_refs": evidence_ids,
-                })
-            else:
-                verifier_checks.append({
-                    "check": "overall_verification",
-                    "status": "FAILED",
-                    "issue": issue,
-                    "evidence_refs": evidence_ids,
-                })
-            yield SimulationEvent("verifier_result", {
-                "iteration": iteration,
-                "status": "PASSED" if passed else "FAILED",
-                "summary": verification_result[:500] if verification_result else "",
-                "reason": "" if passed else issue,
-                "checks": verifier_checks,
-                "issues": [] if passed else [{"description": issue, "evidence_refs": evidence_ids}],
-            })
-
-            if passed:
-                min_iter = self._min_iterations()
-                if iteration < min_iter:
+            required_passes = self._stability_passes_required()
+            passed = True
+            issue = ""
+            for stability_pass in range(1, required_passes + 1):
+                if stability_pass > 1:
                     yield self._log(
                         "INFO",
-                        f"第 {iteration} 轮验证通过，继续下一轮"
-                        f"（最少 {min_iter} 轮）",
+                        f"稳定性复检 {stability_pass}/{required_passes}（同一调度轨迹，不重新规划）",
                     )
-                    yield SimulationEvent(
-                        "iteration", {"iteration": iteration, "status": "retry"}
-                    )
-                    continue
+                async for ev in self._stream_verification(
+                    current_planner_trace,
+                    iteration,
+                    stability_pass=stability_pass,
+                    planner_decision=planner_decision,
+                    iter_records=iter_records,
+                ):
+                    if isinstance(ev, tuple):
+                        passed, issue = ev
+                    else:
+                        yield ev
+                if not passed:
+                    break
+
+            if passed:
                 self._build_succeeded = True
                 yield SimulationEvent("iteration", {"iteration": iteration, "status": "passed"})
-                yield self._log("SUCCESS", f"第 {iteration} 轮验证通过")
+                if required_passes > 1:
+                    yield self._log(
+                        "SUCCESS",
+                        f"第 {iteration} 轮调度轨迹已通过 {required_passes} 次验证，可作为初版可固化方案",
+                    )
+                else:
+                    yield self._log("SUCCESS", f"第 {iteration} 轮验证通过")
                 break
             else:
-                yield SimulationEvent("issue", {"message": issue, "fix": "下一轮自动修复"})
+                yield SimulationEvent("issue", {
+                    "iteration": iteration,
+                    "message": issue,
+                    "fix": "下一轮自动修复",
+                    "phase": "verification",
+                    "plannerDecision": planner_decision,
+                    "executionPath": planner_decision.get("executionPath", []),
+                })
+                repair_planner_trace = current_planner_trace
                 if not self._repair_enabled():
                     yield self._log("WARN", f"第 {iteration} 轮发现问题: {issue}，策略禁用修复，终止构建")
                     break
@@ -821,6 +769,204 @@ class SimulationOrchestrator:
             f"结论必须写为 PASSED 或 FAILED: [原因]，然后 terminate。"
         )
 
+    def _build_planner_decision_payload(
+        self,
+        iteration: int,
+        iter_records: list[ToolCallRecord],
+        planner_trace: list[AgentEvent],
+    ) -> dict[str, Any]:
+        """当前轮规划快照：供 planner_decision / verifier_result / issue 共用。"""
+        planner_content = ""
+        for ev in planner_trace:
+            if ev.type == "done":
+                planner_content = ev.data.get("result", "")[:500]
+                break
+        return {
+            "iteration": iteration,
+            "candidate_tools": [n for n in self._tools.list_names() if n != "terminate"],
+            "selected_tools": list(dict.fromkeys(r.tool_name for r in iter_records)),
+            "reason": planner_content[:200],
+            "executionPath": self._extract_execution_path_from_records(iter_records),
+            "dispatch": self._build_dispatch_config(iter_records),
+            "tool_call_details": [
+                {
+                    "call_id": r.call_id,
+                    "tool": r.tool_name,
+                    "service": r.service_name or r.service_id,
+                    "channel": r.channel,
+                    "transport": r.transport,
+                    "arguments": r.arguments,
+                    "result_preview": (r.result or "")[:200],
+                    "error": r.error,
+                    "latency_ms": r.latency_ms,
+                    "success": r.success,
+                    "timestamp": r.timestamp,
+                }
+                for r in iter_records
+            ],
+        }
+
+    async def _stream_verification(
+        self,
+        planner_trace: list[AgentEvent],
+        iteration: int,
+        *,
+        stability_pass: int = 1,
+        planner_decision: dict[str, Any] | None = None,
+        iter_records: list[ToolCallRecord] | None = None,
+    ) -> AsyncIterator[SimulationEvent | tuple[bool, str]]:
+        """对当前 planner_trace 执行一次验证，产出 phase/log/verifier_result 事件，末项为 (passed, issue)。"""
+        yield SimulationEvent("phase", {"phase": "check", "status": "running"})
+        verification_result = ""
+        verifier_trace: list[AgentEvent] = []
+        passed = False
+        issue = ""
+
+        if self._verification_mode() == "rule_based":
+            yield self._log("INFO", "规则验证：检查工具调用是否全部成功")
+            call_records = iter_records if iter_records is not None else self._collect_call_records()
+            failed = [r for r in call_records if r.error or not r.success]
+            if not call_records:
+                passed, issue = False, "未执行任何工具调用"
+            elif failed:
+                passed, issue = False, f"{len(failed)} 次工具调用失败"
+            else:
+                passed, issue = True, ""
+            verification_result = (
+                "规则验证通过：全部工具调用成功"
+                if passed
+                else f"规则验证未通过：{issue}"
+            )
+        else:
+            label = "验证 Agent 执行中…" if stability_pass == 1 else "稳定性复检：验证 Agent 审查同一轨迹…"
+            yield self._log("INFO", label)
+            verifier = self._build_verifier()
+            async for event in verifier.run(self._verifier_prompt(planner_trace)):
+                verifier_trace.append(event)
+                if event.type == "done":
+                    verification_result = event.data.get("result", "")
+                yield self._log("INFO", self._format_agent_event("Verifier", event))
+
+            verifier_had_error = any(e.type == "error" for e in verifier_trace)
+            if verifier_had_error:
+                error_detail = self._extract_agent_error(verifier_trace)
+                yield self._log("ERROR", f"验证 Agent 异常: {error_detail}")
+                if self._is_infra_error(error_detail):
+                    raise _BuildFailedError(
+                        f"验证 Agent 不可用: {error_detail}",
+                        "请检查 LLM API Key / 网络配置后重试",
+                    )
+                yield SimulationEvent("phase", {"phase": "check", "status": "done"})
+                yield (False, f"验证异常: {error_detail}")
+                return
+            passed, issue = self._parse_verification(verification_result)
+
+        yield SimulationEvent("phase", {"phase": "check", "status": "done"})
+
+        round_records = iter_records if iter_records is not None else self._collect_call_records()
+        evidence_ids = [r.call_id for r in round_records if r.call_id]
+        verifier_checks = []
+        if passed:
+            verifier_checks.append({
+                "check": "overall_verification",
+                "status": "PASSED",
+                "evidence_refs": evidence_ids,
+            })
+        else:
+            verifier_checks.append({
+                "check": "overall_verification",
+                "status": "FAILED",
+                "issue": issue,
+                "evidence_refs": evidence_ids,
+            })
+        result_payload: dict[str, Any] = {
+            "iteration": iteration,
+            "status": "PASSED" if passed else "FAILED",
+            "summary": verification_result[:500] if verification_result else "",
+            "reason": "" if passed else issue,
+            "checks": verifier_checks,
+            "issues": [] if passed else [{"description": issue, "evidence_refs": evidence_ids}],
+        }
+        if stability_pass > 1:
+            result_payload["stabilityPass"] = stability_pass
+            result_payload["sameTrajectory"] = True
+        if planner_decision:
+            result_payload["plannerDecision"] = planner_decision
+        yield SimulationEvent("verifier_result", result_payload)
+        yield (passed, issue)
+
+    # ====================== 想定解析 ======================
+
+    async def _parse_scenario_intent(self) -> dict | None:
+        """用 LLM 把自然语言场景描述解析为结构化意图（best-effort）。
+
+        产出落入 scenario_parsed 事件 → trace，供 artifact_compiler 读取填 parsedIntent。
+        对话阶段已产出 parsedIntent 时直接复用；无场景描述、LLM 不可用或返回非法 JSON 时返回 None。
+        """
+        if self.parsed_intent_pre:
+            from micro_agent.scenario.intent_schema import normalize_parsed_intent
+            out = normalize_parsed_intent(self.parsed_intent_pre)
+            out.update({
+                k: v for k, v in self.parsed_intent_pre.items()
+                if k in ("parserModel", "parsedAt", "intakeSessionId")
+            })
+            return out
+
+        if not self.scenario:
+            return None
+
+        svc_names = [s.get("name", "?") for s in self.services_meta]
+        system_prompt = (
+            "你是想定解析器。把用户的元应用场景描述解析为结构化意图。"
+            "只输出 JSON 对象，不要任何解释或 markdown。字段：\n"
+            "- goal: 字符串，一句话核心业务目标\n"
+            "- situationBrief: 字符串，必要的业务情境摘要（无则空字符串）\n"
+            "- constraints: 字符串数组，业务/合规/隐私/顺序约束（无则空数组）\n"
+            "- acceptanceCriteria: 字符串数组，验收/采纳标准（可检查，非最终成败判定）\n"
+            "- ioExpectation: 对象 {inputs: 字符串数组, outputs: 字符串数组}，预期输入与输出\n"
+        )
+        user_prompt = (
+            f"领域: {self.domain}\n"
+            f"场景描述: {self.scenario}\n"
+            f"参与服务: {svc_names}\n"
+            "请输出 JSON。"
+        )
+
+        try:
+            llm = LLM(config.llm)
+            resp = await llm.complete([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ])
+        except Exception as exc:
+            logger.warning(f"想定解析 LLM 调用失败 (non-fatal): {exc}")
+            return None
+
+        raw_intent = self._parse_intent_json(resp.content or "")
+        if not raw_intent:
+            logger.debug("想定解析未得到合法 JSON，跳过 parsedIntent")
+            return None
+
+        from micro_agent.scenario.intent_schema import normalize_parsed_intent
+        intent = normalize_parsed_intent(raw_intent)
+        intent["parserModel"] = llm.model
+        intent["parsedAt"] = datetime.now(timezone.utc).isoformat()
+        return intent
+
+    @staticmethod
+    def _parse_intent_json(text: str) -> dict | None:
+        """从 LLM 返回文本中抽取首个 JSON 对象。"""
+        if not text:
+            return None
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except (ValueError, TypeError):
+            return None
+        return data if isinstance(data, dict) else None
+
     # ====================== 数据提取 ======================
 
     def _collect_call_records(self) -> list[ToolCallRecord]:
@@ -833,17 +979,17 @@ class SimulationOrchestrator:
         records.sort(key=lambda r: r.timestamp)
         return records
 
-    def _extract_execution_path(self) -> list[str]:
-        """按调用顺序列出每一步（不去重），反映真实调用链。"""
-        records = [
-            r for r in self._collect_call_records()
+    def _extract_execution_path_from_records(self, records: list[ToolCallRecord]) -> list[str]:
+        """从给定调用记录子集构建执行路径（当前轮规划）。"""
+        usable = [
+            r for r in records
             if not r.error and r.arguments.get("action") != "health_check"
         ]
-        if not records:
+        if not usable:
             return []
 
         path = ["用户输入"]
-        for rec in records:
+        for rec in usable:
             svc = next(
                 (s for s in self.services_meta if str(s.get("id")) == str(rec.service_id)),
                 None,
@@ -858,6 +1004,14 @@ class SimulationOrchestrator:
                 path.append(svc_label)
         path.append("输出结果")
         return path
+
+    def _extract_execution_path(self) -> list[str]:
+        """全量调用链（跨轮次），用于 complete.result。"""
+        records = [
+            r for r in self._collect_call_records()
+            if not r.error and r.arguments.get("action") != "health_check"
+        ]
+        return self._extract_execution_path_from_records(records)
 
     def _build_dispatch_config(self, records: list[ToolCallRecord]) -> dict:
         steps = []
@@ -930,12 +1084,22 @@ class SimulationOrchestrator:
     def _parse_verification(text: str) -> tuple[bool, str]:
         if not text:
             return False, "验证 Agent 未产生有效结论"
-        upper = text.upper()
-        if "PASSED" in upper:
+        stripped = text.strip()
+        upper = stripped.upper()
+        # Verifier 应按约定输出 PASSED；兼容首行/首段含 PASSED 或中文「验证通过」
+        if re.search(r"\bPASSED\b", upper):
             return True, ""
-        m = re.search(r"FAILED\s*[：:]\s*(.+)", text, re.DOTALL)
-        issue = m.group(1).strip()[:200] if m else text[:200]
-        return False, issue
+        if re.match(r"^(验证通过|通过验证|审查通过)", stripped):
+            return True, ""
+        head = stripped[:120]
+        if "验证通过" in head and "未通过" not in head and "FAILED" not in upper[:120]:
+            return True, ""
+        m = re.search(r"FAILED\s*[：:]\s*(.+)", text, re.DOTALL | re.IGNORECASE)
+        if m:
+            return False, m.group(1).strip()[:200]
+        if re.match(r"^(验证未通过|未通过验证|失败)", stripped):
+            return False, stripped[:200]
+        return False, stripped[:200]
 
     @staticmethod
     def _extract_agent_error(trace: list[AgentEvent]) -> str:

@@ -72,7 +72,7 @@
 3. ~~在 `Micro-Agent` 用一条真实 trace 跑通"trace → ArtifactSpec"的转换 + 落盘。~~ → `artifact_compiler.py` + `/artifact` API（**待入库**）
 4. 再做"ArtifactSpec → 元应用配置写回 + 溯源哈希校验"。
 
-## 8. 成果对标缺口（2026-06-08，对照 PPT §7–10）
+## 8. 成果对标缺口（2026-06-10，对照 PPT §7–10）
 
 对外成果叙事（§7 中间产物 → §8 四类产物 → §9 实验支撑 → **§10 固化研究**）与当前代码差距。工程排期见 `docs/simulation-build-roadmap.md`；读写链审计见 `workspace/RECON_META_APP_READ_WRITE_CHAIN.md`。
 
@@ -82,19 +82,19 @@
 
 | 阶段 | 声称产物 | 代码现状 | 判定 |
 |------|----------|----------|------|
-| 自然语言需求 | 原始需求、用户目标 | 仅 `scenarioDescription` 进 `config_snapshot` | ⚠️ 弱 |
-| **想定解析** | 结构化场景（目标/环境/行为/约束/验证标准） | 无独立解析阶段；`parsedIntent` schema 有、编译器不填 | ❌ 缺 |
-| 智能构建 | 服务匹配、候选调度、参数依赖、预期输出 | 服务匹配✅、`planner_decision`✅；参数依赖无；预期输出未记 | ⚠️ 半 |
+| 自然语言需求 | 原始需求、用户目标 | `scenarioDescription`/`scenarioSummary` 进 `config_snapshot`；对话期 `scenario_intake` 用 FileMemory 但未写入 artifact | ⚠️ 弱 |
+| **想定解析** | 结构化场景（目标/环境/行为/约束/验证标准） | **对话期** `POST /api/agent/scenario_intake`（grill-me）→ `parsedIntent`；**仿真期**复用或 LLM 解析 → `scenario_parsed` → 编译器（`goal`/`situationBrief`/`constraints`/`acceptanceCriteria`/`ioExpectation`）；环境/预期行为仍弱 | ⚠️ 半 |
+| 智能构建 | 服务匹配、候选调度、参数依赖、预期输出 | 服务匹配✅、`planner_decision`✅；`serviceContracts`✅（声明+实测工具/成功率/通道，精简版无参数依赖）；预期输出未记 | ⚠️ 半 |
 | 仿真执行 | 调用过程、状态、回执、异常 | `tool_call_record` v1 信封✅ | ✅ 强 |
-| 验证反馈 | 结论、**状态断言**、修正建议、修正历史 | `verifier_result` 仅语义裁决；无结构化断言 | ⚠️ 半 |
+| 验证反馈 | 结论、**状态断言**、修正建议、修正历史 | `verifier_result` 含语义裁决 + `plannerDecision` 快照；无结构化状态断言 | ⚠️ 半 |
 | 规格整理与预发布 | 产物样例；交付用元数据 | ArtifactSpec 样例✅；名称/描述/类型/I-O 在预发布表单✅ | ✅ |
 
 ### 8.2 元应用产物四类（§8）
 
 | 类别 | 应含 | ArtifactSpec v0 现状 |
 |------|------|---------------------|
-| 场景与意图 | 目标/范围/约束/验证标准 | 仅 raw 描述 + 服务列表 |
-| 服务与契约 | 绑定服务/参数约束/I-O 说明 | 仅 serviceId/name/channel |
+| 场景与意图 | 目标/范围/约束/验证标准 | raw 描述 + `parsedIntent`（goal/situationBrief/constraints/acceptanceCriteria/ioExpectation） |
+| 服务与契约 | 绑定服务/参数约束/I-O 说明 | `serviceContracts`：声明工具 + 实测工具(调用数/成功率/通道)；参数约束、I-O 说明待补 |
 | 验证与断言 | 结论/状态断言/执行记录引用 | 语义结论 + evidence_refs✅；状态断言❌ |
 | 运行与交付 | 策略/异常入口/预览；交付元数据 | strategy✅、状态机异常态✅；预发布表单✅；异常处理入口❌ |
 
@@ -130,9 +130,10 @@
 | ArtifactSpec v0 schema | ✅ |
 | trace → ArtifactSpec 编译 | ✅ |
 | stateMachineTrace + solidificationReport | ✅ |
-| evidence 落盘 | ⚠️ `POST /evidence` 可落盘；仿真结束不自动触发 |
-| parsedIntent / 状态断言 / 服务契约 | ❌ |
-| artifact 单测 | ❌ |
+| evidence 落盘 | ✅ 仿真 SSE 结束自动 `run_pipeline` 落盘；仍保留 `POST /evidence` 手动入口 |
+| parsedIntent / 服务契约 | ✅ 对话 intake + 仿真 `scenario_parsed`；`serviceContracts`（精简）；状态断言仍 ❌ |
+| scenario_intake API | ✅ `POST /api/agent/scenario_intake` + 单测 |
+| artifact 单测 | ✅ `test_artifact_compiler`（39）+ `test_scenario_intake`（5）；全量 111 passed |
 
 **工作块 B（写回元应用配置）**
 
@@ -140,14 +141,14 @@
 |----|------|
 | 读写链侦察 | ✅ RECON 报告 |
 | ioeb_backend 新字段 + 迁移 | ❌ |
-| 前端 `/artifact`；prePublish 携带 artifact 字段 | ❌（预发布表单元数据已有，缺 artifact 写回链） |
+| 前端 `/artifact`；prePublish 携带 artifact 字段 | ⚠️ ioeb 仿真详情已接 `/artifact` 与想定追问（跨仓）；prePublish 写回 artifact 仍 ❌ |
 | 溯源哈希校验 | ❌ |
 
 ### 8.6 近期优先级
 
 | 优先级 | 内容 |
 |--------|------|
-| **P0** | 产物代码入库；artifact 单测；前端接 `/artifact`；演示走真链路 |
-| **P1** | 想定解析结构化；状态断言；服务契约 |
+| **P0** | ~~产物入库/单测~~；ioeb 演示走真链路 + 本地 MCP mock 追问 |
+| **P1** | 状态断言 L1–L3；intake 对话写入 artifact；服务契约参数依赖 |
 | **P2** | 适用条件 schema；冗余压缩规则；批处理接口；ioeb_backend 写回 |
 | **P3** | 技术债：拆 orchestrator、收敛 evidence 入口、消除私有方法外泄 |

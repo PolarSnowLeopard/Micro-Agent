@@ -216,6 +216,29 @@ class SolidificationReport:
 
 
 @dataclass
+class ObservedTool:
+    toolName: str
+    callCount: int
+    successCount: int = 0
+    failureCount: int = 0
+    successRate: float = 0.0
+    avgLatencyMs: Optional[float] = None
+    evidenceRefs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ServiceContract:
+    serviceId: str
+    serviceName: str
+    channel: Optional[str] = None
+    transport: Optional[str] = None
+    declaredTools: list[dict] = field(default_factory=list)
+    observedTools: list[dict] = field(default_factory=list)
+    totalCalls: int = 0
+    overallSuccessRate: Optional[float] = None
+
+
+@dataclass
 class WriteBackExistingFields:
     name: str = ""
     subtitle: str = ""
@@ -256,6 +279,7 @@ class ArtifactSpec:
     provenance: dict = field(default_factory=dict)
     solidifiable: bool = False
     solidificationReport: dict = field(default_factory=dict)
+    serviceContracts: list[dict] = field(default_factory=list)
     evidence: Optional[dict] = None
     writeBackDraft: Optional[dict] = None
 
@@ -352,6 +376,9 @@ def compile_artifact_spec(
         created_at=created_at,
     )
 
+    # ---- service contracts ----
+    service_contracts = _build_service_contracts(trace)
+
     # ---- solidification report ----
     solidification = _build_solidification_report(trace, smt, evidence)
 
@@ -373,6 +400,7 @@ def compile_artifact_spec(
         evidence=asdict(evidence) if evidence else None,
         solidifiable=solidification.solidifiable,
         solidificationReport=asdict(solidification),
+        serviceContracts=[asdict(c) for c in service_contracts],
         writeBackDraft=asdict(write_back) if write_back else None,
     )
 
@@ -424,11 +452,16 @@ def _build_scenario(trace: dict, meta_app: MetaAppInfo) -> ScenarioInfo:
     # scenarioId: deterministic from appName + domain + scenario desc
     scenario_id = _short_id("sc", f"{meta_app.appName}:{meta_app.domain}:{scenario_desc}")
 
+    # parsedIntent: 读取仿真期落盘的 scenario_parsed 事件（取最后一个）；
+    # 编译器不在此调用 LLM，保证同一 trace 编译结果确定。
+    parsed_intent = _extract_parsed_intent(trace.get("events", []))
+
     return ScenarioInfo(
         scenarioId=scenario_id,
         title=f"{app_name} — {scenario_desc[:80]}" if scenario_desc else app_name,
         description=scenario_desc or None,
         domain=meta_app.domain,
+        parsedIntent=parsed_intent,
         involvedServices=involved,
         sourceDescription=scenario_desc,
         evidenceRef={
@@ -438,7 +471,114 @@ def _build_scenario(trace: dict, meta_app: MetaAppInfo) -> ScenarioInfo:
     )
 
 
+def _extract_parsed_intent(events: list[dict]) -> Optional[dict]:
+    """取最后一个 scenario_parsed 事件的 data 作为 parsedIntent；无则 None。"""
+    parsed: Optional[dict] = None
+    for ev in events:
+        if ev.get("type") == "scenario_parsed":
+            data = ev.get("data")
+            if isinstance(data, dict) and data:
+                parsed = data
+    return parsed
+
+
+# ---- Service Contracts ---------------------------------------------------
+
+
+def _build_service_contracts(trace: dict) -> list[ServiceContract]:
+    """从 servicesMeta(声明) + tool_call_record(实测) 确定性聚合服务契约。
+
+    v0 精简版：每服务记录声明工具 + 实测工具的调用次数/成功率/通道，不做参数
+    schema 归纳与 I/O 样例。纯读 trace，无 LLM，保证编译确定性。
+    """
+    meta = trace.get("metadata", {})
+    cfg = meta.get("config_snapshot", {})
+    services_meta = cfg.get("servicesMeta", [])
+
+    # 按 serviceId 聚合 tool_call_record
+    calls_by_service: dict[str, list[dict]] = {}
+    for ev in trace.get("events", []):
+        if ev.get("type") != "tool_call_record":
+            continue
+        d = ev.get("data", {})
+        sid = str(d.get("service_id", ""))
+        calls_by_service.setdefault(sid, []).append(d)
+
+    contracts: list[ServiceContract] = []
+    for svc in services_meta:
+        sid = str(svc.get("id", ""))
+        declared = [
+            {
+                "toolId": t.get("id") or None,
+                "name": t.get("name", ""),
+                "description": t.get("description") or None,
+            }
+            for t in svc.get("tools", [])
+            if t.get("name")
+        ]
+
+        calls = calls_by_service.get(sid, [])
+        observed = _aggregate_observed_tools(calls)
+        total = len(calls)
+        succeeded = sum(1 for c in calls if c.get("success"))
+        channel = calls[0].get("channel") if calls else None
+        transport = calls[0].get("transport") if calls else None
+
+        contracts.append(ServiceContract(
+            serviceId=sid,
+            serviceName=svc.get("name", ""),
+            channel=channel,
+            transport=transport,
+            declaredTools=declared,
+            observedTools=observed,
+            totalCalls=total,
+            overallSuccessRate=round(succeeded / total, 4) if total else None,
+        ))
+
+    return contracts
+
+
+def _aggregate_observed_tools(calls: list[dict]) -> list[dict]:
+    """按 tool_name 聚合一组调用记录为 ObservedTool 列表（按工具名排序，保证确定性）。"""
+    by_tool: dict[str, list[dict]] = {}
+    for c in calls:
+        by_tool.setdefault(c.get("tool_name", ""), []).append(c)
+
+    observed: list[dict] = []
+    for tool_name in sorted(by_tool):
+        group = by_tool[tool_name]
+        success = sum(1 for c in group if c.get("success"))
+        failure = len(group) - success
+        latencies = [c["latency_ms"] for c in group if isinstance(c.get("latency_ms"), (int, float))]
+        avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+        observed.append(asdict(ObservedTool(
+            toolName=tool_name,
+            callCount=len(group),
+            successCount=success,
+            failureCount=failure,
+            successRate=round(success / len(group), 4) if group else 0.0,
+            avgLatencyMs=avg_latency,
+            evidenceRefs=[c.get("call_id", "") for c in group if c.get("call_id")],
+        )))
+    return observed
+
+
 # ---- State Machine -------------------------------------------------------
+
+
+def _format_verifier_issue_messages(issues: list) -> str:
+    """Normalize verifier_result.issues (str or {description}) for exception messages."""
+    parts: list[str] = []
+    for item in issues:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                parts.append(text)
+        elif isinstance(item, dict):
+            desc = item.get("description") or item.get("message") or item.get("issue")
+            if isinstance(desc, str) and desc.strip():
+                parts.append(desc.strip())
+    return "; ".join(parts)
 
 
 def _build_state_machine(events: list[dict], trace: dict) -> StateMachineTrace:
@@ -619,7 +759,7 @@ def _build_state_machine(events: list[dict], trace: dict) -> StateMachineTrace:
                 prev_state = s_passed
             else:
                 issues = ver_data.get("issues", [])
-                issue_msg = "; ".join(issues) if issues else "Verifier 语义裁决不通过"
+                issue_msg = _format_verifier_issue_messages(issues) or "Verifier 语义裁决不通过"
                 s_failed = _add_state(
                     _short_id("state", f"failed:{iter_num}:{ver_ts_val}"),
                     "FAILED", ver_ts_val, iteration=iter_num,
@@ -924,14 +1064,39 @@ def _build_solidification_report(
 
     # Gate 1: sufficient iterations
     strategy = trace.get("strategy", {})
-    required = strategy.get("minIterations", 1)
-    actual = trace.get("iterations", 0)
-    iter_ok = actual >= required
+    stability_req = strategy.get("stabilityPasses")
+    verifier_passes = sum(
+        1 for e in trace.get("events", [])
+        if e.get("type") == "verifier_result"
+        and e.get("data", {}).get("status") == "PASSED"
+    )
+    if stability_req is not None:
+        try:
+            required = max(1, int(stability_req))
+        except (TypeError, ValueError):
+            required = 1
+        iter_ok = verifier_passes >= required
+        suff_detail = f"验证通过 {verifier_passes} 次，要求同一轨迹至少 {required} 次"
+        suff_remediation = (
+            "" if iter_ok
+            else f"需同一调度轨迹连续通过 Verifier {required} 次，当前 {verifier_passes} 次"
+        )
+        suff_value = verifier_passes
+    else:
+        try:
+            required = max(1, int(strategy.get("minIterations", 1)))
+        except (TypeError, ValueError):
+            required = 1
+        actual = trace.get("iterations", 0)
+        iter_ok = actual >= required
+        suff_detail = f"实际迭代 {actual} 轮，最少要求 {required} 轮"
+        suff_remediation = "" if iter_ok else f"需至少 {required} 轮迭代，当前仅 {actual} 轮"
+        suff_value = actual
     gates.append(GateResult(
         gate="sufficientIterations",
         passed=iter_ok,
-        detail=f"实际迭代 {actual} 轮，最少要求 {required} 轮",
-        remediation="" if iter_ok else f"需至少 {required} 轮迭代，当前仅 {actual} 轮",
+        detail=suff_detail,
+        remediation=suff_remediation,
     ))
 
     # Gate 2: verifier passed (last iteration)
@@ -992,8 +1157,12 @@ def _build_solidification_report(
     all_pass = all(g.passed for g in gates)
 
     conditions = {
-        "sufficientIterations": {"passed": iter_ok, "value": actual, "required": required,
-                                  "detail": gates[0].detail},
+        "sufficientIterations": {
+            "passed": iter_ok,
+            "value": suff_value,
+            "required": required,
+            "detail": gates[0].detail,
+        },
         "verifierPassed": {"passed": ver_ok, "status": last_ver_status,
                             "detail": gates[1].detail},
         "evidenceComplete": {"passed": ev_ok, "completenessStatus": ev_completeness,
