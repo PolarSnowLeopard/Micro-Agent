@@ -55,7 +55,8 @@ jobs:
     steps:
       - name: Trigger deploy webhook
         run: |
+          SHORT_SHA=${GITHUB_SHA::7}
           curl -sf -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}" \
             -H "X-Deploy-Token: ${{ secrets.DEPLOY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"service":"agent","image":"${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest"}'
+            -d "{\"service\":\"agent\",\"image\":\"${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${SHORT_SHA}\"}"
