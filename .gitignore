@@ -25,6 +25,7 @@ config/config.toml
 
 # 运行时产生的临时文件
 workspace/data/memory/*.json
+workspace/data/traces/
 workspace/app-demo-output/
 workspace/temp/
 
@@ -33,3 +34,11 @@ tests/e2e_demo.py
 tests/bench_rag_quality.py
 tests/fixtures/
 demo/
+
+# trace_evidence 开发中间产物（完成后以 trace_evidence/README.md 为准）
+trace_evidence/INFRASTRUCTURE_REPORT.md
+trace_evidence/PROGRESS.md
+trace_evidence/output/
+trace_evidence/output_headless/
+trace_evidence/output_audit/
+trace_evidence/output_audit_*/

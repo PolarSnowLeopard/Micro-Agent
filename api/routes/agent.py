@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from functools import partial
@@ -232,12 +233,28 @@ async def mcp_service_recommendation(
         use_mcp=True,
     )
     assert isinstance(agent, MCPAgent)
-    await agent.connect(ServerConfig(
-        connection_type="stdio",
-        command="python",
-        args=["-m", "app.mcp.mysql_server.server"],
-        server_id="mysql_server",
-    ))
+    try:
+        await asyncio.wait_for(
+            agent.connect(ServerConfig(
+                connection_type="stdio",
+                command="python",
+                args=["-m", "app.mcp.mysql_server.server"],
+                server_id="mysql_server",
+            )),
+            timeout=25.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error("mcp_service_recommendation: MCP 连接超时")
+        raise HTTPException(
+            status_code=503,
+            detail="MCP 服务连接超时（mysql_server），请检查运行环境或稍后重试",
+        ) from None
+    except Exception as e:
+        logger.error(f"mcp_service_recommendation: MCP 连接失败: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"MCP 服务连接失败: {e}",
+        ) from e
     ctx = await task_manager.submit(agent, prompt)
 
     output_file = f"{WORKSPACE}/temp/mcp_recommendation_result.json"
