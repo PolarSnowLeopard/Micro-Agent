@@ -167,6 +167,7 @@ def build_aml_auto_generate_prompt(
     algorithm_category: str = "",
     category_params: Optional[dict] = None,
     rag_context: str = "",
+    reference_materials: str = "",
 ) -> str:
     sections: list[str] = []
     params = category_params or {}
@@ -222,6 +223,27 @@ def build_aml_auto_generate_prompt(
             "以下是与本任务高度相关的领域知识，包含技术路线、库选型、代码范例等。\n"
             "**在步骤 2 技术选型时必须优先参考这些内容。**\n\n"
             f"{rag_context}"
+        )
+
+    # ── 用户提供的参考资料 + 差异化/知识产权要求 ──
+    if reference_materials:
+        sections.append(
+            "\n## 用户提供的参考资料\n\n"
+            "以下是用户提交的「相关资料」（可能包含论文、专利、开源代码、网址内容或说明），"
+            "用于指导本次算法模型的优化方向：\n\n"
+            f"{reference_materials[:6000]}\n"
+        )
+        sections.append(
+            "\n## 差异化与知识产权要求（必须严格遵守）\n\n"
+            "针对上述参考资料，你必须：\n"
+            "1. **参考但不照搬**：可以借鉴其中的思路、方法论与技术路线，"
+            "但严禁逐行复制其源码或直接实现受专利保护的具体方案；\n"
+            "2. **主动差异化创新**：至少在算法结构、关键步骤、特征工程、"
+            "优化策略或工程实现中的若干方面做出实质性改进与区别，避免与参考资料雷同；\n"
+            "3. **规避知识产权争议**：不得引入明显侵犯版权/专利的实现；"
+            "若参考资料含明确专利点，应采用替代方案绕开；\n"
+            "4. **可追溯说明**：在最终结果中明确记录参考了哪些资料、做了哪些差异化处理，"
+            "以备知识产权审查（填入下方 JSON 的 references 与 differentiation_summary 字段）。"
         )
 
     # ── 类别特定参数 ──
@@ -318,10 +340,31 @@ def build_aml_auto_generate_prompt(
         {{{{"name": "功能测试", "status": "passed", "description": "...", "details": "..."}}}}
     ],
     "references": [
-        {{{{"type": "paper", "title": "...", "summary": "..."}}}}
-    ]
+        {{{{
+            "type": "paper",
+            "title": "...",
+            "summary": "...",
+            "source": "用户上传 | RAG知识库 | 网址",
+            "what_referenced": "从该资料参考了什么思路/方法",
+            "what_added": "在其基础上新增了什么",
+            "what_improved": "相比该资料提升/优化了什么",
+            "advantages_vs_existing": "相比现有同类算法的特点与优势",
+            "ip_considerations": "为规避知识产权争议所做的差异化处理"
+        }}}}
+    ],
+    "differentiation_summary": {{{{
+        "overall_strategy": "整体差异化与创新策略概述",
+        "key_innovations": ["关键创新点1", "关键创新点2"],
+        "improvements": ["相比参考资料/现有方案的提升点1", "提升点2"],
+        "advantages": ["对比现有算法的特点与优势1", "优势2"],
+        "ip_risk_notes": "知识产权风险规避说明"
+    }}}}
 }}}}
 ```
+说明：
+- 即使用户未提供参考资料，也应基于通用现有算法填写 references（来源标 RAG知识库 或常识）与 differentiation_summary，
+  说明本方案参考了什么、新增/提升了什么、对比现有算法有哪些特点与优势。
+- differentiation_summary 必须填写，用于向用户清晰展示「参考了…、新增了…、提升了…、对比优势…」。
 
 ### 步骤 7：完成任务
 确认 JSON 文件已保存后，调用 terminate 结束任务。
@@ -331,9 +374,10 @@ def build_aml_auto_generate_prompt(
 ## 注意事项
 1. 平台规范优先：严格遵守 Skill 中的函数独立性与 Google docstring 要求
 2. 代码完整性：不要用省略号或 pass 代替实现
-3. 如果 RAG 检索到了参考资料或 Skill 提供了技术指导，在 references 字段中列出
+3. 如果 RAG 检索到了参考资料、用户提供了「相关资料」或 Skill 提供了技术指导，在 references 字段中列出，并填写 what_referenced/what_added/what_improved 等子字段
 4. 逐步执行，不要跳过任何步骤
 5. 如果有技术约束，在步骤 2 中必须逐条说明如何满足
+6. 若用户提供了「相关资料」，必须遵守上方「差异化与知识产权要求」，并完整填写 differentiation_summary
 
 ## 硬性禁止（违反任一条将导致代码不合格）
 1. **禁止**使用 `random.choice()` / `random.randint()` / `random.uniform()` 作为分类、检测或预测的核心决策逻辑

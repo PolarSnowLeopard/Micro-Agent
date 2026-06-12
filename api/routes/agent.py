@@ -33,9 +33,11 @@ from pydantic import BaseModel
 from api.deps import build_agent, task_manager
 from api.services.files import (
     cleanup_paths,
+    fetch_url_text,
     find_main_file,
     parse_dataset_file,
     read_paper_content,
+    read_reference_text,
     resolve_file_or_url,
     resolve_project_dir,
     save_upload,
@@ -408,6 +410,11 @@ _aml_retriever = None
 AML_AUTO_GENERATE_SYSTEM_PROMPT = (
     "你是一个专业的AI算法工程师 Agent，能够根据用户需求自动生成高质量的算法模型代码。"
     "请使用可用的工具完成代码生成与质量分析任务，完成后使用 terminate 工具返回最终结果。"
+    "当用户提供了「相关资料」（论文、专利、开源代码、网址等）时，你应当："
+    "1) 参考这些资料中的思路与方法，但严禁逐行照搬其代码或受专利保护的具体实现；"
+    "2) 主动进行差异化创新（如改进结构、替换关键步骤、优化策略、结合多种方法），"
+    "确保产出与参考资料有实质性区别，规避知识产权与专利侵权争议；"
+    "3) 在最终结果中清晰说明参考了什么、新增了什么、提升了什么，以及相比现有算法的特点与优势。"
 )
 
 
@@ -443,6 +450,9 @@ async def aml_auto_generate(
     dataset_file: UploadFile = File(None),
     algorithm_category: str = Form(""),
     category_params: str = Form(""),
+    reference_files: list[UploadFile] = File(default=[]),
+    reference_urls: str = Form(""),
+    reference_notes: str = Form(""),
     session_id: Optional[str] = Form(default=None),
 ):
     from tasks.aml_auto_generate import build_aml_auto_generate_prompt
@@ -450,6 +460,7 @@ async def aml_auto_generate(
     cleanup_files: list[str] = []
     paper_content = ""
     dataset_info: dict = {}
+    reference_materials = ""
 
     try:
         if file and file.filename:
@@ -473,6 +484,46 @@ async def aml_auto_generate(
 
         parsed_category_params = _parse_json_form(category_params) or {}
 
+        # 处理用户提供的「相关资料」：文件 + URL + 备注，汇总为参考文本
+        reference_sections: list[str] = []
+        ref_keywords: list[str] = []
+        if reference_files:
+            for rf in reference_files:
+                if not rf or not getattr(rf, "filename", None):
+                    continue
+                try:
+                    ref_saved = await save_upload(rf, Path(WORKSPACE) / "temp" / "references")
+                    cleanup_files.append(str(ref_saved))
+                    ref_text = read_reference_text(str(ref_saved))
+                    if ref_text.strip():
+                        reference_sections.append(
+                            f"【资料文件：{rf.filename}】\n{ref_text}"
+                        )
+                        ref_keywords.append(os.path.splitext(rf.filename)[0])
+                    logger.info(f"参考资料文件已提取: {rf.filename} ({len(ref_text)} 字符)")
+                except Exception as e:
+                    logger.warning(f"处理参考资料文件失败 ({getattr(rf, 'filename', '?')}): {e}")
+
+        url_list = _parse_json_form(reference_urls) or []
+        if isinstance(url_list, str):
+            url_list = [url_list]
+        for url in url_list:
+            if not url:
+                continue
+            url_text = await fetch_url_text(str(url))
+            if url_text.strip():
+                reference_sections.append(f"【参考网址：{url}】\n{url_text}")
+            else:
+                reference_sections.append(f"【参考网址：{url}】（未能抓取内容，请仅作链接参考）")
+            ref_keywords.append(str(url))
+
+        if reference_notes.strip():
+            reference_sections.append(f"【用户参考说明】\n{reference_notes.strip()}")
+
+        if reference_sections:
+            reference_materials = "\n\n".join(reference_sections)
+            logger.info(f"已汇总参考资料 {len(reference_sections)} 项，共 {len(reference_materials)} 字符")
+
         retriever = await _get_aml_retriever()
 
         # Skill 匹配：通过 SkillRegistry 元数据自动选择（含 always_for）
@@ -490,6 +541,8 @@ async def aml_auto_generate(
             cat_labels = parsed_category_params.get("labels") or []
             if cat_labels:
                 rag_parts.extend(str(l) for l in cat_labels)
+            if ref_keywords:
+                rag_parts.extend(ref_keywords[:5])
             rag_query = " ".join(p for p in rag_parts if p)
             rag_docs = await retriever.retrieve(rag_query, top_k=5)
             if rag_docs:
@@ -538,6 +591,7 @@ async def aml_auto_generate(
             algorithm_category=algorithm_category,
             category_params=parsed_category_params,
             rag_context=rag_context,
+            reference_materials=reference_materials,
         )
 
         ctx = await task_manager.submit(agent, prompt)

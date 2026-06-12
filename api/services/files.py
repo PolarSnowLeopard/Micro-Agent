@@ -154,6 +154,65 @@ def read_paper_content(file_path: str) -> str:
     return content
 
 
+def read_reference_text(file_path: str, max_chars: int = 4000) -> str:
+    """读取参考资料文件文本内容。
+
+    支持 PDF / DOC / DOCX（复用 read_paper_content）、纯文本(.txt/.md)、
+    代码文件(.py/.ipynb)。返回截断到 max_chars 的文本。
+    """
+    _, ext = os.path.splitext(file_path.lower())
+    content = ""
+    try:
+        if ext in (".pdf", ".doc", ".docx"):
+            content = read_paper_content(file_path)
+        elif ext in (".txt", ".md", ".py", ".ipynb", ".json", ".csv"):
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        elif ext == ".zip":
+            # 解压后拼接其中的代码/文本文件内容
+            parts = []
+            try:
+                with zipfile.ZipFile(file_path, "r") as zf:
+                    for name in zf.namelist():
+                        if name.endswith((".py", ".txt", ".md", ".json")) and not name.startswith("__MACOSX"):
+                            try:
+                                parts.append(f"# {name}\n" + zf.read(name).decode("utf-8", errors="replace"))
+                            except Exception:
+                                continue
+                        if sum(len(p) for p in parts) > max_chars:
+                            break
+            except Exception as e:
+                logger.warning(f"读取 ZIP 参考资料失败 ({file_path}): {e}")
+            content = "\n\n".join(parts)
+        else:
+            logger.info(f"参考资料类型暂不支持文本提取，跳过: {ext}")
+    except Exception as e:
+        logger.warning(f"提取参考资料内容失败 ({file_path}): {e}")
+    return (content or "")[:max_chars]
+
+
+async def fetch_url_text(url: str, max_chars: int = 4000) -> str:
+    """抓取 URL 的可读文本（简单去标签）。失败返回空字符串。"""
+    import re
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 Micro-Agent"})
+            if resp.status_code != 200:
+                logger.warning(f"抓取 URL 失败 [{resp.status_code}]: {url}")
+                return ""
+            text = resp.text
+    except Exception as e:
+        logger.warning(f"抓取 URL 异常 ({url}): {e}")
+        return ""
+
+    # 粗略去除 script/style 和 HTML 标签
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars]
+
+
 def cleanup_paths(*paths: str | Path) -> None:
     """安全清理临时文件和目录。"""
     for p in paths:
