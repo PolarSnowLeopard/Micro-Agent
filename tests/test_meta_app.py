@@ -211,6 +211,6 @@ def test_event_to_legacy():
 
 def test_app_includes_agent_endpoints():
     from api.app import app
-    paths = [r.path for r in app.routes]
+    paths = list(app.openapi()["paths"].keys())
     assert any("/api/agent/meta_app/run" in p for p in paths)
     assert any("/api/agent/capability_describe" in p for p in paths)
