@@ -28,6 +28,7 @@ class TaskContext:
     status: str = "running"  # running | completed | failed | cancelled
     events: list[AgentEvent] = field(default_factory=list)
     _agent: Optional[Agent] = field(default=None, repr=False)
+    _runner: Optional[asyncio.Task] = field(default=None, repr=False)
     _condition: asyncio.Condition = field(
         default_factory=asyncio.Condition, repr=False
     )
@@ -94,7 +95,8 @@ class TaskManager:
 
         ctx = TaskContext(task_id=task_id, _agent=agent)
         self._tasks[task_id] = ctx
-        asyncio.create_task(self._execute(ctx, request))
+        ctx._runner = asyncio.create_task(self._execute(ctx, request))
+        ctx._runner.add_done_callback(self._consume_runner_result)
         logger.info(f"任务 {task_id} 已提交")
         return ctx
 
@@ -102,7 +104,18 @@ class TaskManager:
         try:
             async for event in ctx._agent.run(request):
                 await ctx.add_event(event)
-            ctx.status = "completed"
+            if ctx.status == "running":
+                ctx.status = "completed"
+        except asyncio.CancelledError:
+            if not self._has_cancelled_event(ctx):
+                await ctx.add_event(
+                    AgentEvent(
+                        type="done",
+                        step=0,
+                        data={"result": "任务已取消", "reason": "cancelled"},
+                    )
+                )
+            ctx.status = "cancelled"
         except Exception as e:
             logger.error(f"任务 {ctx.task_id} 执行失败: {e}")
             await ctx.add_event(
@@ -124,9 +137,36 @@ class TaskManager:
         ctx = self._tasks.get(task_id)
         if ctx and ctx.status == "running":
             ctx.cancel()
+            if not self._has_cancelled_event(ctx):
+                ctx.events.append(
+                    AgentEvent(
+                        type="done",
+                        step=0,
+                        data={"result": "任务已取消", "reason": "cancelled"},
+                    )
+                )
+            if ctx._runner and not ctx._runner.done():
+                ctx._runner.cancel()
             ctx.status = "cancelled"
             return True
         return False
+
+    @staticmethod
+    def _has_cancelled_event(ctx: TaskContext) -> bool:
+        return any(
+            event.data.get("reason") == "cancelled"
+            for event in ctx.events
+        )
+
+    @staticmethod
+    def _consume_runner_result(task: asyncio.Task) -> None:
+        """Consume task exceptions so closed event loops do not report leaks."""
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"后台任务异常: {e}")
 
     def list_tasks(self) -> list[dict]:
         return [
