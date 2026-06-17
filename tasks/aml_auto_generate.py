@@ -336,6 +336,14 @@ def build_aml_auto_generate_prompt(
     "model_name": "{model_name}",
     "generated_code": "<完整代码>",
     "code_filename": "{model_name}_algorithm.py",
+    "model_summary": {{{{
+        "purpose": "用非技术用户能理解的中文说明：这个算法模型主要帮助用户完成什么任务",
+        "input_description": "说明用户需要提供什么数据或材料，不要出现 bash、py_compile 等命令行细节",
+        "output_description": "说明模型会输出什么结果，以及结果如何帮助业务判断",
+        "usage_scenarios": ["适用业务场景1", "适用业务场景2"],
+        "limitations": "说明当前方案可能不完善的地方；若用户描述不完整，必须明确指出需要补充的信息",
+        "next_steps": ["建议用户后续补充的数据、规则或评价指标"]
+    }}}},
     "test_results": [
         {{{{"name": "功能测试", "status": "passed", "description": "...", "details": "..."}}}}
     ],
@@ -365,6 +373,8 @@ def build_aml_auto_generate_prompt(
 - 即使用户未提供参考资料，也应基于通用现有算法填写 references（来源标 RAG知识库 或常识）与 differentiation_summary，
   说明本方案参考了什么、新增/提升了什么、对比现有算法有哪些特点与优势。
 - differentiation_summary 必须填写，用于向用户清晰展示「参考了…、新增了…、提升了…、对比优势…」。
+- model_summary 必须填写，且必须面向不懂技术的用户，避免展示 bash、cat、python3、py_compile、main_process 等命令行或工程实现细节。
+- 如果用户需求描述不完整、数据集缺失或参考资料不足，必须在 model_summary.limitations 与 model_summary.next_steps 中用友好语言说明。
 
 ### 步骤 7：完成任务
 确认 JSON 文件已保存后，调用 terminate 结束任务。
@@ -378,6 +388,7 @@ def build_aml_auto_generate_prompt(
 4. 逐步执行，不要跳过任何步骤
 5. 如果有技术约束，在步骤 2 中必须逐条说明如何满足
 6. 若用户提供了「相关资料」，必须遵守上方「差异化与知识产权要求」，并完整填写 differentiation_summary
+7. 面向用户展示的 model_summary 必须通俗、简洁、可操作，不得暴露命令行执行过程或源码写入过程
 
 ## 硬性禁止（违反任一条将导致代码不合格）
 1. **禁止**使用 `random.choice()` / `random.randint()` / `random.uniform()` 作为分类、检测或预测的核心决策逻辑
