@@ -114,7 +114,7 @@ async def test_fastapi_import():
     from api.app import app
     assert app.title == "Micro-Agent V2"
 
-    routes = [r.path for r in app.routes]
+    routes = list(app.openapi()["paths"].keys())
     assert "/api/tasks" in routes or any("/api/tasks" in r for r in routes)
     assert "/health" in routes
 
