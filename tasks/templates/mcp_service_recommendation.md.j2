@@ -5,8 +5,8 @@
 {% if scenario_summary|default('') %}
 已澄清的想定摘要：{{ scenario_summary }}
 {% endif %}
-{% if parsed_intent|default('') %}
-结构化想定（parsedIntent）：{{ parsed_intent }}
+{% if scenario_parsed|default('') %}
+结构化想定（scenarioParsed）：{{ scenario_parsed }}
 {% endif %}
 {% if user_remark|default('') %}
 用户备注（preDes，一句话）：{{ user_remark }}

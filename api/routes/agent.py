@@ -248,7 +248,7 @@ async def mcp_service_recommendation(
     message: str = Form(...),
     service_type: str = Form(...),
     scenario_summary: str = Form(default=""),
-    parsed_intent: str = Form(default=""),
+    scenario_parsed: str = Form(default=""),
     user_remark: str = Form(default=""),
     session_id: Optional[str] = Form(default=None),
 ):
@@ -258,7 +258,7 @@ async def mcp_service_recommendation(
         service_type=service_type,
         workspace=WORKSPACE,
         scenario_summary=scenario_summary,
-        parsed_intent=parsed_intent,
+        scenario_parsed=scenario_parsed,
         user_remark=user_remark,
     )
     agent, resolved_session = await build_agent(

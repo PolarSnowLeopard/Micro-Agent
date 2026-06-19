@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Any, Optional
 
 from loguru import logger
 
@@ -130,9 +130,9 @@ class Agent:
                     data={"tool": tc.name, "arguments": tc.parse_arguments()},
                 )
 
-                result = await self.tools.execute(tc.name, **tc.parse_arguments())
+                tool_result = await self.tools.execute(tc.name, **tc.parse_arguments())
 
-                output = str(result)
+                output = str(tool_result)
                 if len(output) > self.max_observe:
                     output = output[: self.max_observe] + "\n...(truncated)"
 
@@ -147,10 +147,13 @@ class Agent:
                 )
 
                 if self._is_terminal(tc.name):
+                    done_data: dict[str, Any] = {"result": output, "tool": tc.name}
+                    if tool_result.meta:
+                        done_data.update(tool_result.meta)
                     yield AgentEvent(
                         type="done",
                         step=step,
-                        data={"result": output, "tool": tc.name},
+                        data=done_data,
                     )
                     should_stop = True
                     break

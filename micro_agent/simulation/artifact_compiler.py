@@ -1,26 +1,44 @@
-"""ArtifactSpec v0 Compiler — trace → 结构化元应用产物
+"""ArtifactSpec v0.3 Compiler — trace → 结论型元应用产物 + 可选 goldenPath
 
-独立模块，从已持久化的 v1.0.0 TraceRecord JSON 编译 ArtifactSpec。
-零侵入 orchestrator，只读 trace dict 和可选的 PipelineResult。
+从 v1.0.0 TraceRecord 编译 ArtifactSpec。完整过程 trace 保留在 data/traces/；
+产物只保存想定结论、服务契约、固化报告、可选黄金路径。
+
+顶层结构（5 个收敛核心字段 + 2 个结论型附属字段）：
+  核心：parsedIntent / serviceContracts / goldenPath / solidificationReport / artifactMeta
+  附属：evidence（证据检查结论摘要，非完整检查过程）
+        writeBackDraft（平台目录回写草稿，纯派生字段）
+两个附属字段均为结论/引用型，不携带逐步过程明细，故保留于产物主体。
 
 用法:
     from micro_agent.simulation.artifact_compiler import compile_artifact_spec
-    spec = compile_artifact_spec(trace_dict)          # 仅 trace
-    spec = compile_artifact_spec(trace_dict, pipeline_result)  # trace + evidence
+    spec = compile_artifact_spec(trace_dict, pipeline_result)
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import uuid
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
+from micro_agent.scenario.schema import (
+    ScenarioParsed,
+    ScenarioSource,
+    normalize_scenario_parsed,
+)
+
+DEFAULT_FALLBACK_POLICY = {
+    "onInputMismatch": "planner_replan",
+    "onServiceUnavailable": "planner_replan",
+    "onToolFailure": "retry_then_replan",
+    "onAssertionFail": "verifier_then_planner",
+    "onSafetyViolation": "abort_and_user_confirm",
+}
+
 # ---------------------------------------------------------------------------
-# Dataclass hierarchy — mirrors artifact_spec_schema.json 1:1
+# Dataclasses
 # ---------------------------------------------------------------------------
 
 
@@ -33,186 +51,22 @@ class MetaAppInfo:
 
 
 @dataclass
-class ScenarioInfo:
-    title: str
-    domain: str
-    sourceDescription: str
-    scenarioId: Optional[str] = None
-    description: Optional[str] = None
-    parsedIntent: Optional[dict] = None
-    involvedServices: list[dict] = field(default_factory=list)
-    evidenceRef: dict = field(default_factory=dict)
+class _TraceSummary:
+    """内部：从 trace 推导的构建摘要，不写入产物主体。"""
 
-
-@dataclass
-class ExceptionInfo:
-    exceptionType: str
-    message: str
-    recoverable: bool
-
-
-@dataclass
-class StateNode:
-    stateId: str
-    state: str
-    enteredAt: str
-    iteration: int = 0
-    exitedAt: Optional[str] = None
-    durationMs: Optional[float] = None
-    metadata: dict = field(default_factory=dict)
-    exception: Optional[dict] = None
-    evidenceRefs: list[str] = field(default_factory=list)
-
-
-@dataclass
-class BoundToolCall:
-    callId: str
-    toolName: str = ""
-    serviceId: str = ""
-    success: bool = True
-    latencyMs: Optional[float] = None
-    resultHash: Optional[str] = None
-
-
-@dataclass
-class Transition:
-    transitionId: str
-    fromState: str
-    toState: str
-    trigger: str
-    iteration: int = 0
-    occurredAt: Optional[str] = None
-    boundToolCalls: list[dict] = field(default_factory=list)
-    evidenceRefs: list[str] = field(default_factory=list)
-
-
-@dataclass
-class IterationPlanner:
-    selectedTools: list[str]
-    iteration: int = 1
-    candidateTools: list[str] = field(default_factory=list)
-    executionPath: list[str] = field(default_factory=list)
-    reasonSummary: Optional[str] = None
-    dispatchSteps: list[dict] = field(default_factory=list)
-    totalExpectedCalls: int = 0
-    evidenceRef: str = ""
-
-
-@dataclass
-class IterationVerifier:
-    status: str = "PASSED"
-    iteration: int = 1
-    summary: Optional[str] = None
-    checks: list[dict] = field(default_factory=list)
-    issues: list[str] = field(default_factory=list)
-    issueCount: int = 0
-    evidenceRef: Optional[str] = None
-
-
-@dataclass
-class IterationToolCall:
-    callId: str
-    toolName: str
-    serviceId: str
-    channel: str
-    success: bool
-    serviceName: Optional[str] = None
-    transport: Optional[str] = None
-    arguments: dict = field(default_factory=dict)
-    resultPreview: Optional[str] = None
-    resultHash: Optional[str] = None
-    error: Optional[str] = None
-    latencyMs: Optional[float] = None
-    timestamp: Optional[float] = None
-
-
-@dataclass
-class IterationException:
-    hasToolError: bool = False
-    hasVerifierFailure: bool = False
-    failedToolCalls: list[str] = field(default_factory=list)
-    verifierIssues: list[str] = field(default_factory=list)
-
-
-@dataclass
-class IterationSnapshot:
-    iterationNumber: int
-    states: list[str]
-    planner: dict
-    verifier: Optional[dict]
-    toolCalls: list[dict]
-    exception: Optional[dict] = None
-
-
-@dataclass
-class StateMachineTrace:
-    states: list[dict]
-    transitions: list[dict]
-    iterations: list[dict]
-    totalIterations: int = 0
     finalStatus: str = "UNKNOWN"
+    totalIterations: int = 0
     elapsedMs: int = 0
     strategy: dict = field(default_factory=dict)
+    tool_call_events: list[dict] = field(default_factory=list)
 
 
 @dataclass
 class EvidenceSnapshot:
     evidenceId: Optional[str] = None
-    evidenceFingerprint: Optional[str] = None
     checkerStatus: Optional[str] = None
     completeness: Optional[str] = None
     missingEvidenceCategories: list[str] = field(default_factory=list)
-    evidenceRef: Optional[str] = None
-
-
-@dataclass
-class ToolCallProvenance:
-    callId: str
-    resultHash: Optional[str] = None
-    toolName: str = ""
-    serviceId: str = ""
-    channel: str = ""
-    timestamp: Optional[float] = None
-
-
-@dataclass
-class Provenance:
-    sourceSessionId: str
-    sourceTraceVersion: str
-    artifactHash: str
-    traceHash: str = ""
-    configSnapshotHash: str = ""
-    compilerVersion: Optional[str] = None
-    createdAt: str = ""
-    toolCallProvenance: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class GateResult:
-    gate: str
-    passed: bool
-    detail: str
-    remediation: str = ""
-
-
-@dataclass
-class ConditionResult:
-    passed: bool
-    def _asdict(self, extra: dict | None = None) -> dict:
-        return asdict(self) | (extra or {})
-
-
-@dataclass
-class BoolCondition(ConditionResult):
-    def _asdict(self, extra: dict | None = None) -> dict:
-        return {"passed": self.passed} | (extra or {})
-
-
-@dataclass
-class SolidificationReport:
-    solidifiable: bool
-    conditions: dict = field(default_factory=dict)
-    gates: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -239,28 +93,26 @@ class ServiceContract:
 
 
 @dataclass
-class WriteBackExistingFields:
-    name: str = ""
-    subtitle: str = ""
-    services: list[str] = field(default_factory=list)
-    inputName: str = ""
-    outputName: str = ""
-    outputVisualization: bool = False
-    submitButtonText: str = ""
-    des: str = ""
+class GateResult:
+    gate: str
+    passed: bool
+    detail: str
+    remediation: str = ""
 
 
 @dataclass
-class WriteBackNewFields:
-    artifactSpecJson: str = ""
-    sourceSessionId: str = ""
-    traceHash: str = ""
-    artifactHash: str = ""
-    schemaVersion: str = ""
+class SolidificationReport:
+    solidifiable: bool
+    gates: list[dict] = field(default_factory=list)
+    conditions: dict = field(default_factory=dict)
+    goldenPathExtractable: bool = False
+    goldenPathReason: str = ""
+    remediation: list[str] = field(default_factory=list)
 
 
 @dataclass
 class WriteBackDraft:
+    targetTable: str = "service_apis"
     existingFields: dict = field(default_factory=dict)
     newFields: dict = field(default_factory=dict)
     tools: list[dict] = field(default_factory=list)
@@ -268,32 +120,136 @@ class WriteBackDraft:
 
 @dataclass
 class ArtifactSpec:
-    """ArtifactSpec v0 — 从仿真 trace 编译的元应用产物"""
-    schemaVersion: str = "0.1.0"
-    artifactId: str = ""
-    sourceSessionId: str = ""
-    createdAt: str = ""
-    metaApp: dict = field(default_factory=dict)
-    scenario: dict = field(default_factory=dict)
-    stateMachineTrace: dict = field(default_factory=dict)
-    provenance: dict = field(default_factory=dict)
-    solidifiable: bool = False
-    solidificationReport: dict = field(default_factory=dict)
+    """ArtifactSpec v0.3 — 结论 + 可选 goldenPath。"""
+
+    schemaVersion: str = "0.3.0"
+    parsedIntent: dict = field(default_factory=dict)
     serviceContracts: list[dict] = field(default_factory=list)
+    goldenPath: Optional[dict] = None
+    solidificationReport: dict = field(default_factory=dict)
+    artifactMeta: dict = field(default_factory=dict)
     evidence: Optional[dict] = None
     writeBackDraft: Optional[dict] = None
+
+    @property
+    def solidifiable(self) -> bool:
+        return bool(self.solidificationReport.get("solidifiable"))
+
+    @property
+    def artifactId(self) -> str:
+        return str(self.artifactMeta.get("artifactId", ""))
+
+    @property
+    def sourceSessionId(self) -> str:
+        return str(self.artifactMeta.get("sourceSessionId", ""))
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
+# 向后兼容：测试/旧代码可能仍引用
+ExecutionTrace = _TraceSummary
+ExecutionStep = dict
+
+
 # ---------------------------------------------------------------------------
-# Compiler
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def compile_artifact_spec(
+    trace: dict,
+    pipeline_result: Any | None = None,
+    *,
+    schema_version: str = "0.3.0",
+    compiler_version: str | None = None,
+) -> ArtifactSpec:
+    """Compile ArtifactSpec v0.3 from a v1.0.0 trace dict."""
+    meta = trace.get("metadata", {})
+    runtime = meta.get("runtime", {})
+    trace_ver = runtime.get("trace_version") or meta.get("trace_version", "")
+    if trace_ver != "v1.0.0":
+        raise ValueError(
+            f"ArtifactSpec compiler requires v1.0.0 traces, got {trace_ver!r}"
+        )
+
+    session_id = trace.get("session_id", "")
+    events: list[dict] = trace.get("events", [])
+    summary = _derive_trace_summary(events, trace)
+    meta_app = _build_meta_app(trace)
+    parsed_intent = _build_parsed_intent(trace, meta_app, session_id)
+    evidence = _build_evidence(pipeline_result)
+    service_contracts = _build_service_contracts(trace)
+
+    created_at = _ts_to_iso(trace.get("created_at"))
+    config_snapshot = meta.get("config_snapshot", {})
+    trace_hash = _sha256(json.dumps(trace, ensure_ascii=False, sort_keys=True))
+    config_hash = _sha256(json.dumps(config_snapshot, ensure_ascii=False, sort_keys=True))
+
+    solidification = _build_solidification_report(trace, summary, evidence)
+
+    golden_path: Optional[dict] = None
+    if solidification.solidifiable:
+        golden_path, gp_ok, gp_reason, gp_remediation = _extract_golden_path(
+            trace,
+            events,
+            session_id,
+            parsed_intent,
+            service_contracts,
+            evidence,
+        )
+        solidification.goldenPathExtractable = gp_ok
+        solidification.goldenPathReason = gp_reason
+        solidification.remediation.extend(gp_remediation)
+    else:
+        solidification.goldenPathExtractable = False
+        solidification.goldenPathReason = "solidification gates failed"
+        solidification.remediation = _collect_gate_remediation(solidification.gates)
+
+    artifact_meta = _build_artifact_meta(
+        session_id=session_id,
+        trace_hash=trace_hash,
+        config_hash=config_hash,
+        meta_app=meta_app,
+        summary=summary,
+        evidence=evidence,
+        parsed_intent=parsed_intent,
+        compiler_version=compiler_version,
+        created_at=created_at,
+        artifact_hash="",
+    )
+
+    write_back = _build_write_back(trace, golden_path, parsed_intent, meta_app, artifact_meta)
+
+    spec = ArtifactSpec(
+        schemaVersion=schema_version,
+        parsedIntent=parsed_intent,
+        serviceContracts=[asdict(c) for c in service_contracts],
+        goldenPath=golden_path,
+        solidificationReport=asdict(solidification),
+        artifactMeta=artifact_meta,
+        evidence=asdict(evidence) if evidence else None,
+        writeBackDraft=asdict(write_back) if write_back else None,
+    )
+
+    d = spec.to_dict()
+    d["artifactMeta"]["artifactHash"] = ""
+    art_hash = _sha256(json.dumps(d, ensure_ascii=False, sort_keys=True))
+    spec.artifactMeta["artifactHash"] = art_hash
+    spec.artifactMeta["artifactId"] = _short_id("art", f"{session_id}:{art_hash}")
+    if spec.writeBackDraft:
+        spec.writeBackDraft["newFields"]["artifactHash"] = art_hash
+        spec.writeBackDraft["newFields"]["schemaVersion"] = schema_version
+
+    return spec
+
+
+# ---------------------------------------------------------------------------
+# Helpers
 # ---------------------------------------------------------------------------
 
 
 def _ts_to_iso(ts: float | int | None) -> str:
-    """Unix epoch → ISO 8601 string."""
     if ts is None:
         return ""
     try:
@@ -309,115 +265,68 @@ def _sha256(data: str | bytes) -> str:
 
 
 def _short_id(prefix: str, seed: str) -> str:
-    """Generate deterministic id like {prefix}-{6chars}-{8chars}."""
     h = _sha256(seed)
     return f"{prefix}-{h[:6]}-{h[8:16]}"
 
 
-def compile_artifact_spec(
-    trace: dict,
-    pipeline_result: Any | None = None,
-    *,
-    schema_version: str = "0.1.0",
-    compiler_version: str | None = None,
-) -> ArtifactSpec:
-    """Compile ArtifactSpec v0 from a v1.0.0 trace dict.
+def _truncate(val: Any, max_len: int) -> str:
+    if val is None:
+        return ""
+    s = str(val)
+    return s[:max_len] if len(s) > max_len else s
 
-    Args:
-        trace: TraceRecord.to_dict() output
-        pipeline_result: Optional trace_evidence.PipelineResult for evidence enrichment
-        schema_version: ArtifactSpec schema version
-        compiler_version: Compiler version string (commit hash or tag)
 
-    Returns:
-        ArtifactSpec dataclass — guaranteed to pass artifact_spec_schema.json validation
+def _collect_gate_remediation(gates: list[dict]) -> list[str]:
+    items: list[str] = []
+    for g in gates:
+        if not g.get("passed") and g.get("remediation"):
+            items.append(str(g["remediation"]))
+    return items
 
-    Raises:
-        ValueError: trace version is not v1.0.0
+
+def _tool_call_records(events: list[dict]) -> list[dict]:
+    """单一真相源：所有 tool_call_record 事件的 data（按出现顺序）。"""
+    return [
+        e.get("data", {})
+        for e in events
+        if e.get("type") == "tool_call_record"
+    ]
+
+
+def _call_identity(rec: dict) -> str:
+    """同一逻辑工具的标识：tool_name + service_id（用于判断失败是否被后续成功覆盖）。"""
+    tool = str(rec.get("tool_name") or rec.get("tool") or "")
+    svc = str(rec.get("service_id") or rec.get("service") or "")
+    return f"{svc}::{tool}"
+
+
+def _unresolved_failures(records: list[dict]) -> list[dict]:
+    """未解决的失败调用。
+
+    一次失败若被同一 (service, tool) 的后续成功调用覆盖（修复重试成功），
+    则视为已解决，不计入。返回仍未被任何后续成功覆盖的失败记录。
+    Planner/Verifier 多轮修复架构下，前轮失败 + 后轮成功是正常成功路径。
     """
-    # ---- gate: only v1.0.0 traces ----
-    meta = trace.get("metadata", {})
-    runtime = meta.get("runtime", {})
-    trace_ver = runtime.get("trace_version") or meta.get("trace_version", "")
-    if trace_ver != "v1.0.0":
-        raise ValueError(
-            f"ArtifactSpec compiler requires v1.0.0 traces, got {trace_ver!r}"
-        )
+    # 每个 identity 最后一次成功的位置
+    last_success_idx: dict[str, int] = {}
+    for idx, rec in enumerate(records):
+        if rec.get("success"):
+            last_success_idx[_call_identity(rec)] = idx
 
-    session_id = trace.get("session_id", "")
-    events: list[dict] = trace.get("events", [])
-
-    # ---- metaApp ----
-    meta_app = _build_meta_app(trace)
-
-    # ---- scenario ----
-    scenario = _build_scenario(trace, meta_app)
-
-    # ---- stateMachineTrace ----
-    smt = _build_state_machine(events, trace)
-
-    # ---- evidence snapshot ----
-    evidence = _build_evidence(pipeline_result)
-
-    # Derive createdAt from trace.created_at for deterministic compilation
-    created_at = _ts_to_iso(trace.get("created_at"))
-
-    # ---- provenance ----
-    config_snapshot = meta.get("config_snapshot", {})
-    trace_hash = _sha256(json.dumps(trace, ensure_ascii=False, sort_keys=True))
-    config_hash = _sha256(json.dumps(config_snapshot, ensure_ascii=False, sort_keys=True))
-    prov = _build_provenance(
-        session_id=session_id,
-        trace_version=trace_ver,
-        trace_hash=trace_hash,
-        config_hash=config_hash,
-        events=events,
-        compiler_version=compiler_version,
-        created_at=created_at,
-    )
-
-    # ---- service contracts ----
-    service_contracts = _build_service_contracts(trace)
-
-    # ---- solidification report ----
-    solidification = _build_solidification_report(trace, smt, evidence)
-
-    # ---- writeBackDraft ----
-    write_back = _build_write_back(trace, smt, scenario, meta_app, prov)
-
-    # ---- assembly ----
-    artifact_id = _short_id("art", f"{session_id}:{prov.traceHash}")
-
-    spec = ArtifactSpec(
-        schemaVersion=schema_version,
-        artifactId=artifact_id,
-        sourceSessionId=session_id,
-        createdAt=created_at,
-        metaApp=asdict(meta_app),
-        scenario=asdict(scenario),
-        stateMachineTrace=asdict(smt),
-        provenance=asdict(prov),
-        evidence=asdict(evidence) if evidence else None,
-        solidifiable=solidification.solidifiable,
-        solidificationReport=asdict(solidification),
-        serviceContracts=[asdict(c) for c in service_contracts],
-        writeBackDraft=asdict(write_back) if write_back else None,
-    )
-
-    # ---- artifactHash (self-referential: compute over spec with artifactHash="") ----
-    d = asdict(spec)
-    d["provenance"]["artifactHash"] = ""
-    art_hash = _sha256(json.dumps(d, ensure_ascii=False, sort_keys=True))
-    spec.provenance["artifactHash"] = art_hash
-    if spec.writeBackDraft:
-        spec.writeBackDraft["newFields"]["artifactHash"] = art_hash
-    spec.artifactId = _short_id("art", f"{session_id}:{art_hash}")
-
-    return spec
+    unresolved: list[dict] = []
+    for idx, rec in enumerate(records):
+        if rec.get("success"):
+            continue
+        ident = _call_identity(rec)
+        # 同工具是否在该失败之后又成功过？是则已被修复覆盖。
+        if last_success_idx.get(ident, -1) > idx:
+            continue
+        unresolved.append(rec)
+    return unresolved
 
 
 # ---------------------------------------------------------------------------
-# Sub-compilers
+# parsedIntent
 # ---------------------------------------------------------------------------
 
 
@@ -432,70 +341,105 @@ def _build_meta_app(trace: dict) -> MetaAppInfo:
     )
 
 
-def _build_scenario(trace: dict, meta_app: MetaAppInfo) -> ScenarioInfo:
+def _build_scenario(trace: dict, meta_app: MetaAppInfo) -> ScenarioParsed:
     meta = trace.get("metadata", {})
     cfg = meta.get("config_snapshot", {})
     scenario_desc = cfg.get("scenarioDescription", "") or ""
-    app_name = meta_app.appName
+    events = trace.get("events", [])
 
-    # Build involved services from config_snapshot.servicesMeta
-    involved: list[dict] = []
-    for svc in cfg.get("servicesMeta", []):
-        involved.append({
-            "serviceId": str(svc.get("id", "")),
-            "name": svc.get("name", ""),
-            "description": svc.get("description") or None,
-            "channel": svc.get("mcpMethod") or svc.get("channel") or None,
-            "isFake": bool(svc.get("isFake", False)),
-        })
-
-    # scenarioId: deterministic from appName + domain + scenario desc
-    scenario_id = _short_id("sc", f"{meta_app.appName}:{meta_app.domain}:{scenario_desc}")
-
-    # parsedIntent: 读取仿真期落盘的 scenario_parsed 事件（取最后一个）；
-    # 编译器不在此调用 LLM，保证同一 trace 编译结果确定。
-    parsed_intent = _extract_parsed_intent(trace.get("events", []))
-
-    return ScenarioInfo(
-        scenarioId=scenario_id,
-        title=f"{app_name} — {scenario_desc[:80]}" if scenario_desc else app_name,
-        description=scenario_desc or None,
-        domain=meta_app.domain,
-        parsedIntent=parsed_intent,
-        involvedServices=involved,
-        sourceDescription=scenario_desc,
-        evidenceRef={
-            "traceEventTypes": ["service", "planner_decision", "verifier_result"],
-            "configSnapshotHash": _sha256(json.dumps(cfg, ensure_ascii=False, sort_keys=True)),
-        },
-    )
-
-
-def _extract_parsed_intent(events: list[dict]) -> Optional[dict]:
-    """取最后一个 scenario_parsed 事件的 data 作为 parsedIntent；无则 None。"""
-    parsed: Optional[dict] = None
+    parsed_data: dict = {}
     for ev in events:
         if ev.get("type") == "scenario_parsed":
             data = ev.get("data")
             if isinstance(data, dict) and data:
-                parsed = data
-    return parsed
+                parsed_data = data
+
+    if parsed_data:
+        scenario = normalize_scenario_parsed(
+            parsed_data,
+            raw_user_input=scenario_desc,
+            parser_model=parsed_data.get("parserModel"),
+            parsed_at=parsed_data.get("parsedAt"),
+            intake_session_id=parsed_data.get("intakeSessionId"),
+        )
+        scenario.domain = meta_app.domain or scenario.domain
+    else:
+        scenario = ScenarioParsed(
+            goal=scenario_desc[:300] if scenario_desc else meta_app.appName,
+            domain=meta_app.domain,
+            description=scenario_desc,
+        )
+
+    if scenario.source is None:
+        scenario.source = ScenarioSource()
+    if not scenario.source.rawUserInput:
+        scenario.source.rawUserInput = scenario_desc
+
+    return scenario
 
 
-# ---- Service Contracts ---------------------------------------------------
+def _build_parsed_intent(trace: dict, meta_app: MetaAppInfo, session_id: str) -> dict:
+    """轻量想定：不含完整追问对话，仅 sourceRef。"""
+    scenario = _build_scenario(trace, meta_app)
+    source = scenario.source or ScenarioSource()
+    return {
+        "goal": scenario.goal,
+        "constraints": list(scenario.constraints),
+        "acceptanceCriteria": list(scenario.acceptanceCriteria),
+        "domain": scenario.domain,
+        "description": scenario.description,
+        "sourceRef": {
+            "traceRef": session_id,
+            "intakeSessionRef": source.intakeSessionId,
+            "parserModel": source.parserModel,
+            "parsedAt": source.parsedAt,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Trace summary (internal)
+# ---------------------------------------------------------------------------
+
+
+def _derive_trace_summary(events: list[dict], trace: dict) -> _TraceSummary:
+    complete_events = [e for e in events if e.get("type") == "complete"]
+    complete = complete_events[0] if complete_events else None
+    complete_data = complete.get("data", {}) if complete else {}
+    if complete_data.get("cancelled"):
+        final_status = "CANCELLED"
+    elif complete_data.get("success") is True:
+        final_status = "SUCCESS"
+    elif complete_data.get("success") is False:
+        final_status = "FAILED"
+    else:
+        final_status = "UNKNOWN"
+
+    tool_call_events = [e for e in events if e.get("type") == "tool_call_record"]
+    return _TraceSummary(
+        finalStatus=final_status,
+        totalIterations=trace.get("iterations", 0),
+        elapsedMs=trace.get("elapsed_ms", 0),
+        strategy=trace.get("strategy", {}),
+        tool_call_events=tool_call_events,
+    )
+
+
+def _build_execution_trace(events: list[dict], trace: dict) -> _TraceSummary:
+    """向后兼容别名。"""
+    return _derive_trace_summary(events, trace)
+
+
+# ---------------------------------------------------------------------------
+# Service contracts
+# ---------------------------------------------------------------------------
 
 
 def _build_service_contracts(trace: dict) -> list[ServiceContract]:
-    """从 servicesMeta(声明) + tool_call_record(实测) 确定性聚合服务契约。
-
-    v0 精简版：每服务记录声明工具 + 实测工具的调用次数/成功率/通道，不做参数
-    schema 归纳与 I/O 样例。纯读 trace，无 LLM，保证编译确定性。
-    """
     meta = trace.get("metadata", {})
     cfg = meta.get("config_snapshot", {})
     services_meta = cfg.get("servicesMeta", [])
 
-    # 按 serviceId 聚合 tool_call_record
     calls_by_service: dict[str, list[dict]] = {}
     for ev in trace.get("events", []):
         if ev.get("type") != "tool_call_record":
@@ -516,7 +460,6 @@ def _build_service_contracts(trace: dict) -> list[ServiceContract]:
             for t in svc.get("tools", [])
             if t.get("name")
         ]
-
         calls = calls_by_service.get(sid, [])
         observed = _aggregate_observed_tools(calls)
         total = len(calls)
@@ -539,7 +482,6 @@ def _build_service_contracts(trace: dict) -> list[ServiceContract]:
 
 
 def _aggregate_observed_tools(calls: list[dict]) -> list[dict]:
-    """按 tool_name 聚合一组调用记录为 ObservedTool 列表（按工具名排序，保证确定性）。"""
     by_tool: dict[str, list[dict]] = {}
     for c in calls:
         by_tool.setdefault(c.get("tool_name", ""), []).append(c)
@@ -549,7 +491,10 @@ def _aggregate_observed_tools(calls: list[dict]) -> list[dict]:
         group = by_tool[tool_name]
         success = sum(1 for c in group if c.get("success"))
         failure = len(group) - success
-        latencies = [c["latency_ms"] for c in group if isinstance(c.get("latency_ms"), (int, float))]
+        latencies = [
+            c["latency_ms"] for c in group
+            if isinstance(c.get("latency_ms"), (int, float))
+        ]
         avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
         observed.append(asdict(ObservedTool(
             toolName=tool_name,
@@ -563,440 +508,12 @@ def _aggregate_observed_tools(calls: list[dict]) -> list[dict]:
     return observed
 
 
-# ---- State Machine -------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Evidence
+# ---------------------------------------------------------------------------
 
 
-def _format_verifier_issue_messages(issues: list) -> str:
-    """Normalize verifier_result.issues (str or {description}) for exception messages."""
-    parts: list[str] = []
-    for item in issues:
-        if isinstance(item, str):
-            text = item.strip()
-            if text:
-                parts.append(text)
-        elif isinstance(item, dict):
-            desc = item.get("description") or item.get("message") or item.get("issue")
-            if isinstance(desc, str) and desc.strip():
-                parts.append(desc.strip())
-    return "; ".join(parts)
-
-
-def _build_state_machine(events: list[dict], trace: dict) -> StateMachineTrace:
-    """Build states, transitions, and iteration snapshots from trace events."""
-
-    # Collect events by type
-    plan_decisions = [e for e in events if e.get("type") == "planner_decision"]
-    verifier_results = [e for e in events if e.get("type") == "verifier_result"]
-    tool_calls = [e for e in events if e.get("type") == "tool_call_record"]
-    iter_events = [e for e in events if e.get("type") == "iteration"]
-    phase_events = [e for e in events if e.get("type") == "phase"]
-    service_events = [e for e in events if e.get("type") == "service"]
-    complete_events = [e for e in events if e.get("type") == "complete"]
-
-    first_ts = _first_ts(events)
-    last_ts = _last_ts(events)
-
-    # Determine final status
-    complete = complete_events[0] if complete_events else None
-    complete_data = complete.get("data", {}) if complete else {}
-    if complete_data.get("cancelled"):
-        final_status = "CANCELLED"
-    elif complete_data.get("success") is True:
-        final_status = "SUCCESS"
-    elif complete_data.get("success") is False:
-        final_status = "FAILED"
-    else:
-        final_status = "UNKNOWN"
-
-    strategy = trace.get("strategy", {})
-
-    # ---- Build states ----
-    states: list[StateNode] = []
-    transitions: list[Transition] = []
-    prev_state_id: str | None = None
-
-    def _add_state(state_id, state_name, entered_ts, iteration=0,
-                   exited_ts=None, metadata=None, exception=None, evidence_refs=None):
-        nonlocal prev_state_id
-        e_ts = _ts_to_iso(entered_ts)
-        x_ts = _ts_to_iso(exited_ts) if exited_ts else None
-        dur = (float(exited_ts) - float(entered_ts)) * 1000 if exited_ts and entered_ts else None
-        node = StateNode(
-            stateId=state_id,
-            state=state_name,
-            enteredAt=e_ts,
-            iteration=iteration,
-            exitedAt=x_ts,
-            durationMs=dur,
-            metadata=metadata or {},
-            exception=exception,
-            evidenceRefs=evidence_refs or [],
-        )
-        states.append(node)
-        if prev_state_id:
-            trigger = _state_to_trigger(prev_state_id, state_name, states)
-            transitions.append(Transition(
-                transitionId=_short_id("trans", f"{prev_state_id}→{state_id}"),
-                fromState=prev_state_id,
-                toState=state_id,
-                trigger=trigger,
-                iteration=iteration,
-                occurredAt=e_ts,
-                evidenceRefs=[f"state/{prev_state_id}", f"state/{state_id}"],
-            ))
-        prev_state_id = state_id
-        return state_id
-
-    # Step 1: INITIALIZING → DISCOVERING
-    trace_sid = trace.get('session_id', '')
-    s_init = _add_state(
-        _short_id("state", f"init:{trace_sid}"),
-        "INITIALIZING", first_ts or 0,
-        metadata={"phaseName": "init"},
-    )
-
-    # Service discovery timestamp
-    svc_ts_list = [e.get("timestamp", 0) for e in service_events]
-    disc_start = svc_ts_list[0] if svc_ts_list else (first_ts or 0)
-    disc_end = svc_ts_list[-1] if svc_ts_list else disc_start
-
-    discovered_ids = []
-    for e in service_events:
-        d = e.get("data", {})
-        if d.get("status") == "online":
-            discovered_ids.append(d.get("id", ""))
-
-    s_disc = _add_state(
-        _short_id("state", f"disc:{disc_start}"), "DISCOVERING", disc_start,
-        metadata={"phaseName": "data", "servicesDiscovered": discovered_ids},
-        exited_ts=disc_end,
-    )
-
-    # ---- Iteration-based states ----
-    prev_state = s_disc
-    prev_plan_ts = disc_end
-
-    for iter_idx in range(len(plan_decisions)):
-        plan = plan_decisions[iter_idx]
-        plan_data = plan.get("data", {})
-        iter_num = plan_data.get("iteration", iter_idx + 1)
-        plan_ts = plan.get("timestamp", prev_plan_ts)
-
-        # PLANNING
-        s_plan = _add_state(
-            _short_id("state", f"plan:{iter_num}:{plan_ts}"),
-            "PLANNING", plan_ts, iteration=iter_num,
-            metadata={
-                "phaseName": "logic",
-                "selectedTools": plan_data.get("selected_tools", []),
-            },
-        )
-
-        # EXECUTING: bind tool_call_record events to this iteration via verifier evidence_refs.
-        # Tool call timestamps can precede planner_decision because they reflect the actual
-        # MCP call time (during data/discovery phase), not the planner_decision emit time.
-        ver = verifier_results[iter_idx] if iter_idx < len(verifier_results) else None
-        ver_data = ver.get("data", {}) if ver else {}
-        ver_checks = ver_data.get("checks", []) if ver else []
-        iter_call_ids: set[str] = set()
-        for c in ver_checks:
-            for ref in c.get("evidence_refs", []):
-                if isinstance(ref, str):
-                    iter_call_ids.add(ref)
-
-        iter_tool_calls = [
-            tc for tc in tool_calls
-            if tc.get("data", {}).get("call_id", "") in iter_call_ids
-        ]
-        # Fallback: if verifier didn't provide evidence_refs (rare), use all tool calls
-        # whose call_id hasn't been assigned to a prior iteration
-        if not iter_tool_calls and not iter_call_ids:
-            # Use all calls — single-iteration trace with no structured evidence refs
-            iter_tool_calls = list(tool_calls)
-
-        if iter_tool_calls:
-            exec_start = min(tc.get("timestamp", plan_ts) for tc in iter_tool_calls)
-            exec_end = max(tc.get("timestamp", plan_ts) for tc in iter_tool_calls)
-            tool_success = sum(1 for tc in iter_tool_calls if tc.get("data", {}).get("success"))
-            tool_fail = sum(1 for tc in iter_tool_calls if not tc.get("data", {}).get("success"))
-
-            s_exec = _add_state(
-                _short_id("state", f"exec:{iter_num}:{exec_start}"),
-                "EXECUTING", exec_start, iteration=iter_num,
-                exited_ts=exec_end,
-                metadata={
-                    "toolSuccessCount": tool_success,
-                    "toolFailureCount": tool_fail,
-                },
-            )
-            prev_state = s_exec
-        else:
-            exec_end = plan_ts
-            prev_state = s_plan
-
-        # VERIFYING
-        if ver:
-            ver_data = ver.get("data", {})
-            ver_status = ver_data.get("status", "FAILED")
-            ver_ts_val = ver.get("timestamp", exec_end + 0.001)
-
-            s_ver = _add_state(
-                _short_id("state", f"ver:{iter_num}:{ver_ts_val}"),
-                "VERIFYING", ver_ts_val, iteration=iter_num,
-                metadata={
-                    "phaseName": "check",
-                    "verifierStatus": ver_status,
-                    "verifierIssues": ver_data.get("issues", []),
-                },
-            )
-
-            # Decide PASSED or FAILED
-            if ver_status == "PASSED":
-                s_passed = _add_state(
-                    _short_id("state", f"passed:{iter_num}:{ver_ts_val}"),
-                    "PASSED", ver_ts_val, iteration=iter_num,
-                )
-                prev_state = s_passed
-            else:
-                issues = ver_data.get("issues", [])
-                issue_msg = _format_verifier_issue_messages(issues) or "Verifier 语义裁决不通过"
-                s_failed = _add_state(
-                    _short_id("state", f"failed:{iter_num}:{ver_ts_val}"),
-                    "FAILED", ver_ts_val, iteration=iter_num,
-                    metadata={"verifierIssues": issues},
-                    exception=asdict(ExceptionInfo(
-                        exceptionType="SEMANTIC_FAILED" if issues else "ASSERTION_FAILED",
-                        message=issue_msg,
-                        recoverable=True,  # Planner can retry
-                    )),
-                )
-                # RETRYING if more iterations to come
-                if iter_idx + 1 < len(plan_decisions):
-                    next_plan_ts_val = plan_decisions[iter_idx + 1].get("timestamp", ver_ts_val + 0.001)
-                    s_retry = _add_state(
-                        _short_id("state", f"retry:{iter_num}:{ver_ts_val}"),
-                        "RETRYING", ver_ts_val, iteration=iter_num,
-                        exited_ts=next_plan_ts_val,
-                    )
-                    prev_state = s_retry
-                prev_plan_ts = ver_ts_val
-        else:
-            prev_plan_ts = exec_end
-
-    # Final state
-    max_iter = trace.get("iterations", 0)
-    strategy_min = strategy.get("minIterations", 1)
-
-    # Check for tool errors
-    tool_errors = [tc for tc in tool_calls if not tc.get("data", {}).get("success")]
-    max_reached = max_iter >= (strategy_min * 2) or max_iter >= 3  # heuristic for max exhausted
-
-    if final_status == "CANCELLED":
-        _add_state(
-            _short_id("state", f"cancelled:{last_ts or 0}"),
-            "CANCELLED", last_ts or 0,
-        )
-    elif final_status == "FAILED":
-        # Determine if terminal or retry
-        if max_reached:
-            _add_state(
-                _short_id("state", f"terminal:{last_ts or 0}"),
-                "TERMINAL_FAILED", last_ts or 0,
-                exception=asdict(ExceptionInfo(
-                    exceptionType="MAX_ITERATIONS_EXHAUSTED",
-                    message=f"已达最大迭代轮次 {max_iter}，构建未成功",
-                    recoverable=False,
-                )),
-            )
-        else:
-            _add_state(
-                _short_id("state", f"terminal:{last_ts or 0}"),
-                "TERMINAL_FAILED", last_ts or 0,
-                exception=asdict(ExceptionInfo(
-                    exceptionType="INFRASTRUCTURE_ERROR",
-                    message=complete_data.get("result", {}).get("error", "构建失败"),
-                    recoverable=False,
-                )),
-            )
-    elif final_status == "SUCCESS":
-        _add_state(
-            _short_id("state", f"completed:{last_ts or 0}"),
-            "COMPLETED", last_ts or 0,
-        )
-
-    # ---- Build iteration snapshots ----
-    iteration_snapshots: list[IterationSnapshot] = []
-    assigned_call_ids: set[str] = set()
-    for iter_idx in range(len(plan_decisions)):
-        plan = plan_decisions[iter_idx]
-        plan_data = plan.get("data", {})
-        iter_num = plan_data.get("iteration", iter_idx + 1)
-        plan_ts = plan.get("timestamp", 0)
-
-        ver = verifier_results[iter_idx] if iter_idx < len(verifier_results) else None
-        ver_data = ver.get("data", {}) if ver else {}
-        ver_checks = ver_data.get("checks", []) if ver else []
-
-        # Bind tool calls to iteration via verifier evidence_refs (same logic as state builder)
-        iter_call_ids: set[str] = set()
-        for c in ver_checks:
-            for ref in c.get("evidence_refs", []):
-                if isinstance(ref, str):
-                    iter_call_ids.add(ref)
-
-        # First pass: use evidence_refs
-        iter_tc = [tc for tc in tool_calls if tc.get("data", {}).get("call_id", "") in iter_call_ids]
-        # Second pass: assign any remaining unassigned tool calls to this iteration
-        if not iter_call_ids:
-            # If verifier gave no evidence refs, just grab all calls (single-iteration fallback)
-            iter_tc = [tc for tc in tool_calls if tc.get("data", {}).get("call_id", "") not in assigned_call_ids]
-        assigned_call_ids.update(tc.get("data", {}).get("call_id", "") for tc in iter_tc)
-
-        # States belonging to this iteration
-        iter_state_ids = [
-            s.stateId for s in states if s.iteration == iter_num
-        ]
-
-        # Iteration planner snapshot
-        dispatch_steps = plan_data.get("dispatch", {}).get("steps", [])
-        planner_dict = asdict(IterationPlanner(
-            iteration=iter_num,
-            candidateTools=plan_data.get("candidate_tools", []),
-            selectedTools=plan_data.get("selected_tools", []),
-            executionPath=plan_data.get("executionPath", []),
-            reasonSummary=(plan_data.get("reason", "") or "")[:500] or None,
-            dispatchSteps=[
-                {"tool": s.get("tool", ""), "serviceId": s.get("service", ""),
-                 "latencyMs": s.get("latency_ms")}
-                for s in dispatch_steps
-            ],
-            totalExpectedCalls=plan_data.get("dispatch", {}).get("total_calls", 0),
-            evidenceRef=f"event/planner_decision/{iter_num}",
-        ))
-
-        # Iteration verifier snapshot
-        ver_dict = None
-        if ver:
-            ver_data = ver.get("data", {})
-            ver_checks = ver_data.get("checks", [])
-            ver_issues = ver_data.get("issues", [])
-            ver_dict = asdict(IterationVerifier(
-                iteration=iter_num,
-                status=ver_data.get("status", "FAILED"),
-                summary=(ver_data.get("summary", "") or "")[:500] or None,
-                checks=[
-                    {
-                        "check": c.get("check", "overall_verification"),
-                        "status": c.get("status", "UNKNOWN"),
-                        "evidenceRefs": c.get("evidence_refs", []),
-                    }
-                    for c in ver_checks
-                ],
-                issues=ver_issues if isinstance(ver_issues, list) else [],
-                issueCount=len(ver_issues) if isinstance(ver_issues, list) else 0,
-                evidenceRef=f"event/verifier_result/{iter_num}",
-            ))
-
-        # Iteration tool calls
-        tc_list = []
-        failed_ids = []
-        for tc in iter_tc:
-            d = tc.get("data", {})
-            cid = d.get("call_id", "")
-            success = d.get("success", True)
-            if not success:
-                failed_ids.append(cid)
-            tc_list.append(asdict(IterationToolCall(
-                callId=cid,
-                toolName=d.get("tool_name", ""),
-                serviceId=d.get("service_id", ""),
-                channel=d.get("channel", ""),
-                success=d.get("success", True),
-                serviceName=d.get("service_name") or None,
-                transport=d.get("transport") or None,
-                arguments=d.get("arguments", {}),
-                resultPreview=d.get("result") or None,
-                resultHash=d.get("result_hash") or None,
-                error=d.get("error") or None,
-                latencyMs=d.get("latency_ms"),
-                timestamp=d.get("timestamp"),
-            )))
-
-        # Iteration exception
-        iter_exc = None
-        has_tool_err = len(failed_ids) > 0
-        has_ver_fail = ver and ver.get("data", {}).get("status") == "FAILED"
-        if has_tool_err or has_ver_fail:
-            ver_issues = (ver.get("data", {}).get("issues", []) if ver else [])
-            iter_exc = asdict(IterationException(
-                hasToolError=has_tool_err,
-                hasVerifierFailure=has_ver_fail,
-                failedToolCalls=failed_ids,
-                verifierIssues=ver_issues if isinstance(ver_issues, list) else [],
-            ))
-
-        iteration_snapshots.append(IterationSnapshot(
-            iterationNumber=iter_num,
-            states=iter_state_ids,
-            planner=planner_dict,
-            verifier=ver_dict,
-            toolCalls=tc_list,
-            exception=iter_exc,
-        ))
-
-    return StateMachineTrace(
-        states=[asdict(s) for s in states],
-        transitions=[asdict(t) for t in transitions],
-        iterations=[asdict(itr) for itr in iteration_snapshots],
-        totalIterations=trace.get("iterations", 0),
-        finalStatus=final_status,
-        elapsedMs=trace.get("elapsed_ms", 0),
-        strategy=strategy,
-    )
-
-
-def _state_to_trigger(prev_id: str, next_state: str, states: list[StateNode]) -> str:
-    """Infer transition trigger from previous state name and next state."""
-    prev_node = next((s for s in states if s.stateId == prev_id), None)
-    prev_name = prev_node.state if prev_node else ""
-    # Map (prev, next) → trigger name
-    mapping = {
-        ("INITIALIZING", "DISCOVERING"): "simulation_started",
-        ("DISCOVERING", "PLANNING"): "services_discovered",
-        ("PLANNING", "EXECUTING"): "planner_decision_emitted",
-        ("EXECUTING", "VERIFYING"): "tools_executed",
-        ("VERIFYING", "PASSED"): "verification_passed",
-        ("VERIFYING", "FAILED"): "verification_failed",
-        ("FAILED", "RETRYING"): "planner_retry",
-        ("RETRYING", "PLANNING"): "planner_retry",
-    }
-    key = (prev_name, next_state)
-    return mapping.get(key, {
-        "PASSED": "verification_complete",
-        "RETRYING": "planner_retry",
-    }.get(next_state, "verification_complete"))
-
-
-def _first_ts(events: list[dict]) -> float | None:
-    for e in events:
-        ts = e.get("timestamp")
-        if ts:
-            return float(ts)
-    return None
-
-
-def _last_ts(events: list[dict]) -> float | None:
-    for e in reversed(events):
-        ts = e.get("timestamp")
-        if ts:
-            return float(ts)
-    return None
-
-
-# ---- Evidence -----------------------------------------------------------
-
-
-def _build_evidence(pipeline_result: Any | None) -> EvidenceSnapshot | None:
+def _build_evidence(pipeline_result: Any | None) -> Optional[EvidenceSnapshot]:
     if pipeline_result is None:
         return None
     try:
@@ -1004,17 +521,665 @@ def _build_evidence(pipeline_result: Any | None) -> EvidenceSnapshot | None:
         report = pipeline_result.report
         return EvidenceSnapshot(
             evidenceId=card.evidence_id,
-            evidenceFingerprint=card.evidence_fingerprint,
             checkerStatus=report.overall_status,
             completeness=getattr(report, "completeness", None),
-            missingEvidenceCategories=pipeline_result.bundle.missing_evidence,
-            evidenceRef=None,  # set by caller after save_to_dir
+            missingEvidenceCategories=list(pipeline_result.bundle.missing_evidence),
         )
     except Exception:
         return None
 
 
-# ---- Provenance ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Solidification
+# ---------------------------------------------------------------------------
+
+
+def _build_solidification_report(
+    trace: dict,
+    summary: _TraceSummary,
+    evidence: Optional[EvidenceSnapshot],
+) -> SolidificationReport:
+    gates: list[GateResult] = []
+    events = trace.get("events", [])
+
+    strategy = trace.get("strategy", {})
+    stability_req = strategy.get("stabilityPasses")
+    verifier_passes = sum(
+        1 for e in events
+        if e.get("type") == "verifier_result"
+        and e.get("data", {}).get("status") == "PASSED"
+    )
+    if stability_req is not None:
+        try:
+            required = max(1, int(stability_req))
+        except (TypeError, ValueError):
+            required = 1
+        iter_ok = verifier_passes >= required
+        suff_detail = f"验证通过 {verifier_passes} 次，要求至少 {required} 次"
+        suff_value = verifier_passes
+    else:
+        try:
+            required = max(1, int(strategy.get("minIterations", 1)))
+        except (TypeError, ValueError):
+            required = 1
+        actual = trace.get("iterations", 0)
+        iter_ok = actual >= required
+        suff_detail = f"实际迭代 {actual} 轮，最少要求 {required} 轮"
+        suff_value = actual
+
+    gates.append(GateResult(
+        gate="sufficientIterations", passed=iter_ok, detail=suff_detail,
+        remediation="" if iter_ok else f"需至少 {required} 轮/次",
+    ))
+
+    last_ver_status = "UNKNOWN"
+    for ev in events:
+        if ev.get("type") == "verifier_result":
+            last_ver_status = ev.get("data", {}).get("status", "UNKNOWN")
+    ver_ok = last_ver_status == "PASSED"
+    gates.append(GateResult(
+        gate="verifierPassed", passed=ver_ok,
+        detail=f"最后一轮 Verifier: {last_ver_status}",
+        remediation="" if ver_ok else "需 Verifier 通过",
+    ))
+
+    ev_completeness = evidence.completeness if evidence else None
+    ev_ok = ev_completeness == "COMPLETE"
+    gates.append(GateResult(
+        gate="evidenceComplete", passed=ev_ok,
+        detail=f"证据完整性: {ev_completeness or '未运行'}",
+        remediation="" if ev_ok else "运行证据 pipeline",
+    ))
+
+    tool_events = summary.tool_call_events or [
+        e for e in events if e.get("type") == "tool_call_record"
+    ]
+    records = [e.get("data", {}) for e in tool_events]
+    unresolved = _unresolved_failures(records)
+    total_failed = sum(1 for r in records if not r.get("success"))
+    resolved = total_failed - len(unresolved)
+    tool_ok = len(unresolved) == 0
+    failed_ids = [f.get("call_id", "?") for f in unresolved]
+    if total_failed and tool_ok:
+        tool_detail = f"失败调用 {total_failed} 个，均被后续成功重试覆盖（未解决: 0）"
+    else:
+        tool_detail = f"未解决的失败调用: {len(unresolved)} 个"
+    gates.append(GateResult(
+        gate="noUnresolvedToolErrors", passed=tool_ok,
+        detail=tool_detail,
+        remediation="" if tool_ok else f"修复 {len(unresolved)} 个未解决的失败调用",
+    ))
+
+    infra_ok = summary.finalStatus != "UNKNOWN"
+    gates.append(GateResult(
+        gate="noInfrastructureErrors", passed=infra_ok,
+        detail=f"最终状态: {summary.finalStatus}",
+        remediation="" if infra_ok else "仿真未正常结束",
+    ))
+
+    real_calls = [
+        e for e in tool_events
+        if e.get("data", {}).get("channel") == "real_mcp"
+    ]
+    real_ok = len(real_calls) > 0
+    gates.append(GateResult(
+        gate="realMcpCallsPresent", passed=real_ok,
+        detail=f"真实 MCP 调用: {len(real_calls)} 次",
+        remediation="" if real_ok else "至少需一次 real_mcp 调用",
+    ))
+
+    all_pass = all(g.passed for g in gates)
+    conditions = {
+        "sufficientIterations": {
+            "passed": iter_ok, "value": suff_value, "required": required,
+            "detail": gates[0].detail,
+        },
+        "verifierPassed": {
+            "passed": ver_ok, "status": last_ver_status, "detail": gates[1].detail,
+        },
+        "evidenceComplete": {
+            "passed": ev_ok, "completenessStatus": ev_completeness,
+            "missingCategories": evidence.missingEvidenceCategories if evidence else [],
+            "detail": gates[2].detail,
+        },
+        "noUnresolvedToolErrors": {
+            "passed": tool_ok, "unresolvedFailures": len(unresolved),
+            "totalFailures": total_failed, "resolvedByRetry": resolved,
+            "failedCallIds": failed_ids, "detail": gates[3].detail,
+        },
+        "noInfrastructureErrors": {"passed": infra_ok, "detail": gates[4].detail},
+        "realMcpCallsPresent": {
+            "passed": real_ok, "realMcpCallCount": len(real_calls), "detail": gates[5].detail,
+        },
+    }
+
+    remediation: list[str] = []
+    if not all_pass:
+        remediation = _collect_gate_remediation([asdict(g) for g in gates])
+
+    return SolidificationReport(
+        solidifiable=all_pass,
+        gates=[asdict(g) for g in gates],
+        conditions=conditions,
+        goldenPathExtractable=False,
+        goldenPathReason="",
+        remediation=remediation,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Golden path extraction
+# ---------------------------------------------------------------------------
+
+
+def _find_final_passed_verifier(events: list[dict]) -> Optional[dict]:
+    last: Optional[dict] = None
+    for ev in events:
+        if ev.get("type") == "verifier_result":
+            if ev.get("data", {}).get("status") == "PASSED":
+                last = ev
+    return last
+
+
+def _find_planner_for_iteration(events: list[dict], iteration: int) -> Optional[dict]:
+    last: Optional[dict] = None
+    for ev in events:
+        if ev.get("type") == "planner_decision":
+            data = ev.get("data", {})
+            if data.get("iteration") == iteration:
+                last = ev
+    return last
+
+
+def _is_real_successful_call(detail: dict) -> bool:
+    if not detail.get("success"):
+        return False
+    channel = str(detail.get("channel", "")).lower()
+    if channel in ("sandbox", "mock", "demo"):
+        return False
+    return channel == "real_mcp"
+
+
+def _order_tool_details(
+    planner: dict,
+    successful_details: list[dict],
+) -> list[dict]:
+    path = planner.get("executionPath") or []
+    ordered: list[dict] = []
+    used: set[str] = set()
+
+    for node in path:
+        node_s = str(node)
+        for d in successful_details:
+            cid = d.get("call_id", "")
+            if cid in used:
+                continue
+            tool = str(d.get("tool", ""))
+            svc = str(d.get("service", ""))
+            if (
+                node_s == tool or node_s == svc
+                or tool in node_s or svc in node_s
+                or node_s in tool or node_s in svc
+            ):
+                ordered.append(d)
+                used.add(cid)
+                break
+
+    for d in successful_details:
+        cid = d.get("call_id", "")
+        if cid not in used:
+            ordered.append(d)
+            used.add(cid)
+
+    return ordered
+
+
+def _slim_input_binding(
+    arguments: dict,
+    parsed_intent: dict,
+    prior_outputs: list[tuple[str, str]],
+) -> dict:
+    """从真实数据流推断参数来源，不按位置编造。
+
+    prior_outputs: [(stepId, result_preview_text), ...] 前序成功调用的输出文本。
+    - 值出现在 parsedIntent 文本中            → {"$from": "parsedIntent"}
+    - 值出现在某前序 step 的输出文本中         → {"$from": "step_X.output"}
+    - 过长值                                   → {"$truncated": ...}
+    - 其余                                     → 字面量（无法追溯则保留原值）
+    """
+    if not isinstance(arguments, dict) or not arguments:
+        return {}
+    binding: dict[str, Any] = {}
+    intent_text = " ".join([
+        parsed_intent.get("goal", ""),
+        parsed_intent.get("description", ""),
+        " ".join(parsed_intent.get("constraints") or []),
+        " ".join(parsed_intent.get("acceptanceCriteria") or []),
+    ])
+    for key, val in arguments.items():
+        if str(key).startswith("_"):
+            continue
+        if isinstance(val, (str, int, float, bool)):
+            s = str(val)
+            if len(s) > 120:
+                binding[key] = {"$truncated": s[:120]}
+                continue
+            if s and s in intent_text:
+                binding[key] = {"$from": "parsedIntent"}
+                continue
+            traced_step = None
+            if s:
+                for step_id, out_text in prior_outputs:
+                    if out_text and s in out_text:
+                        traced_step = step_id
+                        break
+            if traced_step:
+                binding[key] = {"$from": f"{traced_step}.output"}
+            else:
+                binding[key] = val
+        elif isinstance(val, dict):
+            binding[key] = {"$ref": "object", "keys": list(val.keys())[:8]}
+        else:
+            binding[key] = {"$ref": type(val).__name__}
+    return binding
+
+
+def _output_slots(result_preview: Any) -> list[str]:
+    if not result_preview:
+        return ["result"]
+    text = result_preview if isinstance(result_preview, str) else str(result_preview)
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict) and obj:
+            return list(obj.keys())[:10]
+    except (json.JSONDecodeError, TypeError):
+        # result_preview 常被截断（orchestrator 截到 200 字符），整体 parse 会失败。
+        # 退化为从截断 JSON 文本中抽取顶层键名，尽力而为。
+        keys = re.findall(r'"([A-Za-z_][\w-]*)"\s*:', text)
+        if keys:
+            seen: list[str] = []
+            for k in keys:
+                if k not in seen:
+                    seen.append(k)
+            return seen[:10]
+    return ["result"]
+
+
+def _node_matches_tool(node: str, tool: str) -> bool:
+    node_s, tool_s = str(node), str(tool)
+    return bool(tool_s) and (node_s == tool_s or tool_s in node_s or node_s in tool_s)
+
+
+def _order_is_subsequence(step_tools: list[str], expected_path: list[str]) -> bool:
+    """golden 步骤工具序列是否为审定 executionPath 的有序子序列。"""
+    i = 0
+    for node in expected_path:
+        if i >= len(step_tools):
+            break
+        if _node_matches_tool(node, step_tools[i]):
+            i += 1
+    return i == len(step_tools)
+
+
+def _build_golden_assertions(
+    steps: list[dict],
+    parsed_intent: dict,
+    *,
+    verifier_passed: bool,
+    expected_path: list[str],
+    forbidden_tools: set[str],
+    evidence_refs: list[str],
+) -> list[dict]:
+    """生成可从 trace 真正核验的断言；无法核验的标 unknown，不强行 pass。"""
+    assertions: list[dict] = []
+    tool_names = [s["toolName"] for s in steps]
+    step_refs = [r for s in steps for r in (s.get("_callId"),) if r]
+
+    # L1: required tool called —— 主干非空且每步都有工具名
+    assertions.append({
+        "assertionId": "a_l1_required_tools",
+        "level": "L1_structure",
+        "type": "required_tool_called",
+        "result": "pass" if tool_names and all(tool_names) else "fail",
+        "evidenceRefs": step_refs or evidence_refs[: len(tool_names)],
+    })
+
+    # L1: forbidden tool not called —— 主干中不得出现 mock/sandbox/失败工具
+    used_forbidden = sorted(t for t in tool_names if t in forbidden_tools)
+    assertions.append({
+        "assertionId": "a_l1_forbidden_tools",
+        "level": "L1_structure",
+        "type": "forbidden_tool_not_called",
+        "result": "fail" if used_forbidden else "pass",
+        "evidenceRefs": step_refs,
+    })
+
+    # L1: tool call success —— golden 仅纳入成功 real_mcp 调用，逐项核验
+    assertions.append({
+        "assertionId": "a_l1_tool_success",
+        "level": "L1_structure",
+        "type": "tool_call_success",
+        "result": "pass" if steps else "fail",
+        "evidenceRefs": step_refs or evidence_refs,
+    })
+
+    # L1: tool order —— 步骤序列须是审定 executionPath 的有序子序列
+    if len(tool_names) >= 2:
+        if not expected_path:
+            order_result = "unknown"
+        elif _order_is_subsequence(tool_names, expected_path):
+            order_result = "pass"
+        else:
+            order_result = "fail"
+        assertions.append({
+            "assertionId": "a_l1_tool_order",
+            "level": "L1_structure",
+            "type": "tool_order",
+            "result": order_result,
+            "evidenceRefs": step_refs,
+        })
+
+    # L2: output consumed —— 是否存在某步参数真正绑定到前序步骤输出
+    chained = [
+        s for s in steps
+        if any(
+            isinstance(v, dict) and str(v.get("$from", "")).endswith(".output")
+            for v in (s.get("inputBinding") or {}).values()
+        )
+    ]
+    if len(steps) < 2:
+        chain_result = "unknown"  # 单步无链路可证
+    elif chained:
+        chain_result = "pass"
+    else:
+        chain_result = "unknown"  # 多步但未观测到输出消费，不臆断
+    assertions.append({
+        "assertionId": "a_l2_output_chain",
+        "level": "L2_dataflow",
+        "type": "output_consumed",
+        "result": chain_result,
+        "evidenceRefs": [s["_callId"] for s in chained if s.get("_callId")],
+    })
+
+    # L2: param binding traceable —— 每个非空绑定的参数能溯源到 intent / 前序 step
+    bound_steps = [s for s in steps if s.get("inputBinding")]
+    if not bound_steps:
+        bind_result = "unknown"
+    else:
+        all_traceable = all(
+            all(
+                isinstance(v, dict) and ("$from" in v or "$ref" in v or "$truncated" in v)
+                for v in s["inputBinding"].values()
+            )
+            for s in bound_steps
+        )
+        any_provenance = any(
+            isinstance(v, dict) and "$from" in v
+            for s in bound_steps for v in s["inputBinding"].values()
+        )
+        bind_result = "pass" if (all_traceable and any_provenance) else "unknown"
+    assertions.append({
+        "assertionId": "a_l2_param_binding",
+        "level": "L2_dataflow",
+        "type": "param_binding_traceable",
+        "result": bind_result,
+        "evidenceRefs": step_refs,
+    })
+
+    # L3: acceptance satisfied —— 仅当有可检验收标准且 Verifier 终判通过才 pass
+    acceptance = parsed_intent.get("acceptanceCriteria") or []
+    if verifier_passed and acceptance:
+        sem_result = "pass"
+    else:
+        sem_result = "unknown"  # 无验收标准时，Verifier 整体通过不足以断言 acceptance
+    assertions.append({
+        "assertionId": "a_l3_verifier",
+        "level": "L3_semantic",
+        "type": "acceptance_satisfied",
+        "result": sem_result,
+        "evidenceRefs": evidence_refs[:1],
+    })
+
+    return assertions
+
+
+def _contract_ref_service_id(contract_ref: str) -> str:
+    """从 'serviceContracts.<sid>' 解析出 serviceId。"""
+    prefix = "serviceContracts."
+    if contract_ref.startswith(prefix):
+        sid = contract_ref[len(prefix):]
+        return "" if sid == "unknown" else sid
+    return ""
+
+
+def _build_applicability(
+    parsed_intent: dict,
+    service_contracts: list[ServiceContract],
+    steps: list[dict],
+) -> dict:
+    # requiredServices 来自每个 step 的 contractRef（step 上没有 serviceId 字段）
+    required_services = sorted({
+        sid
+        for s in steps
+        if (sid := _contract_ref_service_id(s.get("contractRef", "")))
+    })
+    if not required_services:
+        required_services = sorted(
+            c.serviceId for c in service_contracts if c.totalCalls > 0
+        )
+
+    input_sig: list[str] = []
+    if parsed_intent.get("goal"):
+        input_sig.append(f"goal:{_truncate(parsed_intent['goal'], 80)}")
+    for c in parsed_intent.get("constraints") or []:
+        input_sig.append(f"constraint:{_truncate(c, 80)}")
+
+    required_outputs = list(parsed_intent.get("acceptanceCriteria") or [])
+    if not required_outputs and steps:
+        last_slots = steps[-1].get("outputSlots") or ["result"]
+        required_outputs = [f"final:{slot}" for slot in last_slots]
+
+    # entryGuards 依据该 trace 实际情况推导，而非硬编码
+    entry_guards = ["verifier_passed", "real_mcp_only"]
+    if parsed_intent.get("constraints"):
+        entry_guards.append("hard_constraints_present")
+    if parsed_intent.get("acceptanceCriteria"):
+        entry_guards.append("acceptance_criteria_defined")
+
+    return {
+        "inputSignature": input_sig,
+        "requiredOutputs": required_outputs,
+        "requiredServices": required_services,
+        "hardConstraints": list(parsed_intent.get("constraints") or []),
+        "entryGuards": entry_guards,
+    }
+
+
+def _extract_golden_path(
+    trace: dict,
+    events: list[dict],
+    session_id: str,
+    parsed_intent: dict,
+    service_contracts: list[ServiceContract],
+    evidence: Optional[EvidenceSnapshot],
+) -> tuple[Optional[dict], bool, str, list[str]]:
+    remediation: list[str] = []
+    final_verifier = _find_final_passed_verifier(events)
+    if not final_verifier:
+        return None, False, "missing final passed verifier_result", [
+            "需 Verifier 最终通过后才能抽取黄金路径",
+        ]
+
+    vdata = final_verifier.get("data", {})
+    planner = vdata.get("plannerDecision")
+    iteration = vdata.get("iteration")
+    if not planner and iteration is not None:
+        pev = _find_planner_for_iteration(events, iteration)
+        planner = pev.get("data") if pev else None
+    if not planner:
+        return None, False, "missing final passed plan", [
+            "缺少最终通过的 planner_decision / plannerDecision",
+        ]
+
+    details = planner.get("tool_call_details") or []
+    successful = [d for d in details if _is_real_successful_call(d)]
+    if not successful:
+        successful = [
+            d for d in details
+            if d.get("success") and str(d.get("channel", "")).lower() == "real_mcp"
+        ]
+    if not successful:
+        return None, False, "no successful real_mcp calls in final plan", [
+            "最终方案中无成功的 real_mcp 调用",
+        ]
+
+    ordered = _order_tool_details(planner, successful)
+
+    # forbidden 工具：整条 trace 中出现于非 real_mcp 通道或失败的工具名
+    forbidden_tools: set[str] = set()
+    for d in _tool_call_records(events):
+        name = str(d.get("tool_name") or d.get("tool") or "")
+        if not name:
+            continue
+        ch = str(d.get("channel", "")).lower()
+        if ch in ("sandbox", "mock", "demo") or not d.get("success"):
+            forbidden_tools.add(name)
+    # 但成功 real_mcp 主干内的工具不算 forbidden（同名工具修复后成功）
+    forbidden_tools -= {str(d.get("tool", "")) for d in ordered}
+
+    expected_path = [str(n) for n in (planner.get("executionPath") or [])]
+
+    steps: list[dict] = []
+    evidence_refs: list[str] = []
+    if evidence and evidence.evidenceId:
+        evidence_refs.append(evidence.evidenceId)
+    prior_outputs: list[tuple[str, str]] = []
+
+    for idx, detail in enumerate(ordered, start=1):
+        call_id = detail.get("call_id", "")
+        tool_name = detail.get("tool", "")
+        service_id = str(detail.get("service", ""))
+        if not tool_name:
+            remediation.append(f"step {idx}: missing toolName")
+            continue
+        binding = _slim_input_binding(
+            detail.get("arguments") or {},
+            parsed_intent,
+            prior_outputs,
+        )
+        if detail.get("arguments") and not binding:
+            remediation.append(f"step {idx}: missing inputBinding for non-empty arguments")
+
+        step_id = f"step_{idx}"
+        if call_id:
+            evidence_refs.append(call_id)
+        steps.append({
+            "stepId": step_id,
+            "toolName": tool_name,
+            "contractRef": f"serviceContracts.{service_id or 'unknown'}",
+            "inputBinding": binding,
+            "outputSlots": _output_slots(detail.get("result_preview")),
+            "assertionRefs": [],
+            "onFailure": "retry_then_replan",
+            "_callId": call_id,
+        })
+        prior_outputs.append((step_id, str(detail.get("result_preview") or "")))
+
+    if not steps:
+        return None, False, "no extractable golden steps", remediation or [
+            "无法从最终方案构建步骤",
+        ]
+
+    if remediation:
+        return None, False, "missing stepId / inputBinding / final passed plan", remediation
+
+    assertions = _build_golden_assertions(
+        steps,
+        parsed_intent,
+        verifier_passed=True,
+        expected_path=expected_path,
+        forbidden_tools=forbidden_tools,
+        evidence_refs=evidence_refs,
+    )
+
+    # 任一可核验断言判负 → 主干不可信，不抽取
+    failed_assertions = [a["assertionId"] for a in assertions if a["result"] == "fail"]
+    if failed_assertions:
+        return None, False, "golden path assertions failed", [
+            f"断言未通过: {', '.join(failed_assertions)}",
+        ]
+
+    # 逐步关联断言：通用 L1 + 与该步相关的 L2（若该步消费了前序输出）
+    common_refs = [
+        a["assertionId"] for a in assertions
+        if a["assertionId"] in (
+            "a_l1_required_tools", "a_l1_tool_success",
+            "a_l1_forbidden_tools", "a_l1_tool_order",
+        )
+    ]
+    for step in steps:
+        refs = list(common_refs)
+        has_chain = any(
+            isinstance(v, dict) and str(v.get("$from", "")).endswith(".output")
+            for v in (step.get("inputBinding") or {}).values()
+        )
+        if has_chain:
+            refs.append("a_l2_output_chain")
+        step["assertionRefs"] = refs
+        step.pop("_callId", None)
+
+    applicability = _build_applicability(parsed_intent, service_contracts, steps)
+    golden = {
+        "sourceTraceRef": session_id,
+        "applicability": applicability,
+        "steps": steps,
+        "assertions": assertions,
+        "evidenceRefs": list(dict.fromkeys(evidence_refs)),
+        "fallbackPolicy": dict(DEFAULT_FALLBACK_POLICY),
+    }
+    return golden, True, "final passed MCP call spine extracted", []
+
+
+# ---------------------------------------------------------------------------
+# artifactMeta / writeBack
+# ---------------------------------------------------------------------------
+
+
+def _build_artifact_meta(
+    *,
+    session_id: str,
+    trace_hash: str,
+    config_hash: str,
+    meta_app: MetaAppInfo,
+    summary: _TraceSummary,
+    evidence: Optional[EvidenceSnapshot],
+    parsed_intent: dict,
+    compiler_version: str | None,
+    created_at: str,
+    artifact_hash: str,
+) -> dict:
+    source_ref = parsed_intent.get("sourceRef") or {}
+    return {
+        "artifactId": _short_id("art", f"{session_id}:{trace_hash}"),
+        "sourceSessionId": session_id,
+        "createdAt": created_at,
+        "appName": meta_app.appName,
+        "domain": meta_app.domain,
+        "mode": meta_app.mode,
+        "appId": meta_app.appId,
+        "traceRef": session_id,
+        "traceHash": trace_hash,
+        "configSnapshotHash": config_hash,
+        "artifactHash": artifact_hash,
+        "compilerVersion": compiler_version,
+        "evidenceRef": evidence.evidenceId if evidence else None,
+        "intakeSessionRef": source_ref.get("intakeSessionRef"),
+        "buildSummary": {
+            "totalIterations": summary.totalIterations,
+            "finalStatus": summary.finalStatus,
+            "elapsedMs": summary.elapsedMs,
+        },
+    }
 
 
 def _build_provenance(
@@ -1025,212 +1190,75 @@ def _build_provenance(
     events: list[dict],
     compiler_version: str | None = None,
     created_at: str = "",
-) -> Provenance:
-    tc_prov: list[dict] = []
-    for e in events:
-        if e.get("type") != "tool_call_record":
-            continue
-        d = e.get("data", {})
-        tc_prov.append(asdict(ToolCallProvenance(
-            callId=d.get("call_id", ""),
-            resultHash=d.get("result_hash") or None,
-            toolName=d.get("tool_name", ""),
-            serviceId=d.get("service_id", ""),
-            channel=d.get("channel", ""),
-            timestamp=d.get("timestamp"),
-        )))
-
-    return Provenance(
-        sourceSessionId=session_id,
-        sourceTraceVersion=trace_version,
-        traceHash=trace_hash,
-        configSnapshotHash=config_hash,
-        artifactHash="",  # placeholder — filled after assembly
-        compilerVersion=compiler_version,
-        createdAt=created_at,
-        toolCallProvenance=tc_prov,
-    )
-
-
-# ---- Solidification Report ----------------------------------------------
-
-
-def _build_solidification_report(
-    trace: dict,
-    smt: StateMachineTrace,
-    evidence: EvidenceSnapshot | None,
-) -> SolidificationReport:
-    gates: list[GateResult] = []
-
-    # Gate 1: sufficient iterations
-    strategy = trace.get("strategy", {})
-    stability_req = strategy.get("stabilityPasses")
-    verifier_passes = sum(
-        1 for e in trace.get("events", [])
-        if e.get("type") == "verifier_result"
-        and e.get("data", {}).get("status") == "PASSED"
-    )
-    if stability_req is not None:
-        try:
-            required = max(1, int(stability_req))
-        except (TypeError, ValueError):
-            required = 1
-        iter_ok = verifier_passes >= required
-        suff_detail = f"验证通过 {verifier_passes} 次，要求同一轨迹至少 {required} 次"
-        suff_remediation = (
-            "" if iter_ok
-            else f"需同一调度轨迹连续通过 Verifier {required} 次，当前 {verifier_passes} 次"
-        )
-        suff_value = verifier_passes
-    else:
-        try:
-            required = max(1, int(strategy.get("minIterations", 1)))
-        except (TypeError, ValueError):
-            required = 1
-        actual = trace.get("iterations", 0)
-        iter_ok = actual >= required
-        suff_detail = f"实际迭代 {actual} 轮，最少要求 {required} 轮"
-        suff_remediation = "" if iter_ok else f"需至少 {required} 轮迭代，当前仅 {actual} 轮"
-        suff_value = actual
-    gates.append(GateResult(
-        gate="sufficientIterations",
-        passed=iter_ok,
-        detail=suff_detail,
-        remediation=suff_remediation,
-    ))
-
-    # Gate 2: verifier passed (last iteration)
-    last_ver_status = "UNKNOWN"
-    for itr in smt.iterations:
-        ver = itr.get("verifier")
-        if ver:
-            last_ver_status = ver.get("status", "UNKNOWN")
-    ver_ok = last_ver_status == "PASSED"
-    gates.append(GateResult(
-        gate="verifierPassed",
-        passed=ver_ok,
-        detail=f"最后一轮 Verifier 状态: {last_ver_status}",
-        remediation="" if ver_ok else "需 Verifier 通过所有断言检查",
-    ))
-
-    # Gate 3: evidence complete
-    ev_completeness = evidence.completeness if evidence else None
-    ev_ok = ev_completeness == "COMPLETE"
-    gates.append(GateResult(
-        gate="evidenceComplete",
-        passed=ev_ok,
-        detail=f"证据完整性: {ev_completeness or '未运行 evidence pipeline'}",
-        remediation="" if ev_ok else "运行证据分析 pipeline 并确保所有证据维度通过检查",
-    ))
-
-    # Gate 4: no unresolved tool errors
-    tool_events = [e for e in trace.get("events", []) if e.get("type") == "tool_call_record"]
-    failed = [e for e in tool_events if not e.get("data", {}).get("success")]
-    tool_ok = len(failed) == 0
-    failed_ids = [f.get("data", {}).get("call_id", "?") for f in failed]
-    gates.append(GateResult(
-        gate="noUnresolvedToolErrors",
-        passed=tool_ok,
-        detail=f"失败工具调用: {len(failed)} 个 ({failed_ids})",
-        remediation="" if tool_ok else f"检查并修复 {len(failed)} 个失败的工具调用",
-    ))
-
-    # Gate 5: no infrastructure errors
-    infra_ok = smt.finalStatus != "UNKNOWN"
-    gates.append(GateResult(
-        gate="noInfrastructureErrors",
-        passed=infra_ok,
-        detail=f"仿真最终状态: {smt.finalStatus}",
-        remediation="" if infra_ok else "仿真未正常结束，检查基础设施日志",
-    ))
-
-    # Gate 6: real MCP calls present
-    real_calls = [e for e in tool_events if e.get("data", {}).get("channel") == "real_mcp"]
-    real_ok = len(real_calls) > 0
-    gates.append(GateResult(
-        gate="realMcpCallsPresent",
-        passed=real_ok,
-        detail=f"真实 MCP 调用: {len(real_calls)} 次 (sandbox-only 不可固化)",
-        remediation="" if real_ok else "至少需要一次 real_mcp 通道的 MCP 调用",
-    ))
-
-    all_pass = all(g.passed for g in gates)
-
-    conditions = {
-        "sufficientIterations": {
-            "passed": iter_ok,
-            "value": suff_value,
-            "required": required,
-            "detail": gates[0].detail,
-        },
-        "verifierPassed": {"passed": ver_ok, "status": last_ver_status,
-                            "detail": gates[1].detail},
-        "evidenceComplete": {"passed": ev_ok, "completenessStatus": ev_completeness,
-                              "missingCategories": evidence.missingEvidenceCategories if evidence else [],
-                              "detail": gates[2].detail},
-        "noUnresolvedToolErrors": {"passed": tool_ok, "failedCalls": len(failed),
-                                    "failedCallIds": failed_ids, "detail": gates[3].detail},
-        "noInfrastructureErrors": {"passed": infra_ok, "detail": gates[4].detail},
-        "realMcpCallsPresent": {"passed": real_ok, "realMcpCallCount": len(real_calls),
-                                 "detail": gates[5].detail},
+) -> dict:
+    """向后兼容：返回 artifactMeta 风格溯源字段，不含逐步 toolCallProvenance。"""
+    return {
+        "sourceSessionId": session_id,
+        "sourceTraceVersion": trace_version,
+        "traceHash": trace_hash,
+        "configSnapshotHash": config_hash,
+        "artifactHash": "",
+        "compilerVersion": compiler_version,
+        "createdAt": created_at,
     }
-
-    return SolidificationReport(
-        solidifiable=all_pass,
-        conditions=conditions,
-        gates=[asdict(g) for g in gates],
-    )
-
-
-# ---- WriteBack Draft ----------------------------------------------------
 
 
 def _build_write_back(
     trace: dict,
-    smt: StateMachineTrace,
-    scenario: ScenarioInfo,
+    golden_path: Optional[dict],
+    parsed_intent: dict,
     meta_app: MetaAppInfo,
-    prov: Provenance,
+    artifact_meta: dict,
 ) -> WriteBackDraft:
     meta = trace.get("metadata", {})
     cfg = meta.get("config_snapshot", {})
+    description = parsed_intent.get("description", "")
 
-    # Existing fields
-    existing = asdict(WriteBackExistingFields(
-        name=meta_app.appName,
-        subtitle=scenario.description or "",
-        services=cfg.get("serviceIds", []),
-        inputName="仿真输入",
-        outputName="仿真输出",
-        outputVisualization=True,
-        submitButtonText="开始构建",
-        des=scenario.sourceDescription,
-    ))
+    existing = {
+        "name": meta_app.appName,
+        "subtitle": description[:120] if description else "",
+        "services": cfg.get("serviceIds", []),
+        "inputName": "仿真输入",
+        "outputName": "仿真输出",
+        "outputVisualization": True,
+        "submitButtonText": "开始构建",
+        "des": description,
+    }
+    new_fields = {
+        "artifactSpecJson": "",
+        "sourceSessionId": artifact_meta.get("sourceSessionId", ""),
+        "traceHash": artifact_meta.get("traceHash", ""),
+        "artifactHash": artifact_meta.get("artifactHash", ""),
+        "schemaVersion": "0.3.0",
+    }
 
-    # New fields (require schema migration)
-    new = asdict(WriteBackNewFields(
-        artifactSpecJson="",  # filled by caller after serialization
-        sourceSessionId=prov.sourceSessionId,
-        traceHash=prov.traceHash,
-        artifactHash=prov.artifactHash,
-        schemaVersion="0.1.0",
-    ))
-
-    # Tools extracted from state machine
-    seen_tools: set[str] = set()
     tools: list[dict] = []
-    for itr in smt.iterations:
-        for tc in itr.get("toolCalls", []):
-            name = tc.get("toolName", "")
-            if name and name not in seen_tools:
-                seen_tools.add(name)
-                tools.append({
-                    "name": name,
-                    "description": tc.get("serviceId", ""),
-                })
+    seen: set[str] = set()
+    if golden_path:
+        for step in golden_path.get("steps") or []:
+            name = step.get("toolName", "")
+            ref = step.get("contractRef", "")
+            if name and name not in seen:
+                seen.add(name)
+                tools.append({"name": name, "description": ref})
 
-    return WriteBackDraft(
-        existingFields=existing,
-        newFields=new,
-        tools=tools,
-    )
+    return WriteBackDraft(existingFields=existing, newFields=new_fields, tools=tools)
+
+
+__all__ = [
+    "ArtifactSpec",
+    "compile_artifact_spec",
+    "ExecutionTrace",
+    "ExecutionStep",
+    "SolidificationReport",
+    "_build_execution_trace",
+    "_build_solidification_report",
+    "_build_provenance",
+    "_build_write_back",
+    "_build_evidence",
+    "_build_service_contracts",
+    "_extract_golden_path",
+    "_sha256",
+    "_short_id",
+    "_ts_to_iso",
+]

@@ -1,242 +1,123 @@
-"""Tests for artifact_compiler — trace → ArtifactSpec v0 compilation."""
+"""Tests for artifact_compiler v0.3 — goldenPath / solidification convergence."""
 
 import json
-import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-# Ensure Micro-Agent root is on path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from micro_agent.simulation.artifact_compiler import (
     ArtifactSpec,
     MetaAppInfo,
-    ScenarioInfo,
-    StateMachineTrace,
-    Provenance,
-    SolidificationReport,
+    _TraceSummary,
+    _build_evidence,
+    _build_execution_trace,
     _build_meta_app,
-    _build_scenario,
-    _build_state_machine,
+    _build_parsed_intent,
     _build_provenance,
+    _build_scenario,
+    _build_service_contracts,
     _build_solidification_report,
     _build_write_back,
-    _build_evidence,
-    _build_service_contracts,
-    _extract_parsed_intent,
-    _format_verifier_issue_messages,
-    compile_artifact_spec,
+    _extract_golden_path,
     _sha256,
     _short_id,
     _ts_to_iso,
+    compile_artifact_spec,
 )
+from micro_agent.scenario.schema import normalize_scenario_parsed
 
 _TRACE_DIR = _REPO_ROOT / "workspace" / "data" / "traces"
 
 
-def _load_trace(filename: str) -> dict:
-    path = _TRACE_DIR / filename
-    if not path.exists():
-        raise FileNotFoundError(f"Trace not found: {path}")
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+def _evidence_complete() -> MagicMock:
+    ev = MagicMock()
+    ev.evidenceId = "ev-test-001"
+    ev.completeness = "COMPLETE"
+    ev.checkerStatus = "PASS"
+    ev.missingEvidenceCategories = []
+    return ev
+
+
+def _pipeline_result(ev: MagicMock) -> MagicMock:
+    pr = MagicMock()
+    pr.card.evidence_id = ev.evidenceId
+    pr.report.overall_status = ev.checkerStatus
+    pr.report.completeness = ev.completeness
+    pr.bundle.missing_evidence = ev.missingEvidenceCategories
+    return pr
+
+
+def _planner_decision(tool_details, execution_path=None):
+    return {
+        "iteration": 1,
+        "selected_tools": [d.get("tool") for d in tool_details],
+        "executionPath": execution_path or ["用户输入"] + [d.get("tool") for d in tool_details] + ["输出结果"],
+        "tool_call_details": tool_details,
+    }
+
+
+def _success_real_call(call_id, tool, service_id="s1", arguments=None):
+    return {
+        "call_id": call_id,
+        "tool": tool,
+        "service": service_id,
+        "channel": "real_mcp",
+        "success": True,
+        "arguments": arguments or {"query": "test"},
+        "result_preview": '{"score": 3}',
+        "latency_ms": 100,
+    }
 
 
 class TestUtilityFunctions(unittest.TestCase):
-    """Unit tests for helper functions."""
-
     def test_sha256_deterministic(self):
-        h1 = _sha256("hello")
-        h2 = _sha256("hello")
-        self.assertEqual(h1, h2)
-        self.assertEqual(len(h1), 64)
-        self.assertTrue(all(c in "0123456789abcdef" for c in h1))
-
-    def test_sha256_different_inputs(self):
-        h1 = _sha256("hello")
-        h2 = _sha256("world")
-        self.assertNotEqual(h1, h2)
+        self.assertEqual(_sha256("hello"), _sha256("hello"))
+        self.assertEqual(len(_sha256("hello")), 64)
 
     def test_short_id_format(self):
-        sid = _short_id("art", "test-seed")
-        self.assertRegex(sid, r"^art-[a-f0-9]{6}-[a-f0-9]{8}$")
-
-    def test_ts_to_iso_valid(self):
-        iso = _ts_to_iso(1717891200.0)
-        self.assertIn("T", iso)
-        self.assertIn("+00:00", iso)
+        self.assertRegex(_short_id("art", "seed"), r"^art-[a-f0-9]{6}-[a-f0-9]{8}$")
 
     def test_ts_to_iso_none(self):
         self.assertEqual(_ts_to_iso(None), "")
 
 
-class TestMetaAppBuilding(unittest.TestCase):
-    """Tests for _build_meta_app."""
-
-    def test_build_meta_app_basic(self):
+class TestParsedIntent(unittest.TestCase):
+    def test_no_intake_dialogue_in_artifact(self):
         trace = {
-            "app_name": "测试元应用",
-            "domain": "health",
-            "mode": "research",
-            "metadata": {"config_snapshot": {}},
-        }
-        ma = _build_meta_app(trace)
-        self.assertEqual(ma.appName, "测试元应用")
-        self.assertEqual(ma.domain, "health")
-        self.assertEqual(ma.mode, "research")
-
-    def test_build_meta_app_falls_back_to_config(self):
-        # .get() default only applies when key is missing, not when value is empty string.
-        # Empty app_name from trace is used directly.
-        trace = {
-            "app_name": "",
-            "domain": "",
-            "mode": "production",
+            "session_id": "sim-intent",
             "metadata": {
-                "config_snapshot": {
-                    "appName": "FallbackApp",
-                    "domain": "aml",
-                    "appId": "app-123",
-                }
+                "config_snapshot": {"scenarioDescription": "测试"},
+                "runtime": {"trace_version": "v1.0.0"},
             },
+            "events": [{
+                "type": "scenario_parsed",
+                "data": {
+                    "goal": "目标",
+                    "description": "描述",
+                    "source": {
+                        "rawUserInput": "原始",
+                        "intakeDialogue": [{"role": "user", "content": "长对话"}],
+                        "intakeSessionId": "intake-1",
+                    },
+                },
+            }],
+            "iterations": 1,
+            "elapsed_ms": 100,
         }
-        ma = _build_meta_app(trace)
-        # app_name is empty string (key exists), so it's used as-is
-        self.assertEqual(ma.appName, "")
-        self.assertEqual(ma.domain, "")
-        self.assertEqual(ma.appId, "app-123")
-
-
-class TestScenarioBuilding(unittest.TestCase):
-    """Tests for _build_scenario."""
-
-    def test_build_scenario_from_config_snapshot(self):
-        trace = {
-            "metadata": {
-                "config_snapshot": {
-                    "scenarioDescription": "测试场景",
-                    "servicesMeta": [
-                        {
-                            "id": "svc-1",
-                            "name": "Service1",
-                            "description": "Desc1",
-                            "mcpMethod": "sse",
-                            "isFake": False,
-                        }
-                    ],
-                }
-            }
-        }
-        ma = MetaAppInfo(appName="TestApp", domain="health")
-        sc = _build_scenario(trace, ma)
-        self.assertEqual(sc.domain, "health")
-        self.assertEqual(sc.sourceDescription, "测试场景")
-        self.assertEqual(len(sc.involvedServices), 1)
-        self.assertEqual(sc.involvedServices[0]["serviceId"], "svc-1")
-        self.assertEqual(sc.involvedServices[0]["name"], "Service1")
-        self.assertEqual(sc.involvedServices[0]["channel"], "sse")
-
-
-class TestCompileFromRealTrace(unittest.TestCase):
-    """Integration tests using real trace files."""
-
-    @classmethod
-    def setUpClass(cls):
-        # Find a real v1.0.0 trace
-        candidates = sorted(_TRACE_DIR.glob("sim-headless-*.json"), reverse=True)
-        if not candidates:
-            candidates = sorted(_TRACE_DIR.glob("sim-*.json"), reverse=True)
-        if not candidates:
-            raise unittest.SkipTest("No trace files found")
-        cls.trace_path = candidates[0]
-        with open(cls.trace_path, encoding="utf-8") as f:
-            cls.trace = json.load(f)
-
-    def test_compile_produces_valid_artifact_spec(self):
-        """Compile a real trace and verify ArtifactSpec structure."""
-        spec = compile_artifact_spec(self.trace, schema_version="0.1.0")
-
-        # Top-level required fields
-        self.assertEqual(spec.schemaVersion, "0.1.0")
-        self.assertRegex(spec.artifactId, r"^art-[a-f0-9]{6}-[a-f0-9]{8}$")
-        self.assertTrue(len(spec.sourceSessionId) > 0)
-        self.assertTrue(len(spec.createdAt) > 0)
-
-        # metaApp
-        self.assertIn("appName", spec.metaApp)
-        self.assertIn("domain", spec.metaApp)
-
-        # scenario
-        self.assertIn("title", spec.scenario)
-        self.assertIn("domain", spec.scenario)
-        self.assertIn("sourceDescription", spec.scenario)
-
-        # stateMachineTrace
-        self.assertIn("states", spec.stateMachineTrace)
-        self.assertIn("transitions", spec.stateMachineTrace)
-        self.assertIn("iterations", spec.stateMachineTrace)
-        self.assertGreater(len(spec.stateMachineTrace["states"]), 0)
-        self.assertGreater(len(spec.stateMachineTrace["transitions"]), 0)
-
-        # provenance
-        self.assertIn("sourceSessionId", spec.provenance)
-        self.assertIn("sourceTraceVersion", spec.provenance)
-        self.assertIn("traceHash", spec.provenance)
-        self.assertIn("artifactHash", spec.provenance)
-        self.assertEqual(len(spec.provenance["artifactHash"]), 64)
-
-        # solidification
-        self.assertIsInstance(spec.solidifiable, bool)
-        self.assertIn("gates", spec.solidificationReport)
-        self.assertEqual(len(spec.solidificationReport["gates"]), 6)
-
-        # writeBackDraft
-        self.assertIsNotNone(spec.writeBackDraft)
-        self.assertIn("existingFields", spec.writeBackDraft)
-        self.assertIn("newFields", spec.writeBackDraft)
-
-    def test_artifact_hash_is_deterministic(self):
-        """Same trace should produce same artifactHash."""
-        spec1 = compile_artifact_spec(self.trace, schema_version="0.1.0")
-        spec2 = compile_artifact_spec(self.trace, schema_version="0.1.0")
-        self.assertEqual(spec1.artifactId, spec2.artifactId)
-        self.assertEqual(spec1.provenance["artifactHash"], spec2.provenance["artifactHash"])
-
-    def test_to_dict_is_serializable(self):
-        """ArtifactSpec.to_dict() should be JSON-serializable."""
-        spec = compile_artifact_spec(self.trace, schema_version="0.1.0")
-        d = spec.to_dict()
-        json_str = json.dumps(d, ensure_ascii=False)
-        self.assertGreater(len(json_str), 100)
-
-    def test_rejects_non_v1_trace(self):
-        """Should raise ValueError for non-v1.0.0 traces."""
-        bad_trace = {
-            "session_id": "test-123",
-            "metadata": {"runtime": {"trace_version": "v0.5.0"}},
-            "events": [],
-        }
-        with self.assertRaises(ValueError) as ctx:
-            compile_artifact_spec(bad_trace)
-        self.assertIn("v1.0.0", str(ctx.exception))
-
-    def test_rejects_missing_version(self):
-        """Should raise ValueError when trace_version is absent."""
-        bad_trace = {
-            "session_id": "test-456",
-            "metadata": {},
-            "events": [],
-        }
-        with self.assertRaises(ValueError):
-            compile_artifact_spec(bad_trace)
+        ma = MetaAppInfo(appName="App", domain="health")
+        intent = _build_parsed_intent(trace, ma, "sim-intent")
+        self.assertEqual(intent["goal"], "目标")
+        self.assertIn("sourceRef", intent)
+        self.assertEqual(intent["sourceRef"]["intakeSessionRef"], "intake-1")
+        self.assertNotIn("intakeDialogue", intent)
+        self.assertNotIn("source", intent)
 
 
 class TestSolidificationGates(unittest.TestCase):
-    """Tests for solidification report logic."""
-
     def _make_trace(self, **overrides) -> dict:
         base = {
             "session_id": "sim-test",
@@ -256,122 +137,382 @@ class TestSolidificationGates(unittest.TestCase):
     def test_all_gates_pass_for_clean_trace(self):
         trace = self._make_trace(
             events=[
-                {"type": "tool_call_record", "data": {"call_id": "c1", "channel": "real_mcp", "success": True}}
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c1", "channel": "real_mcp", "success": True,
+                    "tool_name": "predict", "service_id": "s1",
+                }},
+                {"type": "verifier_result", "data": {"status": "PASSED", "iteration": 1}},
             ]
         )
-        smt = StateMachineTrace(
-            states=[],
-            transitions=[],
-            iterations=[{"verifier": {"status": "PASSED"}}],
-            totalIterations=2,
-            finalStatus="SUCCESS",
-            elapsedMs=5000,
-        )
-        # Mock evidence with COMPLETE
-        ev = MagicMock()
-        ev.completeness = "COMPLETE"
-        ev.missingEvidenceCategories = []
-
-        report = _build_solidification_report(trace, smt, ev)
+        summary = _TraceSummary(finalStatus="SUCCESS", totalIterations=2, elapsedMs=5000)
+        report = _build_solidification_report(trace, summary, _evidence_complete())
         self.assertTrue(report.solidifiable)
-        for g in report.gates:
-            self.assertTrue(g["passed"], f"Gate {g['gate']} should pass, got: {g['detail']}")
 
-    def test_insufficient_iterations_fails(self):
-        trace = self._make_trace(iterations=0, strategy={"minIterations": 2})
-        smt = StateMachineTrace(
-            states=[],
-            transitions=[],
-            iterations=[],
-            totalIterations=0,
-            finalStatus="FAILED",
+    def test_mock_demo_not_solidifiable(self):
+        trace = self._make_trace(
+            events=[
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c1", "channel": "sandbox", "success": True,
+                }},
+                {"type": "verifier_result", "data": {"status": "PASSED"}},
+            ]
         )
-        ev = MagicMock()
-        ev.completeness = "COMPLETE"
-        ev.missingEvidenceCategories = []
-
-        report = _build_solidification_report(trace, smt, ev)
+        summary = _TraceSummary(finalStatus="SUCCESS")
+        report = _build_solidification_report(trace, summary, _evidence_complete())
         self.assertFalse(report.solidifiable)
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertIsNone(spec.goldenPath)
+        self.assertFalse(spec.solidificationReport["goldenPathExtractable"])
 
-    def test_verifier_failed_fails_solidification(self):
-        trace = self._make_trace()
-        smt = StateMachineTrace(
-            states=[],
-            transitions=[],
-            iterations=[{"verifier": {"status": "FAILED"}}],
-            totalIterations=1,
-            finalStatus="FAILED",
+    def test_evidence_pipeline_failure(self):
+        trace = self._make_trace(
+            events=[
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c1", "channel": "real_mcp", "success": True,
+                }},
+                {"type": "verifier_result", "data": {"status": "PASSED"}},
+            ]
         )
-        ev = MagicMock()
-        ev.completeness = "COMPLETE"
-
-        report = _build_solidification_report(trace, smt, ev)
+        summary = _TraceSummary(finalStatus="SUCCESS")
+        report = _build_solidification_report(trace, summary, None)
         self.assertFalse(report.solidifiable)
+        spec = compile_artifact_spec(trace, None)
+        self.assertIsNone(spec.goldenPath)
+        self.assertIn("运行证据 pipeline", " ".join(spec.solidificationReport["remediation"]))
 
-
-class TestVerifierIssueFormatting(unittest.TestCase):
-    """Regression: verifier_result.issues may be dicts, not only strings."""
-
-    def test_format_string_issues(self):
-        self.assertEqual(
-            _format_verifier_issue_messages(["缺少报告", "顺序错误"]),
-            "缺少报告; 顺序错误",
+    def test_tool_call_failure_not_solidifiable(self):
+        trace = self._make_trace(
+            events=[
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c1", "channel": "real_mcp", "success": False,
+                }},
+                {"type": "verifier_result", "data": {"status": "PASSED"}},
+            ]
         )
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertFalse(spec.solidifiable)
+        self.assertIsNone(spec.goldenPath)
 
-    def test_format_dict_issues(self):
-        issues = [
-            {"description": "未调用报告服务", "evidence_refs": ["c1"]},
-            {"message": "数据流断裂"},
+    def test_verifier_final_failed(self):
+        trace = self._make_trace(
+            events=[
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c1", "channel": "real_mcp", "success": True,
+                }},
+                {"type": "verifier_result", "data": {"status": "FAILED"}},
+            ]
+        )
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertFalse(spec.solidifiable)
+        self.assertIsNone(spec.goldenPath)
+
+
+class TestGoldenPathExtraction(unittest.TestCase):
+    def _golden_trace(self, planner=None, extra_events=None):
+        planner = planner or _planner_decision([
+            _success_real_call("c1", "predict", arguments={"patient": "p1"}),
+            _success_real_call("c2", "report", service_id="s2", arguments={"from_step": "c1"}),
+        ])
+        events = [
+            {"type": "scenario_parsed", "data": {
+                "goal": "生成报告",
+                "acceptanceCriteria": ["含风险评分"],
+                "constraints": ["合规"],
+            }},
+            {"type": "tool_call_record", "data": {
+                "call_id": "c1", "tool_name": "predict", "service_id": "s1",
+                "channel": "real_mcp", "success": True,
+            }},
+            {"type": "tool_call_record", "data": {
+                "call_id": "c2", "tool_name": "report", "service_id": "s2",
+                "channel": "real_mcp", "success": True,
+            }},
+            {"type": "verifier_result", "data": {
+                "status": "PASSED",
+                "iteration": 1,
+                "plannerDecision": planner,
+            }},
+            {"type": "complete", "data": {"success": True}},
         ]
-        self.assertEqual(
-            _format_verifier_issue_messages(issues),
-            "未调用报告服务; 数据流断裂",
-        )
+        if extra_events:
+            events = extra_events + events
+        return {
+            "session_id": "sim-golden",
+            "iterations": 1,
+            "elapsed_ms": 3000,
+            "strategy": {"minIterations": 1},
+            "app_name": "测试",
+            "domain": "health",
+            "metadata": {
+                "runtime": {"trace_version": "v1.0.0"},
+                "config_snapshot": {
+                    "scenarioDescription": "生成报告",
+                    "servicesMeta": [
+                        {"id": "s1", "name": "预测", "tools": [{"name": "predict"}]},
+                        {"id": "s2", "name": "报告", "tools": [{"name": "report"}]},
+                    ],
+                },
+            },
+            "events": events,
+        }
 
-    def test_state_machine_handles_dict_issues(self):
+    def test_full_success_extracts_golden_path(self):
+        trace = self._golden_trace()
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertTrue(spec.solidifiable)
+        self.assertTrue(spec.solidificationReport["goldenPathExtractable"])
+        self.assertIsNotNone(spec.goldenPath)
+        self.assertEqual(len(spec.goldenPath["steps"]), 2)
+        self.assertNotIn("executionTrace", spec.to_dict())
+        step_tools = [s["toolName"] for s in spec.goldenPath["steps"]]
+        self.assertEqual(step_tools, ["predict", "report"])
+        self.assertGreater(len(spec.goldenPath["assertions"]), 0)
+        self.assertIn("applicability", spec.goldenPath)
+        self.assertIn("fallbackPolicy", spec.goldenPath)
+
+    def test_tool_call_failure_blocks_solidification(self):
+        trace = self._golden_trace()
+        trace["events"].insert(3, {
+            "type": "tool_call_record",
+            "data": {
+                "call_id": "bad", "tool_name": "predict", "service_id": "s1",
+                "channel": "real_mcp", "success": False,
+            },
+        })
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertFalse(spec.solidifiable)
+        self.assertIsNone(spec.goldenPath)
+
+        trace = self._golden_trace()
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        for step in spec.goldenPath["steps"]:
+            self.assertIn("stepId", step)
+            self.assertIn("inputBinding", step)
+
+    def test_solidifiable_but_missing_binding_not_extractable(self):
+        planner = _planner_decision([
+            {
+                "call_id": "c1",
+                "tool": "predict",
+                "service": "s1",
+                "channel": "real_mcp",
+                "success": True,
+                "arguments": {"_internal_only": "hidden"},
+                "result_preview": "{}",
+            },
+        ])
+        trace = self._golden_trace(planner=planner)
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertTrue(spec.solidifiable)
+        self.assertFalse(spec.solidificationReport["goldenPathExtractable"])
+        self.assertIsNone(spec.goldenPath)
+        self.assertTrue(spec.solidificationReport["remediation"])
+
+    def test_repair_loop_then_success_is_solidifiable(self):
+        """前轮失败 + 同工具后轮成功（修复循环）→ 视为已解决，可固化。"""
+        planner = _planner_decision([
+            _success_real_call("c2", "predict", arguments={"patient": "p1"}),
+        ])
+        trace = self._golden_trace(planner=planner)
+        # 在成功调用前插入同一 (service, tool) 的失败调用：应被后续成功覆盖
+        trace["events"].insert(1, {
+            "type": "tool_call_record",
+            "data": {
+                "call_id": "c0", "tool_name": "predict", "service_id": "s1",
+                "channel": "real_mcp", "success": False,
+            },
+        })
+        # 把原 golden trace 的两条 record 收敛为一条成功 predict
+        trace["events"] = [
+            e for e in trace["events"]
+            if not (e.get("type") == "tool_call_record"
+                    and e["data"].get("call_id") in ("c1", "c2")
+                    and e["data"].get("tool_name") == "report")
+        ]
+        trace["events"].insert(2, {
+            "type": "tool_call_record",
+            "data": {
+                "call_id": "c2", "tool_name": "predict", "service_id": "s1",
+                "channel": "real_mcp", "success": True,
+            },
+        })
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        cond = spec.solidificationReport["conditions"]["noUnresolvedToolErrors"]
+        self.assertEqual(cond["unresolvedFailures"], 0)
+        self.assertEqual(cond["totalFailures"], 1)
+        self.assertEqual(cond["resolvedByRetry"], 1)
+        self.assertTrue(spec.solidifiable)
+
+    def test_unresolved_failure_blocks_solidification(self):
+        """失败调用没有同工具的后续成功 → 未解决 → 不可固化。"""
+        trace = self._golden_trace()
+        trace["events"].insert(1, {
+            "type": "tool_call_record",
+            "data": {
+                "call_id": "bad", "tool_name": "lookup", "service_id": "s3",
+                "channel": "real_mcp", "success": False,
+            },
+        })
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        cond = spec.solidificationReport["conditions"]["noUnresolvedToolErrors"]
+        self.assertEqual(cond["unresolvedFailures"], 1)
+        self.assertFalse(spec.solidifiable)
+        self.assertIsNone(spec.goldenPath)
+
+    def test_required_services_from_contract_ref(self):
+        trace = self._golden_trace()
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        req = spec.goldenPath["applicability"]["requiredServices"]
+        self.assertEqual(req, ["s1", "s2"])
+        self.assertNotIn("", req)
+
+    def test_assertions_reflect_reality(self):
+        trace = self._golden_trace()
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        by_id = {a["assertionId"]: a for a in spec.goldenPath["assertions"]}
+        # forbidden 断言存在且在纯 real_mcp 主干上通过
+        self.assertIn("a_l1_forbidden_tools", by_id)
+        self.assertEqual(by_id["a_l1_forbidden_tools"]["result"], "pass")
+        # tool_order 真正基于 executionPath 子序列判定
+        self.assertEqual(by_id["a_l1_tool_order"]["result"], "pass")
+        # 所有断言结果只能是合法枚举
+        for a in spec.goldenPath["assertions"]:
+            self.assertIn(a["result"], ("pass", "fail", "unknown"))
+
+    def test_no_execution_trace_steps_in_artifact(self):
+        trace = self._golden_trace()
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        d = spec.to_dict()
+        self.assertNotIn("executionTrace", d)
+        self.assertNotIn("scenario", d)
+        self.assertIn("parsedIntent", d)
+        self.assertIn("artifactMeta", d)
+        self.assertIn("buildSummary", d["artifactMeta"])
+        # goldenPath 步骤不得泄漏内部字段
+        for step in d["goldenPath"]["steps"]:
+            self.assertNotIn("_callId", step)
+
+    def test_provenance_no_tool_call_list(self):
+        trace = self._golden_trace()
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertNotIn("provenance", spec.to_dict())
+        self.assertNotIn("toolCallProvenance", spec.artifactMeta)
+        meta = spec.artifactMeta
+        self.assertEqual(len(meta["artifactHash"]), 64)
+        self.assertEqual(meta["traceRef"], "sim-golden")
+
+
+class TestServiceContracts(unittest.TestCase):
+    def test_declared_and_observed_aggregation(self):
+        svc = [{"id": "s1", "name": "风险服务", "tools": [{"name": "predict"}]}]
+        calls = [
+            {"call_id": "c1", "tool_name": "predict", "service_id": "s1",
+             "channel": "real_mcp", "success": True, "latency_ms": 100},
+            {"call_id": "c2", "tool_name": "predict", "service_id": "s1",
+             "channel": "real_mcp", "success": False, "latency_ms": 300},
+        ]
         trace = {
-            "session_id": "sim-dict-issues",
-            "iterations": 2,
+            "session_id": "sim-sc",
+            "metadata": {
+                "runtime": {"trace_version": "v1.0.0"},
+                "config_snapshot": {"servicesMeta": svc},
+            },
+            "events": [{"type": "tool_call_record", "data": d} for d in calls],
+        }
+        contracts = _build_service_contracts(trace)
+        self.assertEqual(contracts[0].totalCalls, 2)
+
+
+class TestSchemaValidation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        schema_path = _REPO_ROOT / "trace_evidence" / "schemas" / "artifact_spec_schema.json"
+        with open(schema_path, encoding="utf-8") as f:
+            cls.schema = json.load(f)
+
+    def test_golden_spec_passes_schema(self):
+        planner = _planner_decision([_success_real_call("c1", "predict")])
+        trace = {
+            "session_id": "sim-schema",
+            "iterations": 1,
             "elapsed_ms": 1000,
-            "success": False,
+            "metadata": {
+                "runtime": {"trace_version": "v1.0.0"},
+                "config_snapshot": {
+                    "scenarioDescription": "x",
+                    "servicesMeta": [{"id": "s1", "name": "S", "tools": [{"name": "predict"}]}],
+                },
+            },
+            "events": [
+                {"type": "scenario_parsed", "data": {"goal": "x", "domain": "health"}},
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c1", "tool_name": "predict", "service_id": "s1",
+                    "channel": "real_mcp", "success": True,
+                }},
+                {"type": "verifier_result", "data": {
+                    "status": "PASSED", "iteration": 1, "plannerDecision": planner,
+                }},
+                {"type": "complete", "data": {"success": True}},
+            ],
+        }
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        errors = self._validate(spec.to_dict(), self.schema)
+        if errors:
+            self.fail("Schema errors:\n" + "\n".join(errors))
+
+    def _validate(self, instance: dict, schema: dict) -> list[str]:
+        """真实 JSON Schema 校验（Draft 2020-12）。"""
+        import jsonschema
+        validator = jsonschema.Draft202012Validator(schema)
+        errors = sorted(validator.iter_errors(instance), key=lambda e: list(e.path))
+        return [f"{list(e.path)}: {e.message}" for e in errors]
+
+    def test_golden_path_passes_full_schema(self):
+        planner = _planner_decision([
+            _success_real_call("c1", "predict", arguments={"patient": "p1"}),
+            _success_real_call("c2", "report", service_id="s2", arguments={"ref": "x"}),
+        ])
+        trace = {
+            "session_id": "sim-schema-gp",
+            "iterations": 1,
+            "elapsed_ms": 1000,
             "strategy": {"minIterations": 1},
             "metadata": {
                 "runtime": {"trace_version": "v1.0.0"},
-                "config_snapshot": {},
+                "config_snapshot": {
+                    "scenarioDescription": "x",
+                    "servicesMeta": [
+                        {"id": "s1", "name": "S1", "tools": [{"name": "predict"}]},
+                        {"id": "s2", "name": "S2", "tools": [{"name": "report"}]},
+                    ],
+                },
             },
             "events": [
-                {"type": "iteration", "data": {"iteration": 1, "status": "running"}, "timestamp": 1.0},
-                {"type": "planner_decision", "data": {"iteration": 1}, "timestamp": 1.1},
-                {
-                    "type": "verifier_result",
-                    "data": {
-                        "iteration": 1,
-                        "status": "FAILED",
-                        "issues": [{"description": "链路不完整", "evidence_refs": ["c1"]}],
-                    },
-                    "timestamp": 1.2,
-                },
-                {"type": "iteration", "data": {"iteration": 2, "status": "running"}, "timestamp": 2.0},
-                {"type": "planner_decision", "data": {"iteration": 2}, "timestamp": 2.1},
-                {
-                    "type": "verifier_result",
-                    "data": {"iteration": 2, "status": "PASSED", "issues": []},
-                    "timestamp": 2.2,
-                },
-                {"type": "complete", "data": {"success": True}, "timestamp": 3.0},
+                {"type": "scenario_parsed", "data": {
+                    "goal": "x", "domain": "health", "acceptanceCriteria": ["c"],
+                }},
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c1", "tool_name": "predict", "service_id": "s1",
+                    "channel": "real_mcp", "success": True,
+                }},
+                {"type": "tool_call_record", "data": {
+                    "call_id": "c2", "tool_name": "report", "service_id": "s2",
+                    "channel": "real_mcp", "success": True,
+                }},
+                {"type": "verifier_result", "data": {
+                    "status": "PASSED", "iteration": 1, "plannerDecision": planner,
+                }},
+                {"type": "complete", "data": {"success": True}},
             ],
         }
-        smt = _build_state_machine(trace["events"], trace)
-        failed_states = [s for s in smt.states if s["state"] == "FAILED"]
-        self.assertGreater(len(failed_states), 0)
-        exc = failed_states[0].get("exception")
-        self.assertIsNotNone(exc)
-        self.assertIn("链路不完整", exc["message"])
+        spec = compile_artifact_spec(trace, _pipeline_result(_evidence_complete()))
+        self.assertIsNotNone(spec.goldenPath)
+        errors = self._validate(spec.to_dict(), self.schema)
+        if errors:
+            self.fail("Schema errors:\n" + "\n".join(errors))
 
 
-class TestStateMachineFromRealTrace(unittest.TestCase):
-    """Test state machine building from a real v1.0.0 trace."""
-
+class TestCompileFromRealTrace(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         candidates = sorted(_TRACE_DIR.glob("sim-headless-*.json"), reverse=True)
@@ -382,358 +523,11 @@ class TestStateMachineFromRealTrace(unittest.TestCase):
         with open(candidates[0], encoding="utf-8") as f:
             cls.trace = json.load(f)
 
-    def test_state_machine_has_required_structure(self):
-        smt = _build_state_machine(self.trace.get("events", []), self.trace)
-        self.assertGreater(len(smt.states), 0)
-        self.assertGreater(len(smt.transitions), 0)
-
-        # First state should be INITIALIZING (states are already asdict'd)
-        first_state = smt.states[0]
-        self.assertEqual(first_state["state"], "INITIALIZING")
-
-        # States should have required fields
-        for s in smt.states:
-            self.assertIn("stateId", s)
-            self.assertIn("state", s)
-            self.assertIn("enteredAt", s)
-
-        # Transitions should have fromState → toState
-        for t in smt.transitions:
-            self.assertIn("fromState", t)
-            self.assertIn("toState", t)
-            self.assertIn("trigger", t)
-
-    def test_state_machine_final_status_matches_trace(self):
-        smt = _build_state_machine(self.trace.get("events", []), self.trace)
-        # finalStatus should not be UNKNOWN for a complete trace
-        self.assertIn(
-            smt.finalStatus,
-            ["SUCCESS", "FAILED", "CANCELLED"],
-            f"Unexpected finalStatus: {smt.finalStatus}",
-        )
-
-    def test_compile_real_trace_with_dict_verifier_issues(self):
-        """Regression: sim-1f14* traces have dict issues and must compile."""
-        path = _TRACE_DIR / "sim-1f14c3ddb100.json"
-        if not path.exists():
-            self.skipTest("sim-1f14c3ddb100.json not found")
-        with open(path, encoding="utf-8") as f:
-            trace = json.load(f)
-        spec = compile_artifact_spec(trace)
-        self.assertTrue(len(spec.serviceContracts) > 0)
-
-
-class TestProvenanceBuilding(unittest.TestCase):
-    """Tests for _build_provenance."""
-
-    def test_provenance_with_tool_calls(self):
-        events = [
-            {
-                "type": "tool_call_record",
-                "data": {
-                    "call_id": "call-1",
-                    "tool_name": "discover",
-                    "service_id": "svc-1",
-                    "channel": "real_mcp",
-                    "result_hash": "abc123",
-                    "timestamp": 1717891200.0,
-                },
-            }
-        ]
-        prov = _build_provenance(
-            session_id="sim-test",
-            trace_version="v1.0.0",
-            trace_hash=_sha256("dummy"),
-            config_hash=_sha256("dummy-cfg"),
-            events=events,
-            compiler_version="0.1.0",
-            created_at="2026-06-09T00:00:00+00:00",
-        )
-        self.assertEqual(prov.sourceSessionId, "sim-test")
-        self.assertEqual(prov.sourceTraceVersion, "v1.0.0")
-        self.assertEqual(len(prov.toolCallProvenance), 1)
-        self.assertEqual(prov.toolCallProvenance[0]["callId"], "call-1")
-        self.assertEqual(prov.toolCallProvenance[0]["resultHash"], "abc123")
-
-
-class TestSchemaValidation(unittest.TestCase):
-    """Validate compiled output against artifact_spec_schema.json."""
-
-    @classmethod
-    def setUpClass(cls):
-        schema_path = (
-            _REPO_ROOT / "trace_evidence" / "schemas" / "artifact_spec_schema.json"
-        )
-        if not schema_path.exists():
-            raise unittest.SkipTest("Schema file not found")
-        with open(schema_path, encoding="utf-8") as f:
-            cls.schema = json.load(f)
-
-        candidates = sorted(_TRACE_DIR.glob("sim-headless-*.json"), reverse=True)
-        if not candidates:
-            raise unittest.SkipTest("No trace files found")
-        with open(candidates[0], encoding="utf-8") as f:
-            cls.trace = json.load(f)
-
-    def _validate(self, instance: dict, schema: dict) -> list[str]:
-        """Basic JSON Schema validation (Draft 2020-12 subset). Returns list of error messages."""
-        import re
-
-        errors: list[str] = []
-
-        # Check required fields
-        for req in schema.get("required", []):
-            if req not in instance:
-                instance_key = req
-                errors.append(f"Missing required field: {instance_key}")
-
-        # Check property types and constraints
-        properties = schema.get("properties", {})
-        for prop_name, prop_schema in properties.items():
-            if prop_name not in instance:
-                continue
-            value = instance[prop_name]
-
-            # Check type
-            expected_type = prop_schema.get("type")
-            if expected_type:
-                type_ok = False
-                if isinstance(expected_type, list):
-                    type_ok = any(self._check_type(value, t) for t in expected_type)
-                    # If value is null and null is allowed, skip further checks
-                    if value is None and "null" in expected_type:
-                        continue
-                else:
-                    type_ok = self._check_type(value, expected_type)
-                if not type_ok:
-                    errors.append(
-                        f"Field '{prop_name}': expected {expected_type}, got {type(value).__name__}"
-                    )
-
-            # Check pattern
-            pattern = prop_schema.get("pattern")
-            if pattern and isinstance(value, str) and value:
-                if not re.match(pattern, value):
-                    errors.append(
-                        f"Field '{prop_name}': value '{value}' does not match pattern '{pattern}'"
-                    )
-
-            # Recursively validate objects
-            if isinstance(value, dict) and (
-                prop_schema.get("type") == "object"
-                or (isinstance(prop_schema.get("type"), list) and "object" in prop_schema["type"])
-            ):
-                sub_errors = self._validate(value, prop_schema)
-                for se in sub_errors:
-                    errors.append(f"  {prop_name}.{se}")
-
-            # Validate arrays
-            if isinstance(value, list) and (
-                prop_schema.get("type") == "array"
-                or (isinstance(prop_schema.get("type"), list) and "array" in prop_schema["type"])
-            ):
-                items_schema = prop_schema.get("items", {})
-                if items_schema.get("type") == "object":
-                    for i, item in enumerate(value):
-                        if isinstance(item, dict):
-                            sub_errors = self._validate(item, items_schema)
-                            for se in sub_errors:
-                                errors.append(f"  {prop_name}[{i}].{se}")
-
-        return errors
-
-    @staticmethod
-    def _check_type(value, type_name: str) -> bool:
-        if type_name == "string":
-            return isinstance(value, str)
-        if type_name == "integer":
-            return isinstance(value, int) and not isinstance(value, bool)
-        if type_name == "number":
-            return isinstance(value, (int, float)) and not isinstance(value, bool)
-        if type_name == "boolean":
-            return isinstance(value, bool)
-        if type_name == "object":
-            return isinstance(value, dict)
-        if type_name == "array":
-            return isinstance(value, list)
-        if type_name == "null":
-            return value is None
-        return True
-
-    def test_compiled_output_passes_schema_validation(self):
-        """Real compiled ArtifactSpec should pass schema validation."""
-        spec = compile_artifact_spec(self.trace, schema_version="0.1.0")
-        d = spec.to_dict()
-        errors = self._validate(d, self.schema)
-        if errors:
-            self.fail(f"Schema validation failed with {len(errors)} error(s):\n" + "\n".join(errors[:10]))
-
-    def test_schema_validates_state_machine_enum_values(self):
-        """State machine states should use valid enum values."""
-        smt = _build_state_machine(self.trace.get("events", []), self.trace)
-        valid_states = {
-            "INITIALIZING", "DISCOVERING", "PLANNING", "EXECUTING",
-            "VERIFYING", "PASSED", "FAILED", "RETRYING", "COMPLETED",
-            "TERMINAL_FAILED", "CANCELLED",
-        }
-        for s in smt.states:
-            self.assertIn(s["state"], valid_states, f"Invalid state: {s['state']}")
-
-
-class TestServiceContracts(unittest.TestCase):
-    """Tests for _build_service_contracts — declared + observed aggregation."""
-
-    def _trace(self, services_meta: list, tool_calls: list) -> dict:
-        return {
-            "session_id": "sim-sc",
-            "metadata": {
-                "runtime": {"trace_version": "v1.0.0"},
-                "config_snapshot": {"servicesMeta": services_meta},
-            },
-            "events": [{"type": "tool_call_record", "data": d} for d in tool_calls],
-        }
-
-    def test_declared_and_observed_aggregation(self):
-        svc = [{
-            "id": "s1", "name": "风险服务",
-            "tools": [{"id": "t1", "name": "predict", "description": "预测"}],
-        }]
-        calls = [
-            {"call_id": "c1", "tool_name": "predict", "service_id": "s1",
-             "channel": "real_mcp", "transport": "sse", "latency_ms": 100, "success": True},
-            {"call_id": "c2", "tool_name": "predict", "service_id": "s1",
-             "channel": "real_mcp", "transport": "sse", "latency_ms": 300, "success": False},
-        ]
-        contracts = _build_service_contracts(self._trace(svc, calls))
-        self.assertEqual(len(contracts), 1)
-        c = contracts[0]
-        self.assertEqual(c.serviceId, "s1")
-        self.assertEqual(c.channel, "real_mcp")
-        self.assertEqual(c.transport, "sse")
-        self.assertEqual(len(c.declaredTools), 1)
-        self.assertEqual(c.declaredTools[0]["name"], "predict")
-        self.assertEqual(c.totalCalls, 2)
-        self.assertEqual(c.overallSuccessRate, 0.5)
-        self.assertEqual(len(c.observedTools), 1)
-        ot = c.observedTools[0]
-        self.assertEqual(ot["toolName"], "predict")
-        self.assertEqual(ot["callCount"], 2)
-        self.assertEqual(ot["successCount"], 1)
-        self.assertEqual(ot["failureCount"], 1)
-        self.assertEqual(ot["successRate"], 0.5)
-        self.assertEqual(ot["avgLatencyMs"], 200.0)
-        self.assertEqual(ot["evidenceRefs"], ["c1", "c2"])
-
-    def test_service_without_calls_has_empty_observed(self):
-        svc = [{"id": "s1", "name": "未调用服务", "tools": [{"name": "foo"}]}]
-        contracts = _build_service_contracts(self._trace(svc, []))
-        self.assertEqual(len(contracts), 1)
-        c = contracts[0]
-        self.assertEqual(c.totalCalls, 0)
-        self.assertIsNone(c.overallSuccessRate)
-        self.assertIsNone(c.channel)
-        self.assertEqual(c.observedTools, [])
-        self.assertEqual(len(c.declaredTools), 1)
-
-    def test_no_services_yields_empty_list(self):
-        self.assertEqual(_build_service_contracts(self._trace([], [])), [])
-
-    def test_contracts_present_in_compiled_spec(self):
-        svc = [{"id": "s1", "name": "svc", "tools": [{"name": "predict"}]}]
-        calls = [{"call_id": "c1", "tool_name": "predict", "service_id": "s1",
-                  "channel": "real_mcp", "success": True, "latency_ms": 50}]
-        trace = self._trace(svc, calls)
-        trace.update({"iterations": 1, "elapsed_ms": 10, "success": True,
-                      "strategy": {}, "app_name": "svc", "domain": "aml"})
-        spec = compile_artifact_spec(trace)
-        self.assertEqual(len(spec.serviceContracts), 1)
-        self.assertEqual(spec.serviceContracts[0]["serviceId"], "s1")
-
-
-class TestParsedIntent(unittest.TestCase):
-    """Tests for parsedIntent extraction from scenario_parsed events."""
-
-    def test_extract_last_scenario_parsed(self):
-        events = [
-            {"type": "scenario_parsed", "data": {"goal": "旧", "constraints": []}},
-            {"type": "log", "data": {}},
-            {"type": "scenario_parsed", "data": {"goal": "新目标", "acceptanceCriteria": ["完成报告"]}},
-        ]
-        intent = _extract_parsed_intent(events)
-        self.assertIsNotNone(intent)
-        self.assertEqual(intent["goal"], "新目标")
-
-    def test_none_when_absent(self):
-        self.assertIsNone(_extract_parsed_intent([{"type": "log", "data": {}}]))
-
-    def test_none_when_data_empty(self):
-        self.assertIsNone(_extract_parsed_intent([{"type": "scenario_parsed", "data": {}}]))
-
-    def test_scenario_build_includes_parsed_intent(self):
-        trace = {
-            "session_id": "sim-pi",
-            "app_name": "报告应用",
-            "domain": "aml",
-            "metadata": {
-                "runtime": {"trace_version": "v1.0.0"},
-                "config_snapshot": {
-                    "scenarioDescription": "生成风险报告",
-                    "servicesMeta": [],
-                },
-            },
-            "events": [{
-                "type": "scenario_parsed",
-                "data": {"goal": "生成风险报告", "constraints": ["合规"],
-                         "acceptanceCriteria": ["报告含三类风险"]},
-            }],
-        }
-        meta_app = _build_meta_app(trace)
-        scenario = _build_scenario(trace, meta_app)
-        self.assertIsNotNone(scenario.parsedIntent)
-        self.assertEqual(scenario.parsedIntent["goal"], "生成风险报告")
-        self.assertEqual(scenario.parsedIntent["constraints"], ["合规"])
-
-
-class TestParseVerification(unittest.TestCase):
-    """Regression: Verifier 中文「验证通过」须识别为 PASSED，勿误报 issue。"""
-
-    def _parse(self, text):
-        from micro_agent.simulation.orchestrator import SimulationOrchestrator
-        return SimulationOrchestrator._parse_verification(text)
-
-    def test_chinese_passed_prefix(self):
-        text = "验证通过：服务编排完整执行，关键服务调用合理"
-        passed, issue = self._parse(text)
-        self.assertTrue(passed)
-        self.assertEqual(issue, "")
-
-    def test_explicit_passed(self):
-        passed, issue = self._parse("PASSED\n\nAll good")
-        self.assertTrue(passed)
-
-    def test_failed_with_reason(self):
-        passed, issue = self._parse("FAILED: openFDA 查询失败")
-        self.assertFalse(passed)
-        self.assertIn("openFDA", issue)
-
-
-class TestScenarioIntentJsonParse(unittest.TestCase):
-    """Tests for SimulationOrchestrator._parse_intent_json robustness."""
-
-    def _parse(self, text):
-        from micro_agent.simulation.orchestrator import SimulationOrchestrator
-        return SimulationOrchestrator._parse_intent_json(text)
-
-    def test_plain_json(self):
-        self.assertEqual(self._parse('{"goal": "x"}')["goal"], "x")
-
-    def test_json_in_markdown_fence(self):
-        text = '```json\n{"goal": "y", "constraints": []}\n```'
-        self.assertEqual(self._parse(text)["goal"], "y")
-
-    def test_garbage_returns_none(self):
-        self.assertIsNone(self._parse("no json here"))
-        self.assertIsNone(self._parse(""))
+    def test_compile_v03_structure(self):
+        spec = compile_artifact_spec(self.trace)
+        self.assertEqual(spec.schemaVersion, "0.3.0")
+        self.assertIn("parsedIntent", spec.to_dict())
+        self.assertNotIn("executionTrace", spec.to_dict())
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@
 - **架构是真的**:Planner/Verifier 双 Agent 真实调 LLM;MCP 调用真实(channel=real_mcp);轨迹真实落盘。
 - **轨迹已落盘**:`Micro-Agent/workspace/data/traces/*.json`。结构:
   `{session_id, app_name, domain, mode, strategy{minIterations,verificationMode}, events[{type,data,timestamp}], success, iterations, elapsed_ms, created_at, metadata{trace_version,config_snapshot,runtime,tool_call_count}}`
-- **证据产物落盘(部分解决)**:`POST /api/simulation/{id}/evidence` 会 `save_to_dir`；仿真结束**不会自动**跑 evidence/artifact,需显式调用或前端触发。三套 pipeline 入口仍未收敛。
+- **证据与产物落盘**:仿真 SSE 结束 `finally` **自动** `run_pipeline` + `compile_artifact_spec` 落盘；仍保留 `POST /evidence` / `POST /artifact` 手动入口。evidence 多入口收敛仍待做。
 - **已知技术债**:① 证据 pipeline 三套入口重复(`__init__.py`/`run_pipeline.py`/`headless_run.py`);② `orchestrator.py` 902 行 God Class;③ 私有方法跨模块外泄(`api/routes/simulation.py` 调 `orchestrator._collect_call_records()`);④ 无服务注册中心,MCP 地址硬编码;⑤ 18 处吞异常(含 MCP cleanup 跨 task cancel scope bug,被 except 静默)。
 
 ## 2. 当前元应用配置的真实形态(产物的写入端,已读后端坐实)
@@ -33,12 +33,11 @@
 ## 3. 产物规格必须新增的内容(用户明确要求 + 推导)
 在元应用配置中,除现有(名称/描述/服务列表/版本号)外,**至少新增**:
 
-1. **场景信息(scenario)**:场景解析的最终结论。字段建议:`scenarioId, title, description, domain, parsedIntent, involvedServices[], sourceEvidenceRef`。
-2. **类状态机的轨迹数据(stateMachineTrace)**:把仿真轨迹抽象为状态机。必须能表达:
-   - 正常状态流转(state → transition → next state,每个 transition 绑定一次服务调用);
-   - **异常态标记**:何时进入异常(断言失败/语义不通过/工具报错);
-   - **退出固化的条件**:在哪个状态判定"不可固化,需退出",触发智能体重新介入调度(对应双 Agent 的 Verifier→Planner 回环)。
-3. **溯源哈希(provenance)**:用于与服务器侧数据匹配/溯源。建议:`traceHash(原始trace内容哈希)、configSnapshotHash、artifactHash、sourceSessionId、createdAt`。
+1. **想定结论(parsedIntent)**:轻量 ScenarioParsed。字段：`goal, constraints[], acceptanceCriteria[], domain, description, sourceRef{traceRef, intakeSessionRef, parserModel, parsedAt}`。完整追问对话不进产物，仅引用。
+2. **服务契约(serviceContracts)**:声明工具 + 实测调用统计。
+3. **黄金路径(goldenPath)**:仅 `solidifiable && goldenPathExtractable` 时写入；含 `steps[]`、`assertions[]`、`applicability`、`fallbackPolicy`。完整逐步过程在 `data/traces/`。
+4. **固化报告(solidificationReport)**:六道 gate + `goldenPathExtractable` + `remediation`。
+5. **溯源与元数据(artifactMeta)**: `artifactId, artifactHash, traceHash, configSnapshotHash, sourceSessionId, buildSummary` 等；**无** `toolCallProvenance[]`。
 
 ## 4. 完整流程需记录的过程材料(作为产物的证据链)
 1. **场景解析结果**:作为最终场景信息的材料/证据,需保留原始输入→解析中间产物→结论的链路。
@@ -53,7 +52,7 @@
 ### 工作块 A:轨迹数据的记录与整理(进行中)
 - 定义统一的 ArtifactSpec schema(覆盖 §3 + §4)。
 - 让 API 主链路真实落盘证据产物(消除 §1 的关键缺口),优先收敛三套 pipeline 为一套。
-- 从现有 trace 的 events 流中,抽取/重组出"每轮迭代的调度方案/调用轨迹/断言/语义检查",并归一为状态机轨迹。
+- 从 trace events 编译结论型 ArtifactSpec v0.3；可复用路径进入 `goldenPath`，过程材料保留在 trace 文件。
 ### 工作块 B:整理好的产物写回元应用配置
 - **先读 `ioeb` 前后端**确认元应用配置的读写接口(后端 model/repository/api、前端 mock/builder),搞清写回的真实通道与字段约束。
 - 设计 ArtifactSpec → 元应用配置的映射(新增字段如何挂到现有结构,是否需后端 schema 迁移)。
@@ -83,20 +82,20 @@
 | 阶段 | 声称产物 | 代码现状 | 判定 |
 |------|----------|----------|------|
 | 自然语言需求 | 原始需求、用户目标 | `scenarioDescription`/`scenarioSummary` 进 `config_snapshot`；对话期 `scenario_intake` 用 FileMemory 但未写入 artifact | ⚠️ 弱 |
-| **想定解析** | 结构化场景（目标/环境/行为/约束/验证标准） | **对话期** `POST /api/agent/scenario_intake`（grill-me）→ `parsedIntent`；**仿真期**复用或 LLM 解析 → `scenario_parsed` → 编译器（`goal`/`situationBrief`/`constraints`/`acceptanceCriteria`/`ioExpectation`）；环境/预期行为仍弱 | ⚠️ 半 |
+| **想定解析** | 结构化场景（目标/环境/行为/约束/验证标准） | `scenario_intake` + 仿真 `scenario_parsed` → 编译为 `parsedIntent`（轻量，无 intakeDialogue） | ✅ |
 | 智能构建 | 服务匹配、候选调度、参数依赖、预期输出 | 服务匹配✅、`planner_decision`✅；`serviceContracts`✅（声明+实测工具/成功率/通道，精简版无参数依赖）；预期输出未记 | ⚠️ 半 |
 | 仿真执行 | 调用过程、状态、回执、异常 | `tool_call_record` v1 信封✅ | ✅ 强 |
-| 验证反馈 | 结论、**状态断言**、修正建议、修正历史 | `verifier_result` 含语义裁决 + `plannerDecision` 快照；无结构化状态断言 | ⚠️ 半 |
+| 验证反馈 | 结论、**状态断言**、修正建议、修正历史 | `verifier_result` + `goldenPath.assertions` L1–L3（可抽取时）；修正历史仍在 trace | ⚠️ 半 |
 | 规格整理与预发布 | 产物样例；交付用元数据 | ArtifactSpec 样例✅；名称/描述/类型/I-O 在预发布表单✅ | ✅ |
 
 ### 8.2 元应用产物四类（§8）
 
-| 类别 | 应含 | ArtifactSpec v0 现状 |
+| 类别 | 应含 | ArtifactSpec v0.3 现状 |
 |------|------|---------------------|
-| 场景与意图 | 目标/范围/约束/验证标准 | raw 描述 + `parsedIntent`（goal/situationBrief/constraints/acceptanceCriteria/ioExpectation） |
-| 服务与契约 | 绑定服务/参数约束/I-O 说明 | `serviceContracts`：声明工具 + 实测工具(调用数/成功率/通道)；参数约束、I-O 说明待补 |
-| 验证与断言 | 结论/状态断言/执行记录引用 | 语义结论 + evidence_refs✅；状态断言❌ |
-| 运行与交付 | 策略/异常入口/预览；交付元数据 | strategy✅、状态机异常态✅；预发布表单✅；异常处理入口❌ |
+| 场景与意图 | 目标/约束/验证标准 | `parsedIntent`（轻量，sourceRef 溯源） |
+| 服务与契约 | 绑定服务/参数约束/I-O 说明 | `serviceContracts`：声明 + 实测；参数约束、I-O 说明待补 |
+| 验证与断言 | 结论/状态断言/执行记录引用 | `solidificationReport` + `goldenPath.assertions`（可抽取时） |
+| 运行与交付 | 策略/异常入口/预览；交付元数据 | `goldenPath.fallbackPolicy` 静态默认；路径复用运行时 ❌；预发布表单✅ |
 
 ### 8.3 系统支撑实验（§9）
 
@@ -113,13 +112,13 @@
 
 | 要素 | 现状 | 差距 |
 |------|------|------|
-| 执行结构 | `stateMachineTrace` | 基本满足 |
-| 验证证据 | `solidificationReport` 六道 gate | 二值门禁，非可复用依据本体 |
-| 异常处理信息 | 状态机 `exception` | 缺运行时处理/重规划策略 |
-| **适用条件** | 无 | **路径复用与确定性执行的前提缺失** |
-| **冗余压缩** | 无 | 原始 trace 全量保留，失败尝试未剪枝 |
+| 执行结构 | `goldenPath.steps`（可抽取时） | v0 已可抽取；不可抽取时仅 report |
+| 验证证据 | `solidificationReport` + `goldenPath.assertions` | gate 为候选门槛；断言为可核验清单 |
+| 异常处理信息 | `goldenPath.fallbackPolicy` | 静态默认，无运行时策略 |
+| **适用条件** | `goldenPath.applicability` v0 | 最小签名已生成；检索/匹配仍缺 |
+| **冗余压缩** | 无 | 原始 trace 全量保留；gate 4 已忽略被修复的失败 |
 
-**结论**：当前可产出「带固化门禁结论的状态机轨迹」，尚非「可复用固化依据」。
+**结论**：可产出「固化候选 + 可选黄金路径」；**路径复用运行时（D5）** 仍未实现。
 
 ### 8.5 与工作块 A/B 的映射
 
@@ -127,13 +126,14 @@
 
 | 项 | 状态 |
 |----|------|
-| ArtifactSpec v0 schema | ✅ |
+| ArtifactSpec v0.3 schema | ✅ |
 | trace → ArtifactSpec 编译 | ✅ |
-| stateMachineTrace + solidificationReport | ✅ |
-| evidence 落盘 | ✅ 仿真 SSE 结束自动 `run_pipeline` 落盘；仍保留 `POST /evidence` 手动入口 |
-| parsedIntent / 服务契约 | ✅ 对话 intake + 仿真 `scenario_parsed`；`serviceContracts`（精简）；状态断言仍 ❌ |
-| scenario_intake API | ✅ `POST /api/agent/scenario_intake` + 单测 |
-| artifact 单测 | ✅ `test_artifact_compiler`（39）+ `test_scenario_intake`（5）；全量 111 passed |
+| goldenPath + solidificationReport | ✅ 可抽取时写入；否则 null + remediation |
+| evidence 落盘 | ✅ SSE 自动 + 手动 `POST /evidence` |
+| parsedIntent / 服务契约 | ✅ 轻量想定 + `serviceContracts` |
+| goldenPath.assertions L1–L3 | ✅ 最小实现（不可核验标 unknown） |
+| scenario_intake API | ✅ |
+| artifact 单测 | ✅ `test_artifact_compiler` 22 项 + `test_scenario_intake` 5 项 |
 
 **工作块 B（写回元应用配置）**
 
@@ -149,6 +149,6 @@
 | 优先级 | 内容 |
 |--------|------|
 | **P0** | ~~产物入库/单测~~；ioeb 演示走真链路 + 本地 MCP mock 追问 |
-| **P1** | 状态断言 L1–L3；intake 对话写入 artifact；服务契约参数依赖 |
-| **P2** | 适用条件 schema；冗余压缩规则；批处理接口；ioeb_backend 写回 |
+| **P1** | goldenPath 复用运行时（D5）；ioeb_backend 写回（C5）；服务契约参数依赖 |
+| **P2** | 适用条件深化（D1）；冗余压缩（D2）；批处理（B2） |
 | **P3** | 技术债：拆 orchestrator、收敛 evidence 入口、消除私有方法外泄 |

@@ -123,8 +123,8 @@ class SimulationOrchestrator:
         self.domain: str = cfg.get("domain", "generic")
         self.scenario_summary: str = cfg.get("scenarioSummary", "")
         self.scenario: str = cfg.get("scenarioDescription", "") or self.scenario_summary
-        pre = cfg.get("parsedIntent")
-        self.parsed_intent_pre: dict | None = pre if isinstance(pre, dict) and pre else None
+        pre = cfg.get("scenarioParsed")
+        self.scenario_parsed_pre: dict | None = pre if isinstance(pre, dict) and pre else None
         self.services_meta: list[dict] = cfg.get("servicesMeta", [])
         self.service_ids: list[str] = cfg.get("serviceIds", [])
         self.max_iterations: int = cfg.get("maxIterations", 5)
@@ -306,9 +306,9 @@ class SimulationOrchestrator:
         try:
             await self._register_tools()
 
-            parsed_intent = await self._parse_scenario_intent()
-            if parsed_intent:
-                yield SimulationEvent("scenario_parsed", parsed_intent)
+            scenario_parsed = await self._parse_scenario_parsed()
+            if scenario_parsed:
+                yield SimulationEvent("scenario_parsed", scenario_parsed)
 
             async for e in self._phase_service_match():
                 yield e
@@ -533,6 +533,25 @@ class SimulationOrchestrator:
             planner_had_error = False
             async for event in planner.run(self._planner_prompt(iteration, repair_planner_trace)):
                 current_planner_trace.append(event)
+                # 每次工具调用前后 emit service_calling，驱动前端画布动画
+                if event.type == "tool_call":
+                    svc = self._resolve_service_for_tool(event.data.get("tool", ""))
+                    if svc:
+                        yield SimulationEvent("service_calling", {
+                            "serviceId": svc["serviceId"],
+                            "serviceName": svc["serviceName"],
+                            "toolName": event.data.get("tool", ""),
+                            "status": "start",
+                        })
+                elif event.type == "tool_result":
+                    svc = self._resolve_service_for_tool(event.data.get("tool", ""))
+                    if svc:
+                        yield SimulationEvent("service_calling", {
+                            "serviceId": svc["serviceId"],
+                            "serviceName": svc["serviceName"],
+                            "toolName": event.data.get("tool", ""),
+                            "status": "end",
+                        })
                 yield self._log("INFO", self._format_agent_event("Planner", event))
                 if event.type == "error":
                     planner_had_error = True
@@ -643,6 +662,15 @@ class SimulationOrchestrator:
                     None,
                 )
                 svc_name = svc.get("name", rec.service_id) if svc else rec.service_id
+                service_id = str(rec.service_id) if rec.service_id else ""
+                emit_calling = bool(service_id and service_id != "internal")
+                if emit_calling:
+                    yield SimulationEvent("service_calling", {
+                        "serviceId": service_id,
+                        "serviceName": svc_name,
+                        "toolName": rec.tool_name or "",
+                        "status": "start",
+                    })
                 if rec.error:
                     yield self._log(
                         "WARN",
@@ -656,7 +684,14 @@ class SimulationOrchestrator:
                         f"逻辑核验 [{svc_name}] {rec.tool_name} ({channel}, "
                         f"{rec.latency_ms}ms) → {preview}",
                     )
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.55)
+                if emit_calling:
+                    yield SimulationEvent("service_calling", {
+                        "serviceId": service_id,
+                        "serviceName": svc_name,
+                        "toolName": rec.tool_name or "",
+                        "status": "end",
+                    })
 
         yield SimulationEvent("phase", {"phase": "logic", "status": "done"})
 
@@ -707,8 +742,9 @@ class SimulationOrchestrator:
             system_prompt=(
                 "你是仿真验证智能体。审查规划智能体的执行轨迹，判断服务调用是否完整、"
                 "数据流转是否合理、调用顺序是否正确。\n"
-                "如果一切正常，回复 PASSED 并调用 terminate。\n"
-                "如果有问题，回复 FAILED: [问题描述]，然后调用 terminate。"
+                "审查结束后必须调用 terminate，并填写结构化字段：\n"
+                "- verdict: \"passed\" 或 \"failed\"\n"
+                "- result: 简短审查摘要（失败时写明原因）"
             ),
             max_steps=5,
         )
@@ -766,7 +802,7 @@ class SimulationOrchestrator:
             f"参与服务: {svc_names}\n"
             f"请判断：在该场景下，编排结果是否看起来已经完成了任务目标（允许基于日志与推理，不要求形式完美）。\n"
             f"并检查：1) 关键服务是否被合理调用 2) 数据流转是否合理 3) 调用顺序是否合理。\n"
-            f"结论必须写为 PASSED 或 FAILED: [原因]，然后 terminate。"
+            f"审查结束后调用 terminate(verdict=\"passed\"|\"failed\", result=\"审查摘要\")。"
         )
 
     def _build_planner_decision_payload(
@@ -859,7 +895,7 @@ class SimulationOrchestrator:
                 yield SimulationEvent("phase", {"phase": "check", "status": "done"})
                 yield (False, f"验证异常: {error_detail}")
                 return
-            passed, issue = self._parse_verification(verification_result)
+            passed, issue = self._resolve_verification(verifier_trace, verification_result)
 
         yield SimulationEvent("phase", {"phase": "check", "status": "done"})
 
@@ -892,38 +928,41 @@ class SimulationOrchestrator:
             result_payload["sameTrajectory"] = True
         if planner_decision:
             result_payload["plannerDecision"] = planner_decision
+        verdict = self._extract_verifier_verdict(verifier_trace)[0]
+        if verdict:
+            result_payload["verdict"] = verdict
         yield SimulationEvent("verifier_result", result_payload)
         yield (passed, issue)
 
     # ====================== 想定解析 ======================
 
-    async def _parse_scenario_intent(self) -> dict | None:
-        """用 LLM 把自然语言场景描述解析为结构化意图（best-effort）。
+    async def _parse_scenario_parsed(self) -> dict | None:
+        """用 LLM 把自然语言场景描述解析为 ScenarioParsed（best-effort）。
 
-        产出落入 scenario_parsed 事件 → trace，供 artifact_compiler 读取填 parsedIntent。
-        对话阶段已产出 parsedIntent 时直接复用；无场景描述、LLM 不可用或返回非法 JSON 时返回 None。
+        产出落入 scenario_parsed 事件 → trace，供 artifact_compiler 编译。
+        对话阶段已产出 scenarioParsed 时直接复用；无场景描述、LLM 不可用或返回非法 JSON 时返回 None。
         """
-        if self.parsed_intent_pre:
-            from micro_agent.scenario.intent_schema import normalize_parsed_intent
-            out = normalize_parsed_intent(self.parsed_intent_pre)
-            out.update({
-                k: v for k, v in self.parsed_intent_pre.items()
-                if k in ("parserModel", "parsedAt", "intakeSessionId")
-            })
-            return out
+        from micro_agent.scenario.schema import normalize_scenario_parsed
+
+        if self.scenario_parsed_pre:
+            return normalize_scenario_parsed(
+                self.scenario_parsed_pre,
+                raw_user_input=self.scenario,
+                domain=self.domain,
+            ).to_dict()
 
         if not self.scenario:
             return None
 
         svc_names = [s.get("name", "?") for s in self.services_meta]
         system_prompt = (
-            "你是想定解析器。把用户的元应用场景描述解析为结构化意图。"
+            "你是想定解析器。把用户的元应用场景描述解析为结构化想定。"
             "只输出 JSON 对象，不要任何解释或 markdown。字段：\n"
             "- goal: 字符串，一句话核心业务目标\n"
-            "- situationBrief: 字符串，必要的业务情境摘要（无则空字符串）\n"
+            "- description: 字符串，完整场景描述\n"
             "- constraints: 字符串数组，业务/合规/隐私/顺序约束（无则空数组）\n"
-            "- acceptanceCriteria: 字符串数组，验收/采纳标准（可检查，非最终成败判定）\n"
-            "- ioExpectation: 对象 {inputs: 字符串数组, outputs: 字符串数组}，预期输入与输出\n"
+            "- acceptanceCriteria: 字符串数组，验收标准（可检查，非最终成败判定）\n"
+            "- domain: 字符串，领域标识\n"
         )
         user_prompt = (
             f"领域: {self.domain}\n"
@@ -942,16 +981,19 @@ class SimulationOrchestrator:
             logger.warning(f"想定解析 LLM 调用失败 (non-fatal): {exc}")
             return None
 
-        raw_intent = self._parse_intent_json(resp.content or "")
-        if not raw_intent:
-            logger.debug("想定解析未得到合法 JSON，跳过 parsedIntent")
+        raw = self._parse_intent_json(resp.content or "")
+        if not raw:
+            logger.debug("想定解析未得到合法 JSON，跳过 scenarioParsed")
             return None
 
-        from micro_agent.scenario.intent_schema import normalize_parsed_intent
-        intent = normalize_parsed_intent(raw_intent)
-        intent["parserModel"] = llm.model
-        intent["parsedAt"] = datetime.now(timezone.utc).isoformat()
-        return intent
+        parsed = normalize_scenario_parsed(
+            raw,
+            raw_user_input=self.scenario,
+            parser_model=llm.model,
+            parsed_at=datetime.now(timezone.utc).isoformat(),
+            domain=self.domain,
+        )
+        return parsed.to_dict()
 
     @staticmethod
     def _parse_intent_json(text: str) -> dict | None:
@@ -978,6 +1020,21 @@ class SimulationOrchestrator:
                 records.extend(tool.call_log)
         records.sort(key=lambda r: r.timestamp)
         return records
+
+    def _resolve_service_for_tool(self, tool_name: str) -> dict | None:
+        """从注册名解析对应的 service。用于 service_calling 事件。"""
+        if not tool_name or tool_name == "terminate":
+            return None
+        for binding in self._mcp_bindings:
+            for tool in binding.tools:
+                if tool.name == tool_name:
+                    return {"serviceId": binding.service_id, "serviceName": binding.service_name}
+        for tool in self._sandbox_tools:
+            if tool.name == tool_name:
+                sid = getattr(tool, "service_id", "")
+                sname = getattr(tool, "service_name", "")
+                return {"serviceId": sid, "serviceName": sname}
+        return None
 
     def _extract_execution_path_from_records(self, records: list[ToolCallRecord]) -> list[str]:
         """从给定调用记录子集构建执行路径（当前轮规划）。"""
@@ -1081,23 +1138,67 @@ class SimulationOrchestrator:
         return "\n".join(lines) or "(无轨迹)"
 
     @staticmethod
+    def _is_terminate_tool(tool_name: str) -> bool:
+        return str(tool_name or "").endswith("terminate")
+
+    @staticmethod
+    def _extract_verifier_verdict(trace: list[AgentEvent]) -> tuple[str | None, str]:
+        """从 verifier 轨迹读取 terminate.verdict；返回 (passed|failed|None, summary)。"""
+        for ev in reversed(trace):
+            if ev.type == "done":
+                verdict = ev.data.get("verdict")
+                summary = str(ev.data.get("result", "") or "")
+                if verdict in ("passed", "failed"):
+                    return verdict, summary
+                break
+        for ev in reversed(trace):
+            if ev.type != "tool_call" or not SimulationOrchestrator._is_terminate_tool(
+                str(ev.data.get("tool", ""))
+            ):
+                continue
+            args = ev.data.get("arguments") or {}
+            verdict = args.get("verdict")
+            if verdict in ("passed", "failed"):
+                return str(verdict), str(args.get("result", "") or "")
+            break
+        return None, ""
+
+    @staticmethod
+    def _resolve_verification(trace: list[AgentEvent], fallback_text: str) -> tuple[bool, str]:
+        verdict, summary = SimulationOrchestrator._extract_verifier_verdict(trace)
+        if verdict == "passed":
+            return True, ""
+        if verdict == "failed":
+            issue = (summary or fallback_text or "验证未通过").strip()
+            return False, issue[:200]
+        return SimulationOrchestrator._parse_verification(fallback_text)
+
+    @staticmethod
     def _parse_verification(text: str) -> tuple[bool, str]:
         if not text:
             return False, "验证 Agent 未产生有效结论"
         stripped = text.strip()
         upper = stripped.upper()
+        head = stripped[:120]
+        head_upper = upper[:120]
         # Verifier 应按约定输出 PASSED；兼容首行/首段含 PASSED 或中文「验证通过」
         if re.search(r"\bPASSED\b", upper):
             return True, ""
-        if re.match(r"^(验证通过|通过验证|审查通过)", stripped):
+        if re.match(r"^(验证通过|通过验证|审查通过|【审查通过】)", stripped):
             return True, ""
-        head = stripped[:120]
-        if "验证通过" in head and "未通过" not in head and "FAILED" not in upper[:120]:
+        if "验证通过" in head and "未通过" not in head and "FAILED" not in head_upper:
+            return True, ""
+        if (
+            "审查通过" in head
+            and "审查未通过" not in head
+            and "未通过" not in head
+            and "FAILED" not in head_upper
+        ):
             return True, ""
         m = re.search(r"FAILED\s*[：:]\s*(.+)", text, re.DOTALL | re.IGNORECASE)
         if m:
             return False, m.group(1).strip()[:200]
-        if re.match(r"^(验证未通过|未通过验证|失败)", stripped):
+        if re.match(r"^(验证未通过|未通过验证|审查未通过|失败|【审查未通过】)", stripped):
             return False, stripped[:200]
         return False, stripped[:200]
 

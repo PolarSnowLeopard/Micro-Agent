@@ -30,7 +30,7 @@ from micro_agent.simulation.trace_records import (
     build_tool_call_record_events,
     build_trace_metadata,
 )
-from micro_agent.simulation.trace_store import FileTraceStore
+from micro_agent.simulation.trace_store import FileTraceStore, TraceRecord
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
@@ -50,7 +50,7 @@ class SimulationStartRequest(BaseModel):
     maxIterations: int = 5
     scenarioDescription: str = ""
     scenarioSummary: str = ""
-    parsedIntent: dict = Field(default_factory=dict)
+    scenarioParsed: dict = Field(default_factory=dict)
     mode: str = "production"
     strategy: dict = Field(default_factory=dict)
 
@@ -339,6 +339,7 @@ async def build_artifact(session_id: str):
         "artifactId": spec.artifactId,
         "schemaVersion": spec.schemaVersion,
         "sourceSessionId": session_id,
-        "solidifiable": spec.solidifiable,
+        "solidifiable": spec.solidificationReport.get("solidifiable", spec.solidifiable),
+        "goldenPathExtractable": spec.solidificationReport.get("goldenPathExtractable", False),
         "artifactPath": str(art_path),
     }
