@@ -38,6 +38,12 @@ class ToolCallRecord:
     channel: str = "unknown"        # real_mcp / sandbox / mock
     transport: str = "unknown"      # sse / streamable_http / stdio / in_process
     success: bool = True
+    source: str = ""                # real_mcp / demo_fake_mcp / frontend_mock
+    phase: str = ""                 # service_matching / slow_mode / golden_path_replay / eval_verification
+    purpose: str = ""               # service_probe / react_action / replay_action / verifier_tool_use
+    iteration: int | None = None
+    react_step_id: str = ""
+    action_id: str = ""
 
 
 @dataclass
@@ -95,6 +101,7 @@ class SandboxTool(Tool):
             channel="sandbox",
             transport="in_process",
             success=True,
+            source="demo_fake_mcp",
         ))
         return ToolResult(output=output)
 
@@ -113,6 +120,7 @@ class SandboxTool(Tool):
             channel="sandbox",
             transport="in_process",
             success=False,
+            source="demo_fake_mcp",
         ))
         return ToolResult(error=error_msg)
 

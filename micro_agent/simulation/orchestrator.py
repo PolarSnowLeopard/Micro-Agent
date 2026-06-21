@@ -125,7 +125,8 @@ class SimulationOrchestrator:
         self.scenario: str = cfg.get("scenarioDescription", "") or self.scenario_summary
         pre = cfg.get("scenarioParsed")
         self.scenario_parsed_pre: dict | None = pre if isinstance(pre, dict) and pre else None
-        self.services_meta: list[dict] = cfg.get("servicesMeta", [])
+        self.catalog_services_meta: list[dict] = cfg.get("servicesMeta", [])
+        self.services_meta: list[dict] = list(self.catalog_services_meta)
         self.service_ids: list[str] = cfg.get("serviceIds", [])
         self.max_iterations: int = cfg.get("maxIterations", 5)
         self.mode: str = cfg.get("mode", "production")
@@ -144,6 +145,8 @@ class SimulationOrchestrator:
         self._mcp_bindings: list[_McpServiceBinding] = []
         self._tool_names_used: set[str] = set()
         self._tools_ready = False
+        self._scenario_parsed: dict | None = None
+        self._service_selection_report: dict[str, Any] | None = None
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -304,9 +307,8 @@ class SimulationOrchestrator:
     async def run(self) -> AsyncIterator[SimulationEvent]:
         self._started_at = time.time()
         try:
-            await self._register_tools()
-
             scenario_parsed = await self._parse_scenario_parsed()
+            self._scenario_parsed = scenario_parsed
             if scenario_parsed:
                 yield SimulationEvent("scenario_parsed", scenario_parsed)
 
@@ -399,6 +401,28 @@ class SimulationOrchestrator:
         yield SimulationEvent("step", {"step": 0, "name": "服务匹配"})
         yield self._log("INFO", "开始服务匹配")
 
+        self._service_selection_report = await self._select_services_from_catalog()
+        yield SimulationEvent("service_selection", self._service_selection_report)
+        selected_ids = {
+            str(s.get("serviceId"))
+            for s in self._service_selection_report.get("selectedServices", [])
+            if s.get("serviceId")
+        }
+        if selected_ids:
+            self.services_meta = [
+                svc for svc in self.catalog_services_meta
+                if str(svc.get("id") or "") in selected_ids
+            ]
+            self.service_ids = [str(svc.get("id") or "") for svc in self.services_meta]
+        else:
+            self.services_meta = list(self.catalog_services_meta)
+
+        await self._register_tools()
+        yield self._log(
+            "INFO",
+            f"服务选择完成：选中 {len(self.services_meta)} / {len(self.catalog_services_meta)} 个目录服务",
+        )
+
         for binding in self._mcp_bindings:
             self._check_cancel()
             yield self._log("INFO", f"检测 MCP 服务: {binding.service_name}")
@@ -436,6 +460,12 @@ class SimulationOrchestrator:
 
             try:
                 probe = await tool.execute(action="health_check")
+                if tool.call_log:
+                    self._annotate_records(
+                        [tool.call_log[-1]],
+                        phase="service_matching",
+                        purpose="service_probe",
+                    )
                 if probe.error:
                     yield SimulationEvent("service", {
                         "id": tool.service_id,
@@ -463,6 +493,161 @@ class SimulationOrchestrator:
                 yield self._log("WARN", f"{tool.service_name} 探测异常: {exc}")
 
         yield self._log("SUCCESS", "服务匹配完成")
+
+    async def _select_services_from_catalog(self) -> dict[str, Any]:
+        """LLM service selection over the provided catalog only."""
+        from micro_agent.simulation.artifact_compiler import SERVICE_SELECTION_SCHEMA
+
+        services = list(self.catalog_services_meta)
+        if not services:
+            return {
+                "schemaVersion": SERVICE_SELECTION_SCHEMA,
+                "selectionId": "sel-empty",
+                "strategy": "llm_catalog_selection",
+                "selectedServices": [],
+                "rejectedServices": [],
+                "missingCapabilities": ["empty_service_catalog"],
+                "rationale": "No services were provided.",
+                "model": None,
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            }
+
+        catalog = []
+        for svc in services:
+            catalog.append({
+                "serviceId": str(svc.get("id") or ""),
+                "serviceName": svc.get("name") or svc.get("id") or "",
+                "description": svc.get("description") or svc.get("des") or "",
+                "tools": [
+                    {
+                        "name": t.get("name") or t.get("id"),
+                        "description": t.get("description") or t.get("des") or "",
+                    }
+                    for t in svc.get("tools") or []
+                ],
+            })
+        system = (
+            "你是元应用构建的服务匹配器。只允许从给定服务池中选择服务，"
+            "不得发明、发现、下载或部署新服务。只输出 JSON。字段："
+            "selectedServices[{serviceId,reason,matchedCapabilities[]}], "
+            "rejectedServices[{serviceId,reason}], missingCapabilities[], rationale, confidence。"
+        )
+        user = {
+            "scenario": self._scenario_parsed or {
+                "goal": self.scenario_summary or self.scenario,
+                "description": self.scenario,
+                "domain": self.domain,
+            },
+            "serviceCatalog": catalog,
+        }
+        try:
+            llm = LLM(config.llm)
+            resp = await llm.complete([
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+            ])
+            raw = self._parse_intent_json(resp.content or "") or {}
+            report = self._normalize_service_selection(raw, services)
+            report["model"] = llm.model
+            return report
+        except Exception as exc:
+            logger.warning(f"LLM 服务匹配失败，回退使用传入 serviceIds/catalog: {exc}")
+            return self._fallback_service_selection(services, reason=str(exc))
+
+    def _normalize_service_selection(
+        self,
+        raw: dict[str, Any],
+        services: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        from micro_agent.simulation.artifact_compiler import SERVICE_SELECTION_SCHEMA, stable_hash
+
+        known = {str(s.get("id") or ""): s for s in services}
+        selected_rows = raw.get("selectedServices") or []
+        selected_ids: list[str] = []
+        selected = []
+        for row in selected_rows:
+            sid = str(row.get("serviceId") or row.get("id") or "")
+            if sid not in known or sid in selected_ids:
+                continue
+            selected_ids.append(sid)
+            selected.append({
+                "serviceId": sid,
+                "serviceName": known[sid].get("name") or sid,
+                "reason": str(row.get("reason") or "LLM selected this service"),
+                "matchedCapabilities": list(row.get("matchedCapabilities") or []),
+            })
+        if not selected:
+            return self._fallback_service_selection(services, reason="llm_selected_none")
+
+        rejected = []
+        for sid, svc in known.items():
+            if sid in selected_ids:
+                continue
+            reason = ""
+            for row in raw.get("rejectedServices") or []:
+                if str(row.get("serviceId") or row.get("id") or "") == sid:
+                    reason = str(row.get("reason") or "")
+                    break
+            rejected.append({
+                "serviceId": sid,
+                "serviceName": svc.get("name") or sid,
+                "reason": reason or "not selected for the current scenario",
+            })
+        return {
+            "schemaVersion": SERVICE_SELECTION_SCHEMA,
+            "selectionId": f"sel-{stable_hash(selected)[:16]}",
+            "strategy": "llm_catalog_selection",
+            "selectedServices": selected,
+            "rejectedServices": rejected,
+            "missingCapabilities": list(raw.get("missingCapabilities") or []),
+            "rationale": str(raw.get("rationale") or ""),
+            "confidence": raw.get("confidence"),
+            "model": None,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _fallback_service_selection(
+        self,
+        services: list[dict[str, Any]],
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        from micro_agent.simulation.artifact_compiler import SERVICE_SELECTION_SCHEMA, stable_hash
+
+        requested = {str(x) for x in self.service_ids if x}
+        selected = []
+        rejected = []
+        for svc in services:
+            sid = str(svc.get("id") or "")
+            row = {
+                "serviceId": sid,
+                "serviceName": svc.get("name") or sid,
+                "reason": "fallback selected from requested serviceIds/catalog",
+                "matchedCapabilities": [
+                    str(t.get("name") or t.get("id"))
+                    for t in svc.get("tools") or []
+                    if t.get("name") or t.get("id")
+                ],
+            }
+            if not requested or sid in requested:
+                selected.append(row)
+            else:
+                rejected.append({
+                    "serviceId": sid,
+                    "serviceName": svc.get("name") or sid,
+                    "reason": "not in requested serviceIds",
+                })
+        return {
+            "schemaVersion": SERVICE_SELECTION_SCHEMA,
+            "selectionId": f"sel-{stable_hash(selected)[:16]}",
+            "strategy": "provided_catalog_fallback",
+            "selectedServices": selected,
+            "rejectedServices": rejected,
+            "missingCapabilities": [],
+            "rationale": f"Fallback selection because LLM selection was unavailable: {reason[:160]}",
+            "model": None,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
 
     # ====================== Phase 1: 环境准备 ======================
 
@@ -512,7 +697,7 @@ class SimulationOrchestrator:
             if self._strategy_value("planning") == "preset_workflow":
                 yield self._log(
                     "WARN",
-                    "预设流程规划尚未实现，本轮仍使用 LLM 自主规划",
+                    "preset_workflow 不是后端运行分支；本链路继续使用 LLM 自主规划。完整 demo 请使用前端已有 mock 路线。",
                 )
 
         self._final_iteration = 1
@@ -581,6 +766,7 @@ class SimulationOrchestrator:
                 continue
 
             iter_records = self._collect_call_records()[call_offset:]
+            self._annotate_iteration_records(iter_records, iteration, current_planner_trace)
             planner_decision = self._build_planner_decision_payload(
                 iteration, iter_records, current_planner_trace
             )
@@ -1020,6 +1206,45 @@ class SimulationOrchestrator:
                 records.extend(tool.call_log)
         records.sort(key=lambda r: r.timestamp)
         return records
+
+    @staticmethod
+    def _annotate_records(
+        records: list[ToolCallRecord],
+        *,
+        phase: str,
+        purpose: str,
+        iteration: int | None = None,
+    ) -> None:
+        for rec in records:
+            rec.phase = rec.phase or phase
+            rec.purpose = rec.purpose or purpose
+            if iteration is not None and rec.iteration is None:
+                rec.iteration = iteration
+            if not rec.source:
+                rec.source = rec.channel
+
+    def _annotate_iteration_records(
+        self,
+        records: list[ToolCallRecord],
+        iteration: int,
+        planner_trace: list[AgentEvent],
+    ) -> None:
+        tool_events = [
+            ev for ev in planner_trace
+            if ev.type == "tool_call" and not self._is_terminate_tool(str(ev.data.get("tool", "")))
+        ]
+        for idx, rec in enumerate(records, start=1):
+            if (rec.arguments or {}).get("action") == "health_check":
+                self._annotate_records([rec], phase="service_matching", purpose="service_probe")
+                continue
+            rec.phase = rec.phase or "slow_mode"
+            rec.purpose = rec.purpose or "react_action"
+            rec.iteration = rec.iteration or iteration
+            rec.action_id = rec.action_id or f"iter{iteration}-a{idx}"
+            if idx <= len(tool_events):
+                rec.react_step_id = rec.react_step_id or f"iter{iteration}-step{tool_events[idx - 1].step}"
+            if not rec.source:
+                rec.source = rec.channel
 
     def _resolve_service_for_tool(self, tool_name: str) -> dict | None:
         """从注册名解析对应的 service。用于 service_calling 事件。"""

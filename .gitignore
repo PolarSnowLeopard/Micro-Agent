@@ -14,21 +14,14 @@ env/
 # IDE
 .vscode/
 .idea/
-.cursor/
 *.swp
 *.swo
 
 # pytest
 .pytest_cache/
 
-# 配置文件（含 API 密钥）
-config/config.toml
-
 # 运行时产生的临时文件
 workspace/data/memory/*.json
-workspace/data/traces/
-workspace/data/artifacts/
-workspace/data/evidence/
 workspace/app-demo-output/
 workspace/temp/
 
@@ -38,15 +31,23 @@ tests/bench_rag_quality.py
 tests/fixtures/
 demo/
 
-# trace_evidence 开发中间产物（完成后以 trace_evidence/README.md 为准）
-trace_evidence/INFRASTRUCTURE_REPORT.md
-trace_evidence/PROGRESS.md
-trace_evidence/output/
-trace_evidence/output_headless/
-trace_evidence/output_audit/
-trace_evidence/output_audit_*/
-# current/ 基线：说明文档入库，pipeline 生成物忽略（见 current/README.md）
-trace_evidence/current/*.json
-trace_evidence/current/evidence_card.md
-trace_evidence/current/checker_report.md
-trace_evidence/current/config_attachment_draft.json
+# Local agent/editor configuration (never commit)
+.cursor/
+.codex/
+.agents/
+.claude/
+
+# Simulation construction runtime data and research outputs
+workspace/data/
+workspace/data/simulation_builds/
+workspace/data/traces/
+workspace/data/evidence/
+workspace/data/artifacts/
+workspace/data/meta_app_experiments/
+
+# Trace/evidence diagnostic runtime outputs
+trace_evidence/current/
+trace_evidence/output*/
+trace_evidence/reports/
+trace_evidence/runs/
+trace_evidence/artifacts/

@@ -1,22 +1,14 @@
-"""仿真构建路由：启动仿真、SSE 事件流、轨迹查询、证据分析、产物编译。
+"""Meta-app scenario simulation construction routes.
 
-端点与前端 simulation_builder.js HTTP 客户端一一对应：
-  POST /api/simulation/start              → 启动会话，返回 sessionId + streamUrl
-  GET  /api/simulation/{id}/stream        → SSE 命名事件流（EventSource 兼容）
-  POST /api/simulation/{id}/cancel        → 取消
-  GET  /api/simulation/records            → 列出历史轨迹
-  POST /api/simulation/records/compare    → 对比
-  GET  /api/simulation/{id}/trace         → 获取已持久化轨迹
-  POST /api/simulation/{id}/evidence      → 构建证据卡片+检查报告（自动落盘）
-  GET  /api/simulation/{id}/artifact      → 获取 ArtifactSpec v0（确定性编译）
-  POST /api/simulation/{id}/artifact      → 按需构建 ArtifactSpec 并落盘
+New contract: one simulation session produces one BuildBundle under
+workspace/data/simulation_builds/{buildId}. Old trace/artifact/evidence folders
+are not read or migrated.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -24,22 +16,23 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from micro_agent.core.config import config
+from micro_agent.simulation.artifact_runtime import run_artifact
+from micro_agent.simulation.build_bundle import BuildBundleStore, build_ref
+from micro_agent.simulation.experiments import (
+    list_experiment_runners,
+    run_experiment_for_build,
+)
 from micro_agent.simulation.orchestrator import SimulationOrchestrator
 from micro_agent.simulation.trace_records import (
     build_tool_call_record_events,
     build_trace_metadata,
 )
-from micro_agent.simulation.trace_store import FileTraceStore, TraceRecord
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
 _sessions: dict[str, dict[str, Any]] = {}
+_store = BuildBundleStore()
 
-_trace_store = FileTraceStore(Path(config.workspace) / "data" / "traces")
-
-
-# --------------- Models ---------------
 
 class SimulationStartRequest(BaseModel):
     appId: str = ""
@@ -55,39 +48,43 @@ class SimulationStartRequest(BaseModel):
     strategy: dict = Field(default_factory=dict)
 
 
+class ExperimentRunRequest(BaseModel):
+    tasks: list[dict] = Field(default_factory=list)
+    baselines: list[str] = Field(default_factory=list)
+
+
+class ArtifactRunRequest(BaseModel):
+    message: str
+    preferGoldenPath: bool = True
+
+
 class CompareRequest(BaseModel):
-    recordIds: list[str]
+    recordIds: list[str] = Field(default_factory=list)
 
-
-# --------------- 启动 ---------------
 
 @router.post("/start")
 async def start_simulation(req: SimulationStartRequest):
-    session_id = f"sim-{uuid.uuid4().hex[:12]}"
-    _sessions[session_id] = {
-        "config": req.dict(),
-        "orchestrator": None,
-    }
-    logger.info(f"仿真会话已创建: {session_id}")
+    build_id = f"build-{uuid.uuid4().hex[:12]}"
+    _sessions[build_id] = {"config": req.dict(), "orchestrator": None}
     return {
         "success": True,
-        "sessionId": session_id,
-        "streamUrl": f"/api/simulation/{session_id}/stream",
+        "sessionId": build_id,
+        "buildId": build_id,
+        "streamUrl": f"/api/simulation/{build_id}/stream",
+        "buildRef": build_ref(build_id),
+        "artifactRef": build_ref(build_id),
     }
 
 
-# --------------- SSE 流 ---------------
-
-@router.get("/{session_id}/stream")
-async def simulation_stream(session_id: str):
-    session = _sessions.get(session_id)
+@router.get("/{build_id}/stream")
+async def simulation_stream(build_id: str):
+    session = _sessions.get(build_id)
     if not session:
         raise HTTPException(404, "session not found")
 
     orchestrator = SimulationOrchestrator(session["config"])
     session["orchestrator"] = orchestrator
-
-    trace_events: list[dict] = []
+    trace_events: list[dict[str, Any]] = []
     cfg = session["config"]
 
     async def generate():
@@ -99,94 +96,57 @@ async def simulation_stream(session_id: str):
             async for event in orchestrator.run():
                 trace_events.append(event.to_dict())
                 if event.type == "complete":
-                    data = event.data
-                    final_success = data.get("success", False)
-                    metrics = data.get("metrics", {})
-                    final_iterations = metrics.get("iterations", 0)
-                    final_elapsed = metrics.get("elapsedMs", 0)
-                    # 注入 sessionId，前端可通过此 ID 拉取 artifact
-                    event.data["sessionId"] = session_id
+                    final_success = bool(event.data.get("success"))
+                    metrics = event.data.get("metrics") or {}
+                    final_iterations = int(metrics.get("iterations") or 0)
+                    final_elapsed = int(metrics.get("elapsedMs") or 0)
+                    ref = build_ref(build_id)
+                    event.data["buildId"] = build_id
+                    event.data["buildRef"] = ref
+                    event.data["artifactRef"] = ref
+                    result = event.data.get("result")
+                    if isinstance(result, dict):
+                        result["buildId"] = build_id
+                        result["buildRef"] = ref
+                        result["artifactRef"] = ref
                 yield event.to_sse()
         finally:
-            tool_call_events: list[dict] = []
             try:
-                tool_call_events = build_tool_call_record_events(
-                    orchestrator._collect_call_records()
-                )
-            except Exception as e:
-                logger.debug(f"收集 tool_call_records 失败 (non-fatal): {e}")
+                tool_events = build_tool_call_record_events(orchestrator._collect_call_records())
+            except Exception as exc:
+                logger.warning(f"collect tool call records failed: {exc}")
+                tool_events = []
 
-            metadata = build_trace_metadata(cfg, len(tool_call_events))
-
-            # 合并 tool_call_record 到 trace_events 末尾
-            all_events = trace_events + tool_call_events
-
-            record = TraceRecord(
-                session_id=session_id,
-                app_name=cfg.get("appName", ""),
-                domain=cfg.get("domain", ""),
-                mode=cfg.get("mode", "production"),
-                strategy=cfg.get("strategy", {}),
-                events=all_events,
-                success=final_success,
-                iterations=final_iterations,
-                elapsed_ms=final_elapsed,
-                metadata=metadata,
-            )
+            trace = {
+                "schemaVersion": "build_trace.v1",
+                "build_id": build_id,
+                "session_id": build_id,
+                "app_name": cfg.get("appName", ""),
+                "domain": cfg.get("domain", ""),
+                "mode": cfg.get("mode", "production"),
+                "strategy": cfg.get("strategy", {}),
+                "events": trace_events + tool_events,
+                "success": final_success,
+                "iterations": final_iterations,
+                "elapsed_ms": final_elapsed,
+                "metadata": build_trace_metadata(cfg, len(tool_events)),
+            }
             try:
-                await _trace_store.save(record)
-            except Exception as e:
-                logger.warning(f"保存轨迹失败: {e}")
-
-            # 自动运行 evidence pipeline（为 ArtifactSpec 编译器提供完整证据）
-            pipeline_result = None
-            try:
-                from trace_evidence import run_pipeline as _run_evidence
-
-                result = _run_evidence(record.to_dict())
-                evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
-                evidence_dir.mkdir(parents=True, exist_ok=True)
-                result.save_to_dir(evidence_dir)
-                pipeline_result = result
-                logger.info(f"证据产物已自动落盘: {evidence_dir}")
-            except Exception as e:
-                logger.warning(f"证据分析自动运行失败 (non-fatal): {e}")
-
-            # 自动编译 ArtifactSpec 并落盘（best-effort，不阻塞 SSE 流）
-            try:
-                from micro_agent.simulation.artifact_compiler import compile_artifact_spec
-
-                artifacts_dir = Path(config.workspace) / "data" / "artifacts" / session_id
-                artifacts_dir.mkdir(parents=True, exist_ok=True)
-                spec = compile_artifact_spec(record.to_dict(), pipeline_result)
-                spec_path = artifacts_dir / "artifact_spec.json"
-                spec_path.write_text(
-                    json.dumps(spec.to_dict(), ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                logger.info(
-                    f"ArtifactSpec 已编译并落盘: {spec_path} "
-                    f"(solidifiable={spec.solidifiable})"
-                )
-            except Exception as e:
-                logger.warning(f"ArtifactSpec 自动编译失败 (non-fatal): {e}")
+                manifest = _store.save_from_trace(trace)
+                logger.info(f"BuildBundle saved: {manifest['buildId']}")
+            except Exception as exc:
+                logger.error(f"BuildBundle save failed: {exc}", exc_info=True)
 
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Session-ID": session_id,
-        },
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Build-ID": build_id},
     )
 
 
-# --------------- 取消 ---------------
-
-@router.post("/{session_id}/cancel")
-async def cancel_simulation(session_id: str):
-    session = _sessions.get(session_id)
+@router.post("/{build_id}/cancel")
+async def cancel_simulation(build_id: str):
+    session = _sessions.get(build_id)
     if not session:
         raise HTTPException(404, "session not found")
     orch = session.get("orchestrator")
@@ -195,151 +155,141 @@ async def cancel_simulation(session_id: str):
     return {"success": True}
 
 
-# --------------- 辅助函数 ---------------
-
-def _load_pipeline_result(session_id: str, trace_dict: dict):
-    """从已落盘的 evidence 产物重建 PipelineResult 对象，供 artifact 编译器使用。
-
-    优先从落盘文件重建（避免重复运行 pipeline），回退到重新运行。
-    """
-    from trace_evidence import run_pipeline as _run_evidence
-
-    evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
-    pr_path = evidence_dir / "pipeline_result.json"
-
-    # 如果 evidence 已落盘，直接调用 run_pipeline 即可（它会从 trace_dict 确定性重建）
-    # run_pipeline 本身是幂等的——同一条 trace 每次产出相同结果
-    try:
-        return _run_evidence(trace_dict)
-    except Exception:
-        return None
-
-
-# --------------- 轨迹查询 ---------------
-
 @router.get("/records")
-async def list_records(appName: str | None = None):
-    return await _trace_store.list_all(app_name=appName)
+async def list_records():
+    return {"records": _store.list_builds()}
 
 
 @router.post("/records/compare")
 async def compare_records(req: CompareRequest):
-    records = await _trace_store.compare(req.recordIds)
+    records = []
+    for build_id in req.recordIds:
+        item = _store.load_part(build_id, "manifest")
+        if item:
+            records.append(item)
     return {"records": records}
 
 
-@router.get("/{session_id}/trace")
-async def get_trace(session_id: str):
-    record = await _trace_store.load(session_id)
-    if not record:
-        raise HTTPException(404, "trace not found")
-    return record.to_dict()
+@router.get("/builds")
+async def list_builds():
+    return {"builds": _store.list_builds()}
 
 
-@router.post("/{session_id}/evidence")
-async def build_evidence(session_id: str):
-    record = await _trace_store.load(session_id)
-    if not record:
-        raise HTTPException(404, "trace not found")
+@router.get("/builds/{build_id}/manifest")
+async def get_build_manifest(build_id: str):
+    return _load(build_id, "manifest")
+
+
+@router.get("/builds/{build_id}/trace")
+async def get_build_trace(build_id: str):
+    return _load(build_id, "trace")
+
+
+@router.get("/builds/{build_id}/service-selection")
+async def get_service_selection(build_id: str):
+    return _load(build_id, "service_selection")
+
+
+@router.get("/builds/{build_id}/accepted-trajectory")
+async def get_accepted_trajectory(build_id: str):
+    return _load(build_id, "accepted_trajectory")
+
+
+@router.get("/builds/{build_id}/artifact")
+async def get_build_artifact(build_id: str):
+    return _load(build_id, "artifact")
+
+
+@router.get("/builds/{build_id}/frontend-state")
+async def get_frontend_state(build_id: str):
+    return _load(build_id, "frontend_state")
+
+
+@router.post("/builds/{build_id}/run")
+async def run_build_artifact(build_id: str, req: ArtifactRunRequest):
+    artifact = _load(build_id, "artifact")
     try:
-        from trace_evidence import run_pipeline
-
-        result = run_pipeline(record.to_dict())
+        return await run_artifact(
+            artifact,
+            req.message,
+            prefer_golden_path=req.preferGoldenPath,
+        )
     except Exception as exc:
-        logger.warning(f"证据分析失败 {session_id}: {exc}")
+        logger.warning(f"artifact run failed {build_id}: {exc}")
         raise HTTPException(422, str(exc)) from exc
 
-    # ---- 持久化证据产物（消除"算完即弃"缺口） ----
-    evidence_dir = Path(config.workspace) / "data" / "evidence" / session_id
+
+@router.get("/experiments/runners")
+async def get_experiment_runners():
+    return {"runners": list_experiment_runners()}
+
+
+@router.post("/builds/{build_id}/experiments/run")
+async def run_build_experiment(build_id: str, req: ExperimentRunRequest):
+    if not req.tasks:
+        raise HTTPException(400, "tasks is required")
     try:
-        manifest = result.save_to_dir(evidence_dir)
-        logger.info(f"证据产物已落盘: {evidence_dir} ({len(manifest)} 文件)")
+        return await run_experiment_for_build(
+            build_id,
+            req.tasks,
+            baselines=req.baselines or None,
+            store=_store,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
-        logger.warning(f"证据产物落盘失败 (non-fatal): {exc}")
+        logger.warning(f"experiment run failed {build_id}: {exc}")
+        raise HTTPException(422, str(exc)) from exc
 
-    report = result.report
-    from trace_evidence.evidence_checker import summarize_evidence_dimensions
 
-    def _check_api(c):
-        return {
-            "checkName": c.check_name,
-            "status": c.status,
-            "detail": (c.detail or "")[:240],
-            "category": c.category,
-        }
+# Temporary compatibility URLs for the current frontend. They read the new
+# BuildBundle and do not support old trace/artifact storage.
 
-    checks = [_check_api(c) for c in report.checks]
-    non_pass = [c for c in checks if c["status"] != "PASS"]
+@router.get("/{build_id}/trace")
+async def get_trace(build_id: str):
+    return _load(build_id, "trace")
+
+
+@router.post("/{build_id}/evidence")
+async def get_evidence(build_id: str):
+    manifest = _load(build_id, "manifest")
+    accepted = _load(build_id, "accepted_trajectory")
+    selection = _load(build_id, "service_selection")
     return {
-        "evidenceId": result.card.evidence_id,
-        "overallStatus": report.overall_status,
-        "summary": report.summary,
-        "checks": checks,
-        "failedChecks": non_pass,
-        "dimensions": summarize_evidence_dimensions(report.checks),
-        "cardSummary": result.card.summary,
-        "verification": result.card.verification,
-        "missingEvidence": result.bundle.missing_evidence,
+        "schemaVersion": "build_evidence_summary.v1",
+        "overallStatus": "PASS" if accepted.get("status") == "accepted" else "WARN",
+        "summary": {
+            "acceptedTrajectory": accepted.get("status"),
+            "selectedServices": len(selection.get("selectedServices") or []),
+            "researchEligible": manifest.get("researchEligible"),
+        },
+        "missingEvidence": [] if accepted.get("status") == "accepted" else ["accepted_trajectory"],
     }
 
 
-@router.get("/{session_id}/artifact")
-async def get_artifact(session_id: str):
-    """获取仿真产物的 ArtifactSpec v0。若有已落盘的 evidence，自动注入。"""
-    record = await _trace_store.load(session_id)
-    if not record:
-        raise HTTPException(404, "trace not found")
-
-    from micro_agent.simulation.artifact_compiler import compile_artifact_spec
-
-    # 尝试加载已落盘的 evidence（若 SSE finally 中已自动跑过）
-    pipeline_result = _load_pipeline_result(session_id, record.to_dict())
-
-    try:
-        spec = compile_artifact_spec(record.to_dict(), pipeline_result)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    except Exception as exc:
-        logger.warning(f"ArtifactSpec 编译失败 {session_id}: {exc}")
-        raise HTTPException(500, f"ArtifactSpec 编译失败: {exc}") from exc
-
-    return spec.to_dict()
+@router.get("/{build_id}/artifact")
+async def get_artifact(build_id: str):
+    return _load(build_id, "artifact")
 
 
-@router.post("/{session_id}/artifact")
-async def build_artifact(session_id: str):
-    """按需构建 ArtifactSpec v0 并落盘到 workspace/data/artifacts/{session_id}/。"""
-    record = await _trace_store.load(session_id)
-    if not record:
-        raise HTTPException(404, "trace not found")
+@router.get("/{build_id}/frontend-state")
+async def get_legacy_frontend_state(build_id: str):
+    return _load(build_id, "frontend_state")
 
-    from micro_agent.simulation.artifact_compiler import compile_artifact_spec
 
-    pipeline_result = _load_pipeline_result(session_id, record.to_dict())
-
-    try:
-        spec = compile_artifact_spec(record.to_dict(), pipeline_result)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    except Exception as exc:
-        logger.warning(f"ArtifactSpec 编译失败 {session_id}: {exc}")
-        raise HTTPException(500, f"ArtifactSpec 编译失败: {exc}") from exc
-
-    # 落盘
-    art_dir = Path(config.workspace) / "data" / "artifacts" / session_id
-    art_dir.mkdir(parents=True, exist_ok=True)
-    art_path = art_dir / "artifact_spec.json"
-    art_path.write_text(
-        json.dumps(spec.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    logger.info(f"ArtifactSpec 已落盘: {art_path}")
-
+@router.post("/{build_id}/artifact")
+async def rebuild_artifact(build_id: str):
+    manifest = _load(build_id, "manifest")
     return {
-        "artifactId": spec.artifactId,
-        "schemaVersion": spec.schemaVersion,
-        "sourceSessionId": session_id,
-        "solidifiable": spec.solidificationReport.get("solidifiable", spec.solidifiable),
-        "goldenPathExtractable": spec.solidificationReport.get("goldenPathExtractable", False),
-        "artifactPath": str(art_path),
+        "buildId": build_id,
+        "artifactId": manifest.get("artifactId"),
+        "artifactPath": str(_store.bundle_dir(build_id) / "artifact.json"),
+        "manifest": manifest,
     }
+
+
+def _load(build_id: str, part: str) -> dict[str, Any]:
+    data = _store.load_part(build_id, part)
+    if data is None:
+        raise HTTPException(404, f"{part} not found for build {build_id}")
+    return data

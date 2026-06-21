@@ -2,6 +2,8 @@
 
 > 让每次仿真运行**真实留下**可检验、可追溯的结构化证据。
 
+> 2026-06-21 状态：这是旧 trace evidence 工具包。新的元应用想定式仿真构建主链路不再把 evidence 编译进最终产物，也不再读取 `workspace/data/traces` / `data/evidence` 旧目录；新构建以 `workspace/data/simulation_builds/{buildId}` 的 BuildBundle 为准。本工具可作为独立诊断工具保留，但不属于新的实验 runner。
+
 ## Quick Start
 
 ```bash

@@ -51,6 +51,7 @@ class LoggingMCPTool(Tool):
                 channel="real_mcp",
                 transport=self._transport,
                 success=result.error is None,
+                source="real_mcp",
             )
         )
         return result
