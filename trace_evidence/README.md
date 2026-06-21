@@ -1,187 +1,50 @@
-# trace_evidence — Trace Evidence Post-Processing Pipeline
+# trace_evidence — legacy diagnostic tool
 
-> 让每次仿真运行**真实留下**可检验、可追溯的结构化证据。
+更新：2026-06-21。
 
-> 2026-06-21 状态：这是旧 trace evidence 工具包。新的元应用想定式仿真构建主链路不再把 evidence 编译进最终产物，也不再读取 `workspace/data/traces` / `data/evidence` 旧目录；新构建以 `workspace/data/simulation_builds/{buildId}` 的 BuildBundle 为准。本工具可作为独立诊断工具保留，但不属于新的实验 runner。
+`trace_evidence/` 是旧的 trace 后处理诊断工具包，不是当前“元应用想定式仿真构建”主链路。
 
-## Quick Start
+当前主链路以 BuildBundle 为准：
+
+```text
+workspace/data/simulation_builds/{buildId}/
+  manifest.json
+  trace.json
+  service_selection.json
+  accepted_trajectory.json
+  artifact.json
+  frontend_state.json
+  experiment/
+```
+
+本工具仍可用于离线检查旧 trace，但必须注意：
+
+- 不参与 `MetaAppArtifact` 编译。
+- 不参与 `real_mcp_reuse` baseline runner。
+- 不读取或迁移旧 `workspace/data/traces` 作为新主线数据。
+- 不应把 evidence card、checker report、config attachment 当成最终元应用产物。
+- 运行输出属于本地诊断中间数据，不入库、不进 artifact、不提交 git。
+
+## 可用入口
 
 ```bash
-# Run pipeline on a trace file
-python trace_evidence/run_pipeline.py workspace/data/traces/sim-b963f6d83a89.json -o ./output
-
-# Or use as a library
-python -c "
-from trace_evidence import run_pipeline
-result = run_pipeline('path/to/trace.json')
-print(result.report.overall_status)  # PASS / WARN / FAIL / WARN_INCOMPLETE / INCOMPLETE_TRACE
-result.save_to_dir('./output')
-"
+python trace_evidence/run_pipeline.py path/to/trace.json -o trace_evidence/output_local
 ```
 
-## Output Artifacts
+输出通常包括：
 
-The pipeline produces 6 files:
+- `evidence_card.json` / `evidence_card.md`
+- `checker_report.json` / `checker_report.md`
+- `config_attachment_draft.json`
+- `bundle.json`
 
-| File | Description |
-|------|-------------|
-| `evidence_card.json` | Structured evidence: tool calls, phases, iterations, planner thoughts, verification |
-| `evidence_card.md` | Human-readable markdown version of the evidence card |
-| `checker_report.json` | Machine-readable report with 20 check results |
-| `checker_report.md` | Human-readable report with pass/warn/fail table |
-| `config_attachment_draft.json` | Config attachment draft linking evidence ID + executionEvidence to session config |
-| `bundle.json` | Full pipeline bundle (trace + all intermediate data, for replay/debugging) |
+这些文件只用于人工诊断旧 trace 质量。
 
-## Architecture
+## 当前保留原因
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Raw Trace JSON                              │
-│  (172 events: step/log/complete/service/iteration/phase)        │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  TraceEvidenceAdapter │  ← Normalize + extract
-                    │  (trace_adapter.py)   │    tool calls, phases,
-                    │                      │    iterations, planner
-                    │                      │    thoughts, verification
-                    └──────────┬──────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-    ┌─────────▼─────┐  ┌──────▼──────┐  ┌──────▼──────────┐
-    │ EvidenceCard   │  │ ConfigDraft │  │ EvidenceChecker  │
-    │ (evidence_card │  │ (config_    │  │ (evidence_       │
-    │  .py)          │  │  attachment │  │  checker.py)     │
-    │                │  │  .py)       │  │  20 checks       │
-    └────────────────┘  └─────────────┘  └─────────────────┘
-```
+- 旧实验/审计 trace 仍可能需要离线解释。
+- 其中的结构化检查、脱敏、schema validation 代码可作为后续 BuildBundle 诊断工具的参考。
 
-## The 20 Checks
+## 不再维护的内容
 
-| # | Check | What it validates |
-|---|-------|-------------------|
-| 1 | `structural_integrity` | All required top-level fields present in trace |
-| 2 | `service_coverage` | Every discovered service has call evidence |
-| 3 | `tool_call_pairs` | Each tool call has a matching return event |
-| 4 | `phase_completeness` | All phases have running→done lifecycle |
-| 5 | `iteration_consistency` | Iteration events with proper state transitions |
-| 6 | `verification_presence` | Explicit verification event exists |
-| 7 | `evidence_gaps_summary` | No structural evidence gaps |
-| 8 | `timeline_sanity` | Duration is within reasonable bounds |
-| 9 | `channel_classification` | All calls classified into channels (mcp/local/http) |
-| 10 | `tool_io_completeness` | Tool calls have input/output or explicit derivation note |
-| 11 | `confidence_distribution` | Evidence confidence levels are consistent |
-| 12 | `evidence_source_coverage` | Multiple provenance sources represented |
-| 13 | `execution_path` | Logical execution path is reconstructable |
-| 14 | `tool_channels_presence` | toolChannel metadata entries exist |
-| 15 | `final_result` | Final result with success/failure status |
-| 16 | `config_attachment_evidence_id` | Evidence ID available for config linkage |
-| 17 | `tool_call_details_consistency` | Detail count matches summary total |
-| 18 | `planner_events_completeness` | Planner events have iteration + content |
-| 19 | `timeline_monotonicity` | Tool call timestamps are monotonically ordered |
-| 20 | `result_hash_integrity` | Result hashes match recomputed sha256 of tool outputs |
-
-Each check returns one of: **PASS**, **WARN** (non-fatal gap), **FAIL** (integrity violation), or **MISSING** (cannot evaluate).
-
-## Python API
-
-```python
-from trace_evidence import (
-    # Main pipeline
-    run_pipeline,          # run_pipeline(path_or_dict) → PipelineResult
-    
-    # Core types
-    PipelineResult,        # .report, .card, .config_draft, .save_to_dir()
-    EvidenceCard,          # Structured evidence bundle
-    CheckerReport,         # 19 check results + overall status
-    ConfigAttachmentDraft, # Links evidence ID to config
-    
-    # Individual components
-    TraceEvidenceAdapter,  # Parse raw trace → structured evidence
-    EvidenceChecker,       # Run checks against evidence
-    
-    # Evidence items
-    ToolCallEvidence,      # Individual tool call with source/confidence
-    PhaseEvidence,         # Phase lifecycle
-    IterationEvidence,     # Agent iteration
-    PlannerThoughtEvidence,# Planner reasoning
-    VerificationEvidence,  # Verification event
-    
-    # Utilities
-    generate_evidence_id,  # Deterministic evidence ID from trace
-    compute_fingerprint,   # SHA256 fingerprint
-    sanitize_md_cell,      # Safe markdown rendering
-    validate_evidence_card,# JSON Schema validation
-    validate_checker_report,
-)
-```
-
-## Provenance Model
-
-Every evidence item carries:
-- `source`: where it came from (`original_trace`, `derived_from_log`, `inferred_from_log`)
-- `confidence`: reliability level (`original`, `derived`, `inferred`)
-
-The pipeline never fabricates evidence. When data is missing, it reports `missing_evidence` explicitly rather than synthesizing fake entries.
-
-## Security
-
-- **Secret redaction**: API keys, tokens, JWTs, and credentials are automatically redacted from evidence output via `sanitize.redact_secrets()`
-- **Markdown injection prevention**: All user-controlled content is sanitized before markdown rendering
-- **Path traversal protection**: Tool names and identifiers are validated before use in file paths
-
-## Testing
-
-```bash
-# Run all tests (125 as of v1.0.0)
-cd /path/to/Micro-Agent
-python -m unittest discover -s trace_evidence/tests -p "test_*.py" -v
-
-# Run just the pipeline E2E test
-python -m unittest trace_evidence.tests.test_pipeline -v
-
-# Run schema validation tests only
-python -m unittest trace_evidence.tests.test_schema_validation -v
-```
-
-Test coverage includes: unit tests, adversarial inputs, JSON Schema validation (both evidence_card and checker_report), E2E pipeline, CLI interface, and secret redaction.
-
-## File Structure
-
-```
-trace_evidence/
-├── __init__.py              # Pipeline orchestration + public API
-├── trace_adapter.py         # Raw trace → structured evidence
-├── evidence_card.py         # Evidence card builder + markdown renderer
-├── evidence_checker.py      # 19-check verification engine
-├── config_attachment.py     # Config draft builder
-├── sanitize.py              # Secret redaction + markdown safety
-├── schema_validator.py      # JSON Schema validation
-├── run_pipeline.py          # CLI entry point
-├── headless_run.py          # Headless simulation runner (optional)
-├── README.md                # This file（对外说明）
-# PROGRESS.md / INFRASTRUCTURE_REPORT.md — 本地开发笔记，已 gitignore
-├── schemas/
-│   ├── evidence_card_schema.json        # JSON Schema for evidence card output
-│   └── checker_report_schema.json       # JSON Schema for checker report output
-└── tests/
-    ├── __init__.py
-    ├── test_pipeline.py             # E2E pipeline tests
-    ├── test_pipeline_result_api.py  # PipelineResult API tests
-    ├── test_e2e_cli.py              # CLI integration tests
-    ├── test_adversarial.py          # Adversarial/malicious input tests
-    ├── test_sanitize.py             # Sanitization unit tests
-    ├── test_redact_secrets.py       # Secret redaction tests
-    └── test_schema_validation.py    # JSON Schema contract tests
-```
-
-## Integration
-
-After trace metadata enhancement, new simulation runs automatically persist:
-- Structured `tool_call_record` events (arguments, result, latency_ms)
-- Full `metadata` (config snapshot, runtime env, tool_call_count)
-- Verification event with status and reason
-- Planner thought events with iteration context
-
-For pre-enhancement traces, the adapter derives evidence from log text with `source="derived_from_log"` provenance markers.
+历史 handoff、progress、infrastructure report、`current/` baseline 输出已经从仓库移除。若后续需要新的诊断报告，应写入被 `.gitignore` 忽略的本地输出目录，而不是提交到仓库。

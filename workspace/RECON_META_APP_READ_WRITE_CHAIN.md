@@ -4,6 +4,8 @@
 
 当前实现不写回 `ioeb_backend`，不修改数据库。MicroAgent 侧 `BuildBundle` 是仿真构建与科研实验的唯一落盘单位。
 
+注意：当前 SSE `complete` 事件由 stream 先发出，BuildBundle 写入发生在 MicroAgent generator 的 `finally` 中。ioeb 当前通过重试读取规避竞态；后续若要严格平台化，应增加 `artifact_ready`/build status 或调整后端时序。
+
 ## 当前可用链路
 
 ```text
@@ -70,5 +72,12 @@ ioeb 前端
 - 平台正式发布链路携带 artifact；
 - 平台元应用列表可长期恢复 GoldenPath；
 - 服务池中标准化 MCP schema/version/hash 的后端管理。
+
+以下能力不需要后端改库，但仍是当前 MicroAgent/ioeb 链路断点：
+
+- `complete` 到 Bundle 稳定可读的时序保证；
+- 批量 baseline 实验结果导出；
+- GoldenPath 失败后 fallback 慢模式的专门失败用例验证；
+- token/cost/LLM call count 指标采集。
 
 科研实验结果不应进入 `ioeb_backend`，任何版本都应由 MicroAgent 本地科研文件或独立实验存储管理。

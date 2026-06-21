@@ -1,76 +1,90 @@
 # 当前目标：元应用想定式仿真构建下一阶段
 
-更新：2026-06-21。
+更新：2026-06-21。本文只记录当前代码已证明的状态、未闭合缺口和后续实验计划；项目长期记忆放在本地 `.codex/project-memory.md`，不入库。
 
-## 当前状态判断
+## 一、真实性确认
 
-第一阶段“最小闭环”已经达到并超过原始目标：
+“已超越最小闭环”不能只按目标口径判断，必须由当前代码和已执行验证支撑。按当前 `lyx` 分支代码，结论是：
 
-- 平台入口已能通过 ioeb 调用 MicroAgent 仿真构建接口。
-- MicroAgent 已能用 LLM 在给定 MCP 服务池内做服务选择。
-- 慢模式保持 ReAct/tool-calling，真实调用 MCP 服务。
-- Verifier 能作为构建期最终裁判。
-- BuildBundle 已按单 build 目录落盘。
-- AcceptedTrajectory、ServiceSelectionReport、MetaAppArtifact 已分离。
-- MetaAppArtifact v1 已能作为最小元应用产物被本地运行。
-- GoldenPath replay 已真实跑通，并能进入科研 experiment runner。
-- ioeb 已有临时 JSON/摘要展示，不依赖后端改库。
+> 工程上已形成可运行的最小真实闭环；科研上已形成实验入口和 baseline runner 雏形，但尚未形成有效批量对比实验。因此只能说“已超过原始最小打通目标”，不能说“研究闭环已经充分验证”。
 
-因此，本文件不再记录“项目理解/操作记忆”，只记录接下来必须解决的缺口、后续计划和实验设计。
+### 1. 当前代码直接证明的能力
 
-## 已验证基线
+| 能力 | 当前证据 | 判断 |
+| --- | --- | --- |
+| 平台入口 | `api/routes/simulation.py` 提供 `/api/simulation/start`、`/{buildId}/stream`；ioeb `src/api/simulation_builder.js` 直连 `VUE_APP_AGENT_BASE_URL` | 已实现 |
+| LLM 服务选择 | `SimulationOrchestrator._select_services_from_catalog()` 对传入 catalog 做 LLM 选择，失败回退 `serviceIds/catalog` | 已实现，但不是后端服务池检索 |
+| 慢模式 | `SimulationOrchestrator._phase_intelligent_build()` 调用既有 `Agent.run()`，保持 ReAct/tool-calling 探索 | 已实现 |
+| 真实 MCP 调用记录 | `LoggingMCPTool` 记录 real MCP 调用；`tool_call_record` 带 `source/phase/purpose/iteration/action_id` | 已实现 |
+| Verifier 裁判 | 构建循环中 `_stream_verification()` 决定是否进入成功分支；AcceptedTrajectory 只取最终 PASSED iteration | 已实现 |
+| BuildBundle | `BuildBundleStore.save_from_trace()` 写单 build 目录：trace、service selection、accepted trajectory、artifact、frontend state、manifest | 已实现 |
+| 产物分层 | `artifact_compiler.py` 分离 ServiceSelectionReport、AcceptedTrajectory、MetaAppArtifact | 已实现 |
+| 最小 MetaAppArtifact | `meta_app_artifact.v1` 只保留运行必要结构，不含 trace/evidence/verifier/serviceSelection | 已实现 |
+| GoldenPath replay | `artifact_runtime.run_artifact()` 先尝试 GoldenPath，失败后回退慢模式 | 已实现 |
+| 本地实验入口 | `experiments.py` 提供 `no_reuse/raw_trace_prompt/workflow_memory/golden_path` runner | 已实现入口 |
+| ioeb 临时展示 | `simulation_builder.vue` 可展示 trace/evidence summary/artifact JSON 摘要 | 已实现临时展示 |
 
-真实验证样例：
+### 2. 已验证样例支撑的能力
+
+以下来自此前真实本地 smoke run，不等价于批量实验结论：
 
 - Build ID: `build-c731a074a75e`
-- 服务：`medical-calc` (`http://127.0.0.1:18000/sse`)
+- 服务：`medical-calc`，SSE 地址 `http://127.0.0.1:18000/sse`
 - 构建过程：第一轮 Verifier FAILED，第二轮修正后 PASSED
 - 产物：`meta_app_artifact.v1`，含 1 条 primary GoldenPath
 - replay：4 次真实 MCP 调用，约 3.2s，`fastPathSuccess=true`，`fallbackUsed=false`
-- 实验：`golden_path` baseline 单任务跑通，`taskSuccess=true`，`verifierPassed=true`
+- 实验：`golden_path` 单任务跑通，`taskSuccess=true`，`verifierPassed=true`
 
-## 当前必须补齐的工程缺口
+### 3. 当前不能宣称的能力
 
-### P0：真实平台可用性补强
+- 不能宣称已完成后端服务池自动发现/语义检索；当前只在请求传入的 catalog 内选择。
+- 不能宣称 CoW 沙箱已经实现；当前只有真实 MCP 与 demo fake MCP/SandboxTool 双通道。
+- 不能宣称所有 baseline 已有效对比；当前 runner 存在，但只 smoke tested `golden_path`。
+- 不能宣称 GoldenPath 泛化能力已验证；当前 `argumentTemplate` 主要支持重放与轻量槽位覆盖。
+- 不能宣称 complete 事件后 Bundle 必定立即稳定可读；当前保存发生在 SSE generator `finally` 中，前端需要重试读取。
 
-- SSE complete 与 BuildBundle 写入时序仍需更严格验证：前端收到完成后，所有 bundle 文件必须稳定可读。
-- 前端展示目前是临时 JSON/摘要面板，只能证明存在性；正式 UI 后续需要重新设计，但本阶段不要过度耦合。
-- `/run` 快路径成功路径已验证，但快路径失败后自动 fallback 慢模式还需要专门构造失败用例验证。
-- `serviceContracts` 仍主要来自请求侧 `servicesMeta` 与观察到的工具调用；缺正式 schema hash/version 管理。
-- token usage、LLM call count、成本统计目前不完整，实验指标中可能为 null。
+## 二、当前必须补齐的工程缺口
+
+### P0：平台最小可用性补强
+
+- 将 SSE `complete` 与 BuildBundle 保存时序收紧，或把 `artifact_ready`/轮询状态写清楚。当前前端靠重试规避竞态。
+- 为 `/run` 构造失败用例，验证 GoldenPath 失败后自动 fallback 慢模式确实可用。
+- 为 service binding 增加更可靠的 schema/version/hash 来源；当前 `schemaHash` 主要由 artifact compiler 基于工具列表计算。
+- 补齐 token usage、LLM call count、成本统计；当前实验字段可能为 `null`。
+- 标记 demo/fake MCP 运行的 `researchEligible=false`，避免演示成功被当成真实实验成功。
 
 ### P0：科研实验最小可用补强
 
-- 当前只 smoke tested `golden_path` baseline；`no_reuse`、`raw_trace_prompt`、`workflow_memory` 需要同一任务集批量跑通。
-- 需要固定任务集格式和源任务/目标任务划分，否则无法检验 reuse/applicability。
-- 需要批量任务运行脚本和结果汇总表，至少输出 CSV/JSONL 方便论文画表。
-- Eval-time Verifier 需要稳定 prompt 与输出 schema，并记录模型、时间、失败类型。
-- 需要将 demo/fake MCP case 明确排除出 researchEligible 统计。
+- 固定 3-5 个真实 MCP 任务集，至少覆盖 AKI、sepsis、GI bleed、pre-op risk、ICU delirium 等 medical-calc 场景。
+- 在同一任务集上跑通 `no_reuse`、`raw_trace_prompt`、`workflow_memory`、`golden_path`。
+- 输出 JSONL/CSV 汇总，字段至少包括 success、latency、mcp_call_count、fallback_used、verifier_passed、error_type。
+- 明确源任务/目标任务划分，否则无法验证 reuse/applicability。
+- 稳定 Eval-time Verifier prompt/schema，并记录模型、时间、失败类型。
 
 ### P1：GoldenPath 与数据流
 
-- 当前 GoldenPath 依赖 `argumentTemplate` 保留最终成功参数；这是可运行的最小实现，但动态输入泛化较弱。
+- 当前 GoldenPath 的 `argumentTemplate` 能支撑最小 replay，但动态输入泛化较弱。
 - BindingPlan 只做轻量槽位绑定，缺少强可执行数据流图。
-- L2 断言需要从“参数存在”扩展到“参数来自 runtime slot / step output / whitelist transform”。
-- 多工具/多服务路径的 `dependsOn` 和 output slot 应从真实数据依赖中归纳，而不是只按顺序。
-- observation 内部业务失败已可判定，但更多 MCP 返回形态需要扩展统一判定规则。
+- L2 断言需要从“参数存在/已绑定”扩展到“参数来自 runtime slot、step output 或白名单 transform”。
+- 多工具/多服务路径的 `dependsOn` 目前主要按顺序归纳，需要从真实数据依赖中归纳。
+- observation 失败判定已覆盖 `success=false/all_success=false/error`，但更多 MCP 返回形态需要统一。
 
 ### P1：服务选择与服务契约
 
-- 当前服务选择只在前端/请求传入的已知 catalog 内做 LLM 选择；尚未连接后端服务池检索。
-- 需要标准化服务描述字段：`service_id`、`tool_name`、`tool_key=service_id:tool_name`、input schema、output schema、version/hash、source。
-- 服务匹配解释应保留为 build-time data，不进入 artifact。
-- 后续若要正式平台复现，需要 ioeb_backend 增加服务契约与 schema version/hash 字段。
+- 当前服务选择只消费前端/请求传入 catalog；尚未连接 ioeb_backend 服务池检索。
+- 需要在服务封装/服务池层标准化 `service_id`、`tool_name`、`tool_key`、input schema、output schema、version/hash、source。
+- 服务选择解释必须保持为 build-time data，不进入 final artifact。
+- 正式平台复现需要 ioeb_backend 增加服务契约、schema version/hash 字段。
 
 ### P1：安全与隐私
 
 - 医疗场景中的 scenario、arguments、result 可能含患者信息。
-- BuildTrace/AcceptedTrajectory/experiment result 应保持本地科研数据，不进 artifact、不进后端。
+- BuildTrace、AcceptedTrajectory、experiment result 只应保存在 MicroAgent 本地科研数据中，不进 artifact、不进 ioeb_backend、不进 git。
 - 后续需要脱敏规则、访问控制、保存周期和实验导出过滤。
 
 ### P2：正式平台化断点
 
-这些需要修改 ioeb_backend/数据库，本阶段不做：
+以下需要修改 ioeb_backend/数据库，本阶段不做：
 
 - MetaAppArtifact 正式入库。
 - BuildBundle 索引入库。
@@ -80,52 +94,35 @@
 
 科研实验结果任何版本都不应写入 ioeb_backend。
 
-## 下一阶段计划
+## 三、下一阶段计划
 
 ### Step 1：稳定最小真实流程
 
 目标：同一套真实 MCP 服务和 3-5 个任务能重复构建、运行、实验。
 
-- 构造 medical-calc 任务集：AKI、sepsis、GI bleed、pre-op risk、ICU delirium。
+- 构造 medical-calc 任务集。
 - 每个任务记录 expected tools、expected params、expected bounded output traits。
 - 批量运行 build，检查每个 build 是否生成 artifact/goldenPath。
 - 批量运行 `/run`，记录 fast/fallback/slow 结果。
-- 修复所有 determinism、bundle timing、MCP observation parsing 问题。
+- 修复 determinism、bundle timing、MCP observation parsing 问题。
 
 ### Step 2：补齐 baseline 实验
 
 目标：让四类 baseline 在相同任务集上可比。
 
 - `no_reuse`：只用慢模式，不注入历史材料。
-- `raw_trace_prompt`：检索并注入原始成功 trace 摘要/片段。
-- `workflow_memory`：注入从 AcceptedTrajectory 归纳的自然语言/半结构化 workflow。
+- `raw_trace_prompt`：注入原始成功轨迹片段。
+- `workflow_memory`：注入从 AcceptedTrajectory/GoldenPath 归纳出的工作流记忆。
 - `golden_path`：使用 MetaAppArtifact 内部 GoldenPath，失败回退慢模式。
-
-统一记录：
-
-- task_success
-- fast_path_success
-- fallback_success
-- overall_success
-- fallback_used/fallback_rate
-- latency_ms
-- llm_call_count
-- mcp_call_count
-- token_usage
-- planner_iterations
-- verifier_passed
-- error_type
 
 ### Step 3：做第一轮消融
 
 目标：证明不是“字段更多所以看起来更好”。
 
-候选消融：
-
 - 无 GoldenPath，仅慢模式。
 - GoldenPath 无 `argumentTemplate`。
 - GoldenPath 有模板但无 observation semantic failure 判定。
-- GoldenPath 有模板但无 Verifier eval。
+- GoldenPath 有模板但无 Eval-time Verifier。
 - Workflow memory vs executable artifact。
 - 不同 applicability prompt / BindingPlan prompt。
 
@@ -154,12 +151,12 @@
 - 对照：no reuse、raw trajectory retrieval、ReAct exemplar、reflection/workflow memory、golden path/executable artifact。
 - 指标：成功率、延迟、成本、MCP 调用数、fallback 率、Verifier 通过率、错误类型。
 
-## 当前文档分工
+## 四、当前文档分工
 
 - `.codex/project-memory.md`：Codex 本地项目记忆、工作方式、设计约定，不入库。
-- `GOAL_META_APP_SPEC.md`：当前阶段目标、缺口、计划、实验设计。
+- `GOAL_META_APP_SPEC.md`：当前阶段目标、代码真实性确认、缺口、计划、实验设计。
 - `docs/data-structures-spec.md`：BuildBundle / BuildTrace / ServiceSelectionReport / AcceptedTrajectory / MetaAppArtifact / experiment 的结构规格。
 - `docs/frontend-simulation-integration.md`：ioeb 临时展示和 API 对接说明。
 - `docs/simulation-build-roadmap.md`：较短路线图和能力概览。
 - `workspace/RECON_META_APP_READ_WRITE_CHAIN.md`：ioeb/ioeb_backend 读写链与后端断点。
-- `trace_evidence/README.md`：旧 evidence pipeline 说明，只作为 legacy diagnostic 工具。
+- `trace_evidence/README.md`：旧 evidence pipeline 说明，只作为 legacy diagnostic 工具入口。
