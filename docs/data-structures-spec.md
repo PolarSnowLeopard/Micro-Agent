@@ -182,9 +182,18 @@ workspace/data/simulation_builds/{buildId}/
 
 如果没有最终 PASSED Verifier，`status` 为 `missing`，`actionSequence` 为空，artifact 仍可退化为 `agent_only`。
 
+注意：`accepted_trajectory.json` 当前只表达“最终成功轮次中被接受的业务调用事实”，不表达“最优轨迹”。它不会自动删除同一工具的无效重复调用、参数试错、失败调用或无产出的 discover/schema 探索。后续若引入轨迹优化，应新增显式编译阶段和字段/文件，例如 `optimized_trajectory` 或 GoldenPath 编译报告；优化阶段必须能说明每个删除动作的依据，不能只靠前端展示去重。
+
 ## 六、MetaAppArtifact
 
-`artifact.json` 是最终最小运行产物。
+`artifact.json` 是最终最小运行产物。这里的“最小”不是把所有构建信息塞成一个 JSON，而是只保留运行闭包：
+
+- `app`：元应用身份和领域。
+- `taskContract`：运行期需要理解的任务目标、输入、输出和约束。
+- `runtime`：运行所需服务绑定、回退策略和 Agent 执行策略。
+- `goldenPaths`：可选快路径；没有可接受成功主干时为空。
+
+除此之外的构建事实、解释、审计和实验数据都必须留在 BuildBundle 的其它文件里，不能反向写入 `artifact.json`。
 
 不得包含：
 

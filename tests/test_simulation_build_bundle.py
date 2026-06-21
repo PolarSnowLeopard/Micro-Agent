@@ -30,7 +30,7 @@ def _trace():
                         "name": "Linezolid",
                         "isFake": False,
                         "mcpMethod": "sse",
-                        "mcpUrl": "http://127.0.0.1:25013/sse",
+                        "mcpUrl": "http://fdueblab.cn:25013/sse",
                         "tools": [{"name": "calculate_dose", "description": "dose"}],
                     }
                 ],
@@ -125,6 +125,27 @@ class SimulationBuildBundleTest(unittest.TestCase):
         self.assertEqual(len(accepted["actionSequence"]), 1)
         self.assertEqual(len(artifact["goldenPaths"]), 1)
         self.assertTrue(artifact["goldenPaths"][0]["primary"])
+
+    def test_failed_build_does_not_accept_earlier_passed_iteration(self):
+        trace = _trace()
+        trace["success"] = False
+        trace["iterations"] = 2
+        trace["events"].append({
+            "type": "verifier_result",
+            "data": {
+                "iteration": 2,
+                "status": "FAILED",
+                "summary": "最终轮未通过",
+            },
+        })
+
+        compiled = compile_build(trace)
+
+        self.assertEqual(compiled.acceptedTrajectory["status"], "missing")
+        self.assertEqual(compiled.acceptedTrajectory["acceptedIteration"], None)
+        self.assertEqual(compiled.acceptedTrajectory["actionSequence"], [])
+        self.assertEqual(compiled.artifact["runtime"]["mode"], "agent_only")
+        self.assertEqual(compiled.artifact["goldenPaths"], [])
 
     def test_bundle_manifest_points_to_artifact_without_artifact_pointing_back(self):
         with tempfile.TemporaryDirectory() as tmp:

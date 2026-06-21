@@ -434,11 +434,16 @@ def _runtime_service_bindings(trace: dict[str, Any], accepted: dict[str, Any]) -
 
 
 def _final_passed_verifier(trace: dict[str, Any]) -> dict[str, Any] | None:
+    if trace.get("success") is not True:
+        return None
     results = [
         e.get("data") for e in trace.get("events", [])
         if e.get("type") == "verifier_result" and isinstance(e.get("data"), dict)
     ]
+    final_iteration = trace.get("iterations")
     for row in reversed(results):
+        if final_iteration is not None and row.get("iteration") != final_iteration:
+            continue
         status = str(row.get("status") or row.get("verdict") or "").lower()
         if status in ("passed", "pass"):
             return row

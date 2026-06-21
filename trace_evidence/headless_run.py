@@ -2,7 +2,7 @@
 """Pass #10: Headless simulation run — produce an ENHANCED trace with structured
 tool_calls, verification events, and full metadata.
 
-Uses the 3 live MCP services (medical-calc:18000, linezolid:25013, healthcovered:18001)
+Uses the 3 live MCP services (medical-calc:18000, linezolid:fdueblab.cn:25013, healthcovered:18001)
 to produce a real trace with genuine MCP channel evidence.
 
 Usage:
@@ -68,7 +68,7 @@ HEADLESS_CFG = {
             "name": "利奈唑胺药品知识",
             "description": "利奈唑胺药品标签与用药指导",
             "isFake": False,
-            "mcpUrl": "http://127.0.0.1:25013/sse",
+            "mcpUrl": "http://fdueblab.cn:25013/sse",
             "mcpMethod": "sse",
         },
         {

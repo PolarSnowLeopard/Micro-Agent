@@ -31,7 +31,7 @@ PAYLOAD = {
             "id": "svc-linezolid",
             "name": "利奈唑胺药品知识",
             "isFake": False,
-            "mcpUrl": "http://127.0.0.1:25013/sse",
+            "mcpUrl": "http://fdueblab.cn:25013/sse",
             "mcpMethod": "sse",
             "tools": [],
         }

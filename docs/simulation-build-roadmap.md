@@ -44,6 +44,7 @@
 - SSE `complete` 先到达，BuildBundle 保存发生在后端 generator `finally`，前端当前需要重试读取。
 - baseline runner 已有，但尚未在同一任务集上批量验证四个 baseline。
 - GoldenPath 主要依赖 `argumentTemplate` 和轻量 BindingPlan，泛化数据流仍弱。
+- AcceptedTrajectory 目前是“通过主干”，不是“优化主干”；无效重复调用、参数试错、失败调用和无产出 discover/schema 探索还没有剪枝。
 - service schema/version/hash 主要来自请求侧元数据和工具列表摘要，未接正式服务池契约。
 - token/cost/LLM call count 指标未完整采集。
 - ioeb_backend 不保存 artifact、BuildBundle、GoldenPath、实验结果。
@@ -54,4 +55,5 @@
 2. 同任务集跑通四类 baseline 并输出 JSONL/CSV 汇总。
 3. 验证 GoldenPath 失败后 fallback 慢模式。
 4. 增强 BindingPlan、L2 数据流断言和 observation 失败解析。
-5. 设计正式平台持久化字段，但等 ioeb_backend 阶段再实现。
+5. 增加轨迹优化编译阶段：先对重复调用、失败试错、无效 discover/schema 探索做可解释剪枝，再生成可复用 GoldenPath。
+6. 设计正式平台持久化字段，但等 ioeb_backend 阶段再实现。
