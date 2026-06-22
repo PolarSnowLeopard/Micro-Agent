@@ -1,8 +1,7 @@
 """Meta-app scenario simulation construction routes.
 
-New contract: one simulation session produces one BuildBundle under
-workspace/data/simulation_builds/{buildId}. Old trace/artifact/evidence folders
-are not read or migrated.
+Each simulation session produces one BuildBundle under
+workspace/data/simulation_builds/{buildId}.
 """
 
 from __future__ import annotations
@@ -242,8 +241,7 @@ async def run_build_experiment(build_id: str, req: ExperimentRunRequest):
         raise HTTPException(422, str(exc)) from exc
 
 
-# Temporary compatibility URLs for the current frontend. They read the new
-# BuildBundle and do not support old trace/artifact storage.
+# Frontend-facing URLs that read parts of the BuildBundle.
 
 @router.get("/{build_id}/trace")
 async def get_trace(build_id: str):

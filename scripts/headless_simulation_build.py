@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Headless 全链路仿真构建（仿真阶段）。
+"""Headless 全链路仿真构建。
 
 读取 external-mcp/service_catalog.json 中预解析好的真实场景与服务集，
 对每个场景跑 SimulationOrchestrator，并通过 BuildBundleStore 落地一份
-BuildBundle（trace + 元应用产物 artifact）。不走追问/推荐，不入库、不验证，
+BuildBundle（trace + MetaAppArtifact v1）。不走追问/推荐，不入库、不验证，
 但对每个场景断言「最小可用」：
 
   - 仿真 complete 且 success=True
-  - 元应用产物 artifact.goldenPaths 非空，且 runtime.serviceBindings 非空
-  - trace 至少包含一条 source=real_mcp 的 tool_call_record（真实通道证据）
+  - artifact.goldenPaths 非空，且 runtime.serviceBindings 非空
+  - trace 至少包含一条 source=real_mcp 的 tool_call_record
 
 用法：
-    .venv/bin/python trace_evidence/headless_run.py            # 跑全部场景
-    .venv/bin/python trace_evidence/headless_run.py sepsis_bedside pe_risk
+    .venv/bin/python scripts/headless_simulation_build.py
+    .venv/bin/python scripts/headless_simulation_build.py sepsis_bedside pe_risk
 """
 
 from __future__ import annotations
@@ -56,7 +56,6 @@ def build_config(catalog: dict, scenario: dict) -> dict:
             "name": svc["name"],
             "description": svc["des"],
             "isFake": False,
-            # headless 跑在开发机：本地服务直连 127.0.0.1，linezolid 用远程地址
             "mcpUrl": svc["localUrl"],
             "mcpMethod": svc.get("mcpMethod", "sse"),
         })

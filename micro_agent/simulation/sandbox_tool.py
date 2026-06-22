@@ -5,7 +5,7 @@
   - 模拟真实延迟（随机 100-500ms）
   - 参数驱动：缺必要参数 / 类型错误 → 稳定返回业务错误（非随机）
   - 可配置随机失败率，用于验证 Agent 的容错与重试能力
-  - 记录调用日志，供 TraceStore 持久化
+  - 记录调用日志，供 BuildBundle trace 持久化
 
 后续替换为真实 MCP 时，只需在 orchestrator._register_tools() 中
 把 SandboxTool 替换为 MCPTool（二者共享 Tool 接口）。

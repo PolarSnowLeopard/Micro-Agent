@@ -1,12 +1,10 @@
 """Meta-app build compiler.
 
-This module intentionally replaces the old ArtifactSpec/solidification-gate
-compiler. It has one job: compile construction records into three separate
-objects with clean semantics:
+Compiles BuildBundle construction records into three separate objects:
 
 - ServiceSelectionReport: build-time explanation, never part of the artifact.
 - AcceptedTrajectory: verifier-accepted action spine, never part of the artifact.
-- MetaAppArtifact: the minimal runnable meta-app product.
+- MetaAppArtifact: the minimal runnable meta-app product (`meta_app_artifact.v1`).
 """
 
 from __future__ import annotations

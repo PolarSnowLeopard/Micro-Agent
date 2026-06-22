@@ -37,17 +37,7 @@ demo/
 .agents/
 .claude/
 
-# Simulation construction runtime data and research outputs
+# Simulation construction runtime data
 workspace/data/
 workspace/data/simulation_builds/
-workspace/data/traces/
-workspace/data/evidence/
-workspace/data/artifacts/
 workspace/data/meta_app_experiments/
-
-# Trace/evidence diagnostic runtime outputs
-trace_evidence/current/
-trace_evidence/output*/
-trace_evidence/reports/
-trace_evidence/runs/
-trace_evidence/artifacts/

@@ -106,14 +106,10 @@ class SimulationBuildBundleTest(unittest.TestCase):
         artifact = compiled.artifact
 
         self.assertEqual(artifact["schemaVersion"], "meta_app_artifact.v1")
-        self.assertIn("taskContract", artifact)
-        self.assertIn("runtime", artifact)
-        self.assertIn("goldenPaths", artifact)
-        self.assertNotIn("serviceSelection", artifact)
-        self.assertNotIn("solidificationReport", artifact)
-        self.assertNotIn("parsedIntent", artifact)
-        self.assertNotIn("provenance", artifact)
-        self.assertNotIn("artifactHash", artifact)
+        self.assertEqual(
+            set(artifact.keys()),
+            {"schemaVersion", "artifactId", "app", "taskContract", "runtime", "goldenPaths"},
+        )
 
     def test_accepted_trajectory_is_separate_and_generates_primary_golden_path(self):
         compiled = compile_build(_trace())

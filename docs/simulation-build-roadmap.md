@@ -27,18 +27,6 @@
 | 实验 runner | `real_mcp_reuse` 入口已实现，baseline 为 `no_reuse/raw_trace_prompt/workflow_memory/golden_path` |
 | ioeb 展示 | 临时 JSON/摘要展示，不改 ioeb_backend |
 
-## 已删除或退出主线的旧语义
-
-- `ArtifactSpec v0.x`
-- `solidificationReport` 顶层产物字段
-- `serviceSelection` 顶层产物字段
-- `productAcceptance`
-- `writeBackDraft`
-- `offline_proxy` 字段完整性实验 runner
-- `workspace/data/traces`、`workspace/data/artifacts`、`workspace/data/evidence` 旧存储语义
-
-说明：ioeb 进程内演示 mock 仍可能生成旧形状的演示数据；它只服务 demo，不属于真实构建产物和科研实验。
-
 ## 当前断点
 
 - SSE `complete` 先到达，BuildBundle 保存发生在后端 generator `finally`，前端当前需要重试读取。

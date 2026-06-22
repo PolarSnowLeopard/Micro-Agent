@@ -1,6 +1,6 @@
 # 仿真构建数据结构规格
 
-更新：2026-06-21。旧 `ArtifactSpec v0.x`、顶层 `serviceSelection` 产物、`solidificationReport`、`productAcceptance`、`offline_proxy` 实验包均已退出主线；不迁移、不兼容。
+更新：2026-06-22。本文定义 BuildBundle 主线对象边界与 JSON 形状。
 
 ## 一、输入边界
 
@@ -193,16 +193,7 @@ workspace/data/simulation_builds/{buildId}/
 - `runtime`：运行所需服务绑定、回退策略和 Agent 执行策略。
 - `goldenPaths`：可选快路径；没有可接受成功主干时为空。
 
-除此之外的构建事实、解释、审计和实验数据都必须留在 BuildBundle 的其它文件里，不能反向写入 `artifact.json`。
-
-不得包含：
-
-- `serviceSelection`
-- `solidificationReport`
-- `parsedIntent`
-- `productAcceptance`
-- `writeBackDraft`
-- trace / evidence / verifier / accepted trajectory / experiment 引用
+`artifact.json` 顶层仅包含：`schemaVersion`、`artifactId`、`app`、`taskContract`、`runtime`、`goldenPaths`。构建事实、解释、审计和实验数据留在 BuildBundle 其它文件中，不写入 artifact。
 
 结构：
 
