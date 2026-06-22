@@ -125,5 +125,5 @@ def test_agent_router_import():
 
 def test_app_includes_agent_router():
     from api.app import app
-    paths = [r.path for r in app.routes]
+    paths = list(app.openapi()["paths"].keys())
     assert any("/api/agent" in p for p in paths)

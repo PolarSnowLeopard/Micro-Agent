@@ -5,6 +5,8 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  release:
+    types: [published]
 
 jobs:
   test:
@@ -28,7 +30,7 @@ jobs:
   build:
     name: Build & Push Image
     needs: test
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,20 +44,44 @@ jobs:
         run: |
           mv deploy/Dockerfile Dockerfile
           mv deploy/start.sh start.sh
-          SHORT_SHA=${GITHUB_SHA::7}
-          docker build \
-            -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest \
-            -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${SHORT_SHA} .
-          docker push ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent --all-tags
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            IMAGE_TAG="${GITHUB_REF_NAME}"
+            docker build \
+              -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${IMAGE_TAG} .
+            docker push ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${IMAGE_TAG}
+          else
+            IMAGE_TAG=${GITHUB_SHA::7}
+            docker build \
+              -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest \
+              -t ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${IMAGE_TAG} .
+            docker push ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest
+            docker push ${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${IMAGE_TAG}
+          fi
 
-  deploy:
-    name: Deploy
+  deploy-staging:
+    name: Deploy Staging
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger deploy webhook
+      - name: Trigger staging deploy webhook
         run: |
+          IMAGE_TAG=${GITHUB_SHA::7}
+          curl -sf -X POST "${{ secrets.STAGING_DEPLOY_WEBHOOK_URL }}" \
+            -H "X-Deploy-Token: ${{ secrets.STAGING_DEPLOY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"service\":\"agent\",\"image\":\"${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${IMAGE_TAG}\"}"
+
+  deploy-production:
+    name: Deploy Production
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger production deploy webhook
+        run: |
+          IMAGE_TAG="${GITHUB_REF_NAME}"
           curl -sf -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}" \
             -H "X-Deploy-Token: ${{ secrets.DEPLOY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"service":"agent","image":"${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:latest"}'
+            -d "{\"service\":\"agent\",\"image\":\"${{ secrets.DOCKER_HUB_USERNAME }}/micro-agent:${IMAGE_TAG}\"}"
