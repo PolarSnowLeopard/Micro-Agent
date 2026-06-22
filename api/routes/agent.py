@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -269,12 +270,22 @@ async def mcp_service_recommendation(
         session_id=session_id or None,
     )
     assert isinstance(agent, MCPAgent)
+    # MCP stdio 默认仅传一份安全子集环境，需显式把 DB_*/MYSQL_* 叠加上去，
+    # 否则 mysql_server 子进程读不到 ioeb-dev 连接配置。
+    from mcp.client.stdio import get_default_environment
+
+    stdio_env = {
+        **get_default_environment(),
+        **{k: v for k, v in os.environ.items()
+           if k.startswith(("DB_", "MYSQL_"))},
+    }
     try:
         await asyncio.wait_for(
             agent.connect(ServerConfig(
                 connection_type="stdio",
-                command="python",
+                command=sys.executable,
                 args=["-m", "app.mcp.mysql_server.server"],
+                env=stdio_env,
                 server_id="mysql_server",
             )),
             timeout=25.0,

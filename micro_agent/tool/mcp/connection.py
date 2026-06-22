@@ -28,6 +28,7 @@ class ServerConfig:
     server_url: Optional[str] = None  # SSE 模式
     command: Optional[str] = None  # stdio 模式
     args: Optional[list[str]] = None  # stdio 模式
+    env: Optional[dict[str, str]] = None  # stdio 模式：子进程环境变量
     server_id: Optional[str] = None
 
 
@@ -59,7 +60,7 @@ class MCPConnectionManager:
                 if not config.command:
                     raise ValueError("stdio 连接需要 command")
                 session = await self._connect_stdio(
-                    stack, config.command, config.args or []
+                    stack, config.command, config.args or [], config.env
                 )
             elif config.connection_type == "streamable_http":
                 if not config.server_url:
@@ -125,10 +126,13 @@ class MCPConnectionManager:
 
     @staticmethod
     async def _connect_stdio(
-        stack: AsyncExitStack, command: str, args: list[str]
+        stack: AsyncExitStack,
+        command: str,
+        args: list[str],
+        env: Optional[dict[str, str]] = None,
     ) -> ClientSession:
         transport = await stack.enter_async_context(
-            stdio_client(StdioServerParameters(command=command, args=args))
+            stdio_client(StdioServerParameters(command=command, args=args, env=env))
         )
         return await stack.enter_async_context(ClientSession(*transport))
 

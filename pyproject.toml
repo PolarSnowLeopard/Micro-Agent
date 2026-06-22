@@ -34,7 +34,7 @@ api = [
     "uvicorn>=0.34.0",
     "python-multipart>=0.0.9",
 ]
-mcp = ["mcp>=1.4.0"]
+mcp = ["mcp>=1.4.0", "pymysql>=1.1.0"]
 rag = ["PyPDF2>=3.0.0", "python-docx>=1.0.0"]
 all = ["fdu-micro-agent[api,mcp,rag]"]
 dev = [
