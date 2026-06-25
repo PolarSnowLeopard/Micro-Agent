@@ -1,9 +1,4 @@
-"""Verifier 结构化 verdict 与文本回退解析单测。"""
-
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
+"""开发期验收：Verifier 结构化 verdict 与文本回退解析（非 CI unit test）。"""
 
 from micro_agent.core.schema import AgentEvent
 from micro_agent.simulation.orchestrator import SimulationOrchestrator

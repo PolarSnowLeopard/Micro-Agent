@@ -353,16 +353,18 @@ def _golden_paths(accepted: dict[str, Any], task_contract: dict[str, Any]) -> li
 
 
 def _task_contract(app: dict[str, Any], scenario: dict[str, Any], accepted: dict[str, Any]) -> dict[str, Any]:
-    slot_names = []
+    slot_names = set()
+    input_slots = []
     for action in accepted.get("actionSequence") or []:
         for slot in action.get("inputSlots") or []:
             name = slot.get("name")
             if name and name not in slot_names:
-                slot_names.append(name)
-    input_slots = [
-        {"name": name, "type": "unknown", "required": True}
-        for name in slot_names
-    ]
+                slot_names.add(name)
+                input_slots.append({
+                    "name": name,
+                    "type": slot.get("type") or "unknown",
+                    "required": True,
+                })
     if not input_slots:
         input_slots = [{"name": "task", "type": "string", "required": True}]
     return {

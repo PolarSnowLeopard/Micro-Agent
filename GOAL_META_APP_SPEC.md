@@ -159,4 +159,4 @@
 - `docs/frontend-simulation-integration.md`：ioeb 临时展示和 API 对接说明。
 - `docs/simulation-build-roadmap.md`：较短路线图和能力概览。
 - `workspace/RECON_META_APP_READ_WRITE_CHAIN.md`：ioeb/ioeb_backend 读写链与后端断点。
-- `scripts/headless_simulation_build.py`：基于 service_catalog 的 headless BuildBundle 验收脚本。
+- `dev/simulation/headless_build.py`：基于 service_catalog 的 headless BuildBundle 验收脚本（开发期手动，非 CI）。

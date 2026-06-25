@@ -1,12 +1,8 @@
-"""想定追问（scenario_intake）单元测试。"""
+"""开发期验收：想定追问 scenario_intake（mock LLM，非 CI unit test）。"""
 
 import asyncio
 import json
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def test_parse_intake_json():
@@ -127,7 +123,7 @@ def main():
     asyncio.run(test_run_scenario_intake_question())
     asyncio.run(test_run_scenario_intake_ready())
     asyncio.run(test_orchestrator_reuses_scenario_parsed())
-    print("[PASS] scenario_intake tests")
+    print("[PASS] scenario_intake dev checks")
 
 
 if __name__ == "__main__":

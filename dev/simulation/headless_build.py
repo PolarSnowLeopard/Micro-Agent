@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless 全链路仿真构建。
+"""Headless 全链路仿真构建（开发期手动验收，非 CI）。
 
 读取 external-mcp/service_catalog.json 中预解析好的真实场景与服务集，
 对每个场景跑 SimulationOrchestrator，并通过 BuildBundleStore 落地一份
@@ -11,8 +11,8 @@ BuildBundle（trace + MetaAppArtifact v1）。不走追问/推荐，不入库、
   - trace 至少包含一条 source=real_mcp 的 tool_call_record
 
 用法：
-    .venv/bin/python scripts/headless_simulation_build.py
-    .venv/bin/python scripts/headless_simulation_build.py sepsis_bedside pe_risk
+    .venv/bin/python dev/simulation/headless_build.py
+    .venv/bin/python dev/simulation/headless_build.py sepsis_bedside pe_risk
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import time
 import uuid
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from loguru import logger

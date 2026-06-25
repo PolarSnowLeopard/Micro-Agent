@@ -1,3 +1,5 @@
+"""开发期验收：BuildBundle 落盘与 artifact 编译（伪造 trace，非 CI unit test）。"""
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,6 +121,13 @@ class SimulationBuildBundleTest(unittest.TestCase):
         self.assertEqual(accepted["schemaVersion"], "accepted_trajectory.v1")
         self.assertEqual(accepted["status"], "accepted")
         self.assertEqual(len(accepted["actionSequence"]), 1)
+        self.assertEqual(
+            artifact["taskContract"]["inputSlots"],
+            [
+                {"name": "weight_kg", "type": "integer", "required": True},
+                {"name": "renal_function", "type": "string", "required": True},
+            ],
+        )
         self.assertEqual(len(artifact["goldenPaths"]), 1)
         self.assertTrue(artifact["goldenPaths"][0]["primary"])
 
