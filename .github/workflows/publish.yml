@@ -7,6 +7,10 @@ on:
 jobs:
   publish:
     name: Build & Publish
+    # Platform production releases use vYYYY.MM.DD and should only deploy Docker.
+    # PyPI package releases must use sdk-vX.Y.Z to avoid weekly platform releases
+    # publishing the Python SDK by accident.
+    if: startsWith(github.event.release.tag_name, 'sdk-v')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
