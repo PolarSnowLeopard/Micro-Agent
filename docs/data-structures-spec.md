@@ -1,6 +1,6 @@
 # 仿真构建数据结构规格
 
-更新：2026-06-22。本文定义 BuildBundle 主线对象边界与 JSON 形状。
+更新：2026-06-28。本文定义当前最小构建链的对象边界。
 
 ## 一、输入边界
 
@@ -11,23 +11,19 @@
   "appId": "",
   "appName": "元应用",
   "domain": "generic",
-  "serviceIds": [],
   "servicesMeta": [],
   "maxIterations": 5,
   "scenarioDescription": "",
-  "scenarioSummary": "",
-  "scenarioParsed": {},
-  "mode": "production",
-  "strategy": {}
+  "scenarioParsed": {}
 }
 ```
 
 字段说明：
 
-- `serviceIds`：用户/前端已给定的候选服务 id，可作为 fallback 选择依据。
-- `servicesMeta`：已知 MCP service catalog。当前服务选择只在这里面做，不访问后端服务池。
-- `scenarioParsed`：如果已有结构化想定可直接传入；否则 MicroAgent 尝试解析自然语言。
-- `strategy`：研究配置入口。当前慢模式仍以 ReAct/tool-calling 为主，部分策略只影响日志或 fallback 行为。
+- `servicesMeta`：**元应用可调度服务边界**（推荐智能体据想定从服务池绑定后的 catalog）。仿真构建只在此集合内调度；不在此模块内查服务池。
+- `scenarioParsed`：构建前形成的结构化想定；构建模块只规范化，不再次调用 LLM 解析。
+
+**阶段划分**：服务池匹配与边界确定发生在构建前的 **服务推荐**（ioeb → `mcp_service_recommendation`）。本模块（仿真构建）接收 `servicesMeta` 后，在边界内做多轮调度与 Verifier 验收，并编译 GoldenPath（可为绑定集合的真子集）。详见 ioeb `design_docs/simulation-build-design.md` §二。
 
 本模块不做服务发现、开源项目下载、算法开发、MCP 自动封装、MCP 自动部署、服务池数据库修改。
 
@@ -39,14 +35,12 @@
 workspace/data/simulation_builds/{buildId}/
   manifest.json
   trace.json
-  service_selection.json
   accepted_trajectory.json
   artifact.json
-  frontend_state.json
-  experiment/
+  experiment/                  # 运行实验后才创建
 ```
 
-`manifest.json` 是构建侧索引，保存各文件路径和 hash。最终 `artifact.json` 不反向引用 trace、accepted trajectory、service selection、verifier event 或 experiment result。
+`manifest.json` 最后原子写入，是 Bundle 已就绪的提交标志；保存文件路径、`artifactHash`、`publishable` 和本地 API 引用。`artifact.json` 不反向引用 trace、accepted trajectory、verifier event 或 experiment result。
 
 ## 三、BuildTrace
 
@@ -61,8 +55,6 @@ workspace/data/simulation_builds/{buildId}/
   "session_id": "build-...",
   "app_name": "",
   "domain": "health",
-  "mode": "production",
-  "strategy": {},
   "events": [],
   "success": true,
   "iterations": 2,
@@ -99,37 +91,7 @@ workspace/data/simulation_builds/{buildId}/
 
 `service_calling`、`planner_decision`、SSE 展示事件都不是调用事实源。
 
-## 四、ServiceSelectionReport
-
-`service_selection.json` 是构建期中间数据，不进入最终产物。
-
-它回答“为什么从已知服务池里选择这些服务”：
-
-```json
-{
-  "schemaVersion": "service_selection_report.v1",
-  "selectionId": "sel-...",
-  "strategy": "llm_catalog_selection",
-  "selectedServices": [
-    {
-      "serviceId": "medical-calc",
-      "serviceName": "Medical Calc",
-      "reason": "...",
-      "matchedCapabilities": []
-    }
-  ],
-  "rejectedServices": [],
-  "missingCapabilities": [],
-  "rationale": "",
-  "confidence": null,
-  "model": "",
-  "createdAt": ""
-}
-```
-
-当 LLM 服务选择失败时，`strategy` 会变为 `provided_catalog_fallback`。
-
-## 五、AcceptedTrajectory
+## 四、AcceptedTrajectory
 
 `accepted_trajectory.json` 是 Verifier 接受的成功主干，不入库、不进入最终产物。
 
@@ -184,7 +146,7 @@ workspace/data/simulation_builds/{buildId}/
 
 注意：`accepted_trajectory.json` 当前只表达“最终成功轮次中被接受的业务调用事实”，不表达“最优轨迹”。它不会自动删除同一工具的无效重复调用、参数试错、失败调用或无产出的 discover/schema 探索。后续若引入轨迹优化，应新增显式编译阶段和字段/文件，例如 `optimized_trajectory` 或 GoldenPath 编译报告；优化阶段必须能说明每个删除动作的依据，不能只靠前端展示去重。
 
-## 六、MetaAppArtifact
+## 五、MetaAppArtifact
 
 `artifact.json` 是最终最小运行产物。这里的“最小”不是把所有构建信息塞成一个 JSON，而是只保留运行闭包：
 
@@ -194,6 +156,8 @@ workspace/data/simulation_builds/{buildId}/
 - `goldenPaths`：可选快路径；没有可接受成功主干时为空。
 
 `artifact.json` 顶层仅包含：`schemaVersion`、`artifactId`、`app`、`taskContract`、`runtime`、`goldenPaths`。构建事实、解释、审计和实验数据留在 BuildBundle 其它文件中，不写入 artifact。
+
+`artifactId` 由除自身外的完整可执行内容计算，GoldenPath、绑定或运行策略变化都会产生新 ID；同一内容可用 `artifactHash` 做完整性校验。
 
 结构：
 
@@ -248,39 +212,19 @@ GoldenPath step 当前包含：
 }
 ```
 
-## 七、FrontendState
-
-`frontend_state.json` 是当前 ioeb 临时展示投影，不是最终产物：
-
-```json
-{
-  "schemaVersion": "simulation_frontend_state.v1",
-  "buildId": "build-...",
-  "app": {},
-  "taskContract": {},
-  "serviceSelection": {},
-  "acceptedTrajectorySummary": {},
-  "artifactSummary": {},
-  "callChain": [],
-  "events": {},
-  "completion": {},
-  "artifact": {}
-}
-```
-
-## 八、运行与实验
+## 六、运行与实验
 
 平台临时运行入口：
 
 ```text
-POST /api/simulation/builds/{buildId}/run
+POST /api/simulation/{buildId}/run
 ```
 
 科研实验入口：
 
 ```text
 GET  /api/simulation/experiments/runners
-POST /api/simulation/builds/{buildId}/experiments/run
+POST /api/simulation/{buildId}/experiments/run
 python -m micro_agent.simulation.experiments {buildId} --tasks tasks.json
 ```
 

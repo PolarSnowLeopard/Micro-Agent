@@ -28,7 +28,6 @@ workspace/temp/
 # 调试用脚本与 demo
 tests/e2e_demo.py
 tests/bench_rag_quality.py
-tests/fixtures/
 demo/
 
 # Local agent/editor configuration (never commit)

@@ -6,7 +6,6 @@ workspace/data/simulation_builds/{buildId}.
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any
 
@@ -21,7 +20,7 @@ from micro_agent.simulation.experiments import (
     list_experiment_runners,
     run_experiment_for_build,
 )
-from micro_agent.simulation.orchestrator import SimulationOrchestrator
+from micro_agent.simulation.orchestrator import SimulationEvent, SimulationOrchestrator
 from micro_agent.simulation.trace_records import (
     build_tool_call_record_events,
     build_trace_metadata,
@@ -37,14 +36,10 @@ class SimulationStartRequest(BaseModel):
     appId: str = ""
     appName: str = "元应用"
     domain: str = "generic"
-    serviceIds: list[str] = Field(default_factory=list)
     servicesMeta: list[dict] = Field(default_factory=list)
     maxIterations: int = 5
     scenarioDescription: str = ""
-    scenarioSummary: str = ""
     scenarioParsed: dict = Field(default_factory=dict)
-    mode: str = "production"
-    strategy: dict = Field(default_factory=dict)
 
 
 class ExperimentRunRequest(BaseModel):
@@ -64,14 +59,13 @@ class CompareRequest(BaseModel):
 @router.post("/start")
 async def start_simulation(req: SimulationStartRequest):
     build_id = f"build-{uuid.uuid4().hex[:12]}"
-    _sessions[build_id] = {"config": req.dict(), "orchestrator": None}
+    _sessions[build_id] = {"config": req.model_dump(), "orchestrator": None}
     return {
         "success": True,
         "sessionId": build_id,
         "buildId": build_id,
         "streamUrl": f"/api/simulation/{build_id}/stream",
         "buildRef": build_ref(build_id),
-        "artifactRef": build_ref(build_id),
     }
 
 
@@ -87,54 +81,90 @@ async def simulation_stream(build_id: str):
     cfg = session["config"]
 
     async def generate():
-        final_success = False
-        final_iterations = 0
-        final_elapsed = 0
+        terminal_event: SimulationEvent | None = None
+        save_attempted = False
 
-        try:
-            async for event in orchestrator.run():
-                trace_events.append(event.to_dict())
-                if event.type == "complete":
-                    final_success = bool(event.data.get("success"))
-                    metrics = event.data.get("metrics") or {}
-                    final_iterations = int(metrics.get("iterations") or 0)
-                    final_elapsed = int(metrics.get("elapsedMs") or 0)
-                    ref = build_ref(build_id)
-                    event.data["buildId"] = build_id
-                    event.data["buildRef"] = ref
-                    event.data["artifactRef"] = ref
-                    result = event.data.get("result")
-                    if isinstance(result, dict):
-                        result["buildId"] = build_id
-                        result["buildRef"] = ref
-                        result["artifactRef"] = ref
-                yield event.to_sse()
-        finally:
+        def make_trace() -> dict[str, Any]:
+            terminal = terminal_event.data if terminal_event else {}
+            metrics = terminal.get("metrics") or {}
+            success = bool(terminal.get("success"))
+            cancelled = bool(terminal.get("cancelled"))
             try:
-                tool_events = build_tool_call_record_events(orchestrator._collect_call_records())
+                tool_events = build_tool_call_record_events(orchestrator.call_records())
             except Exception as exc:
                 logger.warning(f"collect tool call records failed: {exc}")
                 tool_events = []
-
-            trace = {
+            return {
                 "schemaVersion": "build_trace.v1",
                 "build_id": build_id,
                 "session_id": build_id,
                 "app_name": cfg.get("appName", ""),
                 "domain": cfg.get("domain", ""),
-                "mode": cfg.get("mode", "production"),
-                "strategy": cfg.get("strategy", {}),
                 "events": trace_events + tool_events,
-                "success": final_success,
-                "iterations": final_iterations,
-                "elapsed_ms": final_elapsed,
+                "success": success,
+                "cancelled": cancelled,
+                "terminalStatus": "CANCELLED" if cancelled else "SUCCEEDED" if success else "FAILED",
+                "iterations": int(metrics.get("iterations") or 0),
+                "elapsed_ms": int(metrics.get("elapsedMs") or 0),
                 "metadata": build_trace_metadata(cfg, len(tool_events)),
             }
+
+        try:
+            async for event in orchestrator.run():
+                trace_events.append(event.to_dict())
+                if event.type == "complete":
+                    terminal_event = event
+                    continue
+                yield event.to_sse()
+
+            if terminal_event is None:
+                terminal_event = SimulationEvent("complete", {
+                    "success": False,
+                    "metrics": {"iterations": 0, "elapsedMs": 0},
+                    "result": {"error": "构建未产生终止事件"},
+                })
+                trace_events.append(terminal_event.to_dict())
+
+            save_attempted = True
             try:
-                manifest = _store.save_from_trace(trace)
+                manifest = _store.save_from_trace(make_trace())
                 logger.info(f"BuildBundle saved: {manifest['buildId']}")
             except Exception as exc:
                 logger.error(f"BuildBundle save failed: {exc}", exc_info=True)
+                terminal_event.data.update({
+                    "success": False,
+                    "publishable": False,
+                    "buildId": build_id,
+                })
+                terminal_event.data["result"] = {
+                    "error": f"构建产物保存失败: {exc}",
+                    "suggestion": "请检查 Micro-Agent 工作区后重新构建",
+                }
+            else:
+                success = bool(terminal_event.data.get("success"))
+                publishable = bool(manifest.get("publishable"))
+                terminal_event.data.update({
+                    "success": success,
+                    "publishable": publishable,
+                    "buildId": build_id,
+                    "artifactId": manifest.get("artifactId"),
+                    "artifactHash": manifest.get("artifactHash"),
+                    "buildRef": manifest.get("ref") or build_ref(build_id),
+                })
+                if success and not publishable:
+                    terminal_event.data["publishError"] = {
+                        "error": "构建完成，但产物不满足预发布条件",
+                        "suggestion": "请检查最终 Verifier、AcceptedTrajectory 与服务绑定",
+                    }
+
+            yield terminal_event.to_sse()
+        finally:
+            if not save_attempted:
+                try:
+                    _store.save_from_trace(make_trace())
+                except Exception as exc:
+                    logger.error(f"partial BuildBundle save failed: {exc}", exc_info=True)
+            _sessions.pop(build_id, None)
 
     return StreamingResponse(
         generate(),
@@ -169,42 +199,27 @@ async def compare_records(req: CompareRequest):
     return {"records": records}
 
 
-@router.get("/builds")
-async def list_builds():
-    return {"builds": _store.list_builds()}
-
-
-@router.get("/builds/{build_id}/manifest")
+@router.get("/{build_id}/manifest")
 async def get_build_manifest(build_id: str):
     return _load(build_id, "manifest")
 
 
-@router.get("/builds/{build_id}/trace")
+@router.get("/{build_id}/trace")
 async def get_build_trace(build_id: str):
     return _load(build_id, "trace")
 
 
-@router.get("/builds/{build_id}/service-selection")
-async def get_service_selection(build_id: str):
-    return _load(build_id, "service_selection")
-
-
-@router.get("/builds/{build_id}/accepted-trajectory")
+@router.get("/{build_id}/accepted-trajectory")
 async def get_accepted_trajectory(build_id: str):
     return _load(build_id, "accepted_trajectory")
 
 
-@router.get("/builds/{build_id}/artifact")
+@router.get("/{build_id}/artifact")
 async def get_build_artifact(build_id: str):
     return _load(build_id, "artifact")
 
 
-@router.get("/builds/{build_id}/frontend-state")
-async def get_frontend_state(build_id: str):
-    return _load(build_id, "frontend_state")
-
-
-@router.post("/builds/{build_id}/run")
+@router.post("/{build_id}/run")
 async def run_build_artifact(build_id: str, req: ArtifactRunRequest):
     artifact = _load(build_id, "artifact")
     try:
@@ -223,7 +238,7 @@ async def get_experiment_runners():
     return {"runners": list_experiment_runners()}
 
 
-@router.post("/builds/{build_id}/experiments/run")
+@router.post("/{build_id}/experiments/run")
 async def run_build_experiment(build_id: str, req: ExperimentRunRequest):
     if not req.tasks:
         raise HTTPException(400, "tasks is required")
@@ -241,48 +256,21 @@ async def run_build_experiment(build_id: str, req: ExperimentRunRequest):
         raise HTTPException(422, str(exc)) from exc
 
 
-# Frontend-facing URLs that read parts of the BuildBundle.
-
-@router.get("/{build_id}/trace")
-async def get_trace(build_id: str):
-    return _load(build_id, "trace")
-
-
 @router.post("/{build_id}/evidence")
 async def get_evidence(build_id: str):
     manifest = _load(build_id, "manifest")
     accepted = _load(build_id, "accepted_trajectory")
-    selection = _load(build_id, "service_selection")
+    artifact = _load(build_id, "artifact")
+    bindings = (artifact.get("runtime") or {}).get("serviceBindings") or []
     return {
         "schemaVersion": "build_evidence_summary.v1",
         "overallStatus": "PASS" if accepted.get("status") == "accepted" else "WARN",
         "summary": {
             "acceptedTrajectory": accepted.get("status"),
-            "selectedServices": len(selection.get("selectedServices") or []),
+            "selectedServices": len(bindings),
             "researchEligible": manifest.get("researchEligible"),
         },
         "missingEvidence": [] if accepted.get("status") == "accepted" else ["accepted_trajectory"],
-    }
-
-
-@router.get("/{build_id}/artifact")
-async def get_artifact(build_id: str):
-    return _load(build_id, "artifact")
-
-
-@router.get("/{build_id}/frontend-state")
-async def get_legacy_frontend_state(build_id: str):
-    return _load(build_id, "frontend_state")
-
-
-@router.post("/{build_id}/artifact")
-async def rebuild_artifact(build_id: str):
-    manifest = _load(build_id, "manifest")
-    return {
-        "buildId": build_id,
-        "artifactId": manifest.get("artifactId"),
-        "artifactPath": str(_store.bundle_dir(build_id) / "artifact.json"),
-        "manifest": manifest,
     }
 
 

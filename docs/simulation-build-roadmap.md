@@ -1,10 +1,10 @@
 # 元应用想定式仿真构建路线图
 
-更新：2026-06-21。本文是短路线图；详细结构见 `docs/data-structures-spec.md`，详细目标缺口见 `GOAL_META_APP_SPEC.md`。
+更新：2026-06-28。本文是短路线图；详细结构见 `docs/data-structures-spec.md`，详细目标缺口见 `GOAL_META_APP_SPEC.md`。
 
 ## 当前边界
 
-只重建“元应用想定式仿真构建”这一段：
+只重建“元应用想定式仿真构建”这一段（**阶段 B**）。**阶段 A（服务推荐）** 由 ioeb + `mcp_service_recommendation` 完成，据想定确定 `servicesMeta` 可调度边界后再进入本模块。
 
 - 平台入口：ioeb 启动构建、读取 BuildBundle/MetaAppArtifact、触发 MicroAgent 本地运行。
 - 科研入口：MicroAgent 本地 runner 对比轨迹复用 baseline。
@@ -17,7 +17,7 @@
 | 主题 | 状态 |
 | --- | --- |
 | 慢模式 | 复用既有 LLM Agent/ReAct/tool-calling/MCP wrapper/Verifier |
-| 服务选择 | LLM 在请求传入的已知 catalog 内选择服务；失败回退 serviceIds/catalog |
+| 服务边界 | 推荐确定 `servicesMeta`；构建直接注册，不做第二次选择；GoldenPath 为验收通过的绑定子集 |
 | 调用事实源 | `tool_call_record` 记录真实 MCP/Sandbox 调用，带 source/phase/purpose/iteration/action_id |
 | BuildBundle | `workspace/data/simulation_builds/{buildId}` 单目录落盘 |
 | AcceptedTrajectory | 从最终 PASSED iteration 的实际业务 tool calls 提取，不进 artifact |
@@ -29,13 +29,14 @@
 
 ## 当前断点
 
-- SSE `complete` 先到达，BuildBundle 保存发生在后端 generator `finally`，前端当前需要重试读取。
+- BuildBundle/manifest 已先于 SSE `complete` 保存；`complete.publishable` 是进入预发布的终止事实。
 - baseline runner 已有，但尚未在同一任务集上批量验证四个 baseline。
 - GoldenPath 主要依赖 `argumentTemplate` 和轻量 BindingPlan，泛化数据流仍弱。
 - AcceptedTrajectory 目前是“通过主干”，不是“优化主干”；无效重复调用、参数试错、失败调用和无产出 discover/schema 探索还没有剪枝。
 - service schema/version/hash 主要来自请求侧元数据和工具列表摘要，未接正式服务池契约。
 - token/cost/LLM call count 指标未完整采集。
 - ioeb_backend 不保存 artifact、BuildBundle、GoldenPath、实验结果。
+- 本地 MCP 只供 headless/批量实验入口使用；平台构建消费入库的远程 MCP 地址。
 
 ## 下一步优先级
 

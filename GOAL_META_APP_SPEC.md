@@ -1,6 +1,6 @@
 # 当前目标：元应用想定式仿真构建下一阶段
 
-更新：2026-06-21。本文只记录当前代码已证明的状态、未闭合缺口和后续实验计划；项目长期记忆放在本地 `.codex/project-memory.md`，不入库。
+更新：2026-06-28。本文只记录当前代码已证明的状态、未闭合缺口和后续实验计划；项目长期记忆放在本地 `.codex/project-memory.md`，不入库。
 
 ## 一、真实性确认
 
@@ -13,13 +13,13 @@
 | 能力 | 当前证据 | 判断 |
 | --- | --- | --- |
 | 平台入口 | `api/routes/simulation.py` 提供 `/api/simulation/start`、`/{buildId}/stream`；ioeb `src/api/simulation_builder.js` 直连 `VUE_APP_AGENT_BASE_URL` | 已实现 |
-| LLM 服务选择 | `SimulationOrchestrator._select_services_from_catalog()` 对传入 catalog 做 LLM 选择，失败回退 `serviceIds/catalog` | 已实现，但不是后端服务池检索 |
-| 慢模式 | `SimulationOrchestrator._phase_intelligent_build()` 调用既有 `Agent.run()`，保持 ReAct/tool-calling 探索 | 已实现 |
+| 服务边界 | 推荐阶段确定 `servicesMeta`；构建模块直接注册全部给定服务，不做第二次服务选择 | 已实现 |
+| 慢模式 | `SimulationOrchestrator._build()` 调用既有 `Agent.run()`，保持 ReAct/tool-calling 探索 | 已实现 |
 | 真实 MCP 调用记录 | `LoggingMCPTool` 记录 real MCP 调用；`tool_call_record` 带 `source/phase/purpose/iteration/action_id` | 已实现 |
-| Verifier 裁判 | 构建循环中 `_stream_verification()` 决定是否进入成功分支；AcceptedTrajectory 只取最终 PASSED iteration | 已实现 |
-| BuildBundle | `BuildBundleStore.save_from_trace()` 写单 build 目录：trace、service selection、accepted trajectory、artifact、frontend state、manifest | 已实现 |
-| 产物分层 | `artifact_compiler.py` 分离 ServiceSelectionReport、AcceptedTrajectory、MetaAppArtifact | 已实现 |
-| 最小 MetaAppArtifact | `meta_app_artifact.v1` 只保留运行必要结构，不含 trace/evidence/verifier/serviceSelection | 已实现 |
+| Verifier 裁判 | 构建循环中 `_verify()` 决定是否进入成功分支；AcceptedTrajectory 只取最终 PASSED iteration | 已实现 |
+| BuildBundle | `BuildBundleStore.save_from_trace()` 写单 build 目录：trace、accepted trajectory、artifact、manifest | 已实现 |
+| 产物分层 | trace 是事实、AcceptedTrajectory 是验收主干、MetaAppArtifact 是运行闭包 | 已实现 |
+| 最小 MetaAppArtifact | `meta_app_artifact.v1` 只保留运行必要结构，不含 trace/evidence/verifier | 已实现 |
 | GoldenPath replay | `artifact_runtime.run_artifact()` 先尝试 GoldenPath，失败后回退慢模式 | 已实现 |
 | 本地实验入口 | `experiments.py` 提供 `no_reuse/raw_trace_prompt/workflow_memory/golden_path` runner | 已实现入口 |
 | ioeb 临时展示 | `simulation_builder.vue` 可展示 trace/evidence summary/artifact JSON 摘要 | 已实现临时展示 |
@@ -29,7 +29,7 @@
 以下来自此前真实本地 smoke run，不等价于批量实验结论：
 
 - Build ID: `build-c731a074a75e`
-- 服务：`medical-calc`，SSE 地址 `http://127.0.0.1:18000/sse`
+- 服务：`medical-calc`，SSE 地址 `https://fdueblab.cn/mcp-proxy/18000/sse`
 - 构建过程：第一轮 Verifier FAILED，第二轮修正后 PASSED
 - 产物：`meta_app_artifact.v1`，含 1 条 primary GoldenPath
 - replay：4 次真实 MCP 调用，约 3.2s，`fastPathSuccess=true`，`fallbackUsed=false`
@@ -38,16 +38,15 @@
 ### 3. 当前不能宣称的能力
 
 - 不能宣称已完成后端服务池自动发现/语义检索；当前只在请求传入的 catalog 内选择。
-- 不能宣称 CoW 沙箱已经实现；当前只有真实 MCP 与 demo fake MCP/SandboxTool 双通道。
+- `SandboxTool` 只处理显式 `isFake=true`；真实服务缺配置或连接失败会直接结束构建。
 - 不能宣称所有 baseline 已有效对比；当前 runner 存在，但只 smoke tested `golden_path`。
 - 不能宣称 GoldenPath 泛化能力已验证；当前 `argumentTemplate` 主要支持重放与轻量槽位覆盖。
-- 不能宣称 complete 事件后 Bundle 必定立即稳定可读；当前保存发生在 SSE generator `finally` 中，前端需要重试读取。
+- 不能宣称数据库持久化已闭合；当前 artifact 只在 MicroAgent BuildBundle 落盘，ioeb_backend 适配推迟到链路实验通过后。
 
 ## 二、当前必须补齐的工程缺口
 
 ### P0：平台最小可用性补强
 
-- 将 SSE `complete` 与 BuildBundle 保存时序收紧，或把 `artifact_ready`/轮询状态写清楚。当前前端靠重试规避竞态。
 - 为 `/run` 构造失败用例，验证 GoldenPath 失败后自动 fallback 慢模式确实可用。
 - 为 service binding 增加更可靠的 schema/version/hash 来源；当前 `schemaHash` 主要由 artifact compiler 基于工具列表计算。
 - 补齐 token usage、LLM call count、成本统计；当前实验字段可能为 `null`。
@@ -71,16 +70,9 @@
 
 ### P1：服务选择与服务契约
 
-- 当前服务选择只消费前端/请求传入 catalog；尚未连接 ioeb_backend 服务池检索。
+- 服务推荐（构建前）负责据想定确定可调度边界；构建直接消费 `servicesMeta`，不再二次选择。GoldenPath 可只固化实际通过验证的绑定子集。
 - 需要在服务封装/服务池层标准化 `service_id`、`tool_name`、`tool_key`、input schema、output schema、version/hash、source。
-- 服务选择解释必须保持为 build-time data，不进入 final artifact。
 - 正式平台复现需要 ioeb_backend 增加服务契约、schema version/hash 字段。
-
-### P1：安全与隐私
-
-- 医疗场景中的 scenario、arguments、result 可能含患者信息。
-- BuildTrace、AcceptedTrajectory、experiment result 只应保存在 MicroAgent 本地科研数据中，不进 artifact、不进 ioeb_backend、不进 git。
-- 后续需要脱敏规则、访问控制、保存周期和实验导出过滤。
 
 ### P2：正式平台化断点
 
@@ -155,7 +147,7 @@
 
 - `.codex/project-memory.md`：Codex 本地项目记忆、工作方式、设计约定，不入库。
 - `GOAL_META_APP_SPEC.md`：当前阶段目标、代码真实性确认、缺口、计划、实验设计。
-- `docs/data-structures-spec.md`：BuildBundle / BuildTrace / ServiceSelectionReport / AcceptedTrajectory / MetaAppArtifact / experiment 的结构规格。
+- `docs/data-structures-spec.md`：BuildBundle / BuildTrace / AcceptedTrajectory / MetaAppArtifact / experiment 的结构规格。
 - `docs/frontend-simulation-integration.md`：ioeb 临时展示和 API 对接说明。
 - `docs/simulation-build-roadmap.md`：较短路线图和能力概览。
 - `workspace/RECON_META_APP_READ_WRITE_CHAIN.md`：ioeb/ioeb_backend 读写链与后端断点。

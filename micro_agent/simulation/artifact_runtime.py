@@ -11,9 +11,8 @@ from loguru import logger
 from micro_agent.core.agent import Agent
 from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
-from micro_agent.core.meta_app_agent import MetaAppAgent
-from micro_agent.simulation.orchestrator import SimulationOrchestrator
-from micro_agent.simulation.trace_records import build_tool_call_record_events
+from micro_agent.simulation.service_tool_session import ServiceToolSession
+from micro_agent.simulation.trace_records import annotate_records, build_tool_call_record_events
 
 
 async def run_artifact(
@@ -58,7 +57,9 @@ async def run_artifact(
         "fastPathError": fast_result.get("error") if fast_result else None,
         "latencyMs": int((time.time() - started) * 1000),
         "result": slow_result.get("result"),
+        "error": slow_result.get("error"),
         "events": slow_result.get("events") or [],
+        "toolCalls": slow_result.get("toolCalls") or [],
     }
 
 
@@ -79,43 +80,49 @@ async def _try_golden_path(artifact: dict[str, Any], message: str) -> dict[str, 
     if missing:
         return {"success": False, "error": f"missing bindings: {missing}", "bindingPlan": binding_plan}
 
-    orch = SimulationOrchestrator(_artifact_to_simulation_config(artifact, message))
-    await orch._register_tools()
+    runtime_config = _artifact_to_simulation_config(artifact, message)
+    required_services = {step.get("serviceId") for step in path.get("steps") or []}
+    runtime_config["servicesMeta"] = [
+        service for service in runtime_config["servicesMeta"]
+        if service.get("id") in required_services
+    ]
     try:
-        tool_outputs: dict[str, Any] = {}
-        records_offset = len(orch._collect_call_records())
-        for step in path.get("steps") or []:
-            tool_name = step.get("toolName")
-            kwargs = _resolve_step_arguments(step, binding_plan, tool_outputs)
-            result = await orch._tools.execute(tool_name, **kwargs)
-            if result.error:
-                return {
-                    "success": False,
-                    "error": result.error,
-                    "bindingPlan": binding_plan,
-                    "toolCalls": build_tool_call_record_events(orch._collect_call_records()[records_offset:]),
-                }
-            observation = _parse_json_or_text(result.output)
-            if _observation_failed(observation):
-                return {
-                    "success": False,
-                    "error": f"tool observation failed at {step.get('stepId')}: {_observation_error(observation)}",
-                    "bindingPlan": binding_plan,
-                    "toolCalls": build_tool_call_record_events(orch._collect_call_records()[records_offset:]),
-                    "result": tool_outputs | {str(step.get("stepId")): observation},
-                }
-            tool_outputs[step.get("stepId")] = observation
+        async with ServiceToolSession(runtime_config["servicesMeta"]) as session:
+            await session.connect()
+            tool_outputs: dict[str, Any] = {}
+            records_offset = len(session.records())
+            for step in path.get("steps") or []:
+                tool_name = step.get("toolName")
+                kwargs = _resolve_step_arguments(step, binding_plan, tool_outputs)
+                result = await session.tools.execute(tool_name, **kwargs)
+                if result.error:
+                    return {
+                        "success": False,
+                        "error": result.error,
+                        "bindingPlan": binding_plan,
+                        "toolCalls": build_tool_call_record_events(session.records()[records_offset:]),
+                    }
+                observation = _parse_json_or_text(result.output)
+                if _observation_failed(observation):
+                    return {
+                        "success": False,
+                        "error": f"tool observation failed at {step.get('stepId')}: {_observation_error(observation)}",
+                        "bindingPlan": binding_plan,
+                        "toolCalls": build_tool_call_record_events(session.records()[records_offset:]),
+                        "result": tool_outputs | {str(step.get("stepId")): observation},
+                    }
+                tool_outputs[step.get("stepId")] = observation
 
-        records = orch._collect_call_records()[records_offset:]
-        orch._annotate_records(records, phase="golden_path_replay", purpose="replay_action")
-        return {
-            "success": True,
-            "result": tool_outputs,
-            "bindingPlan": binding_plan,
-            "toolCalls": build_tool_call_record_events(records),
-        }
-    finally:
-        await orch._mcp_conn.disconnect_all()
+            records = session.records()[records_offset:]
+            annotate_records(records, "golden_path_replay", "replay_action")
+            return {
+                "success": True,
+                "result": tool_outputs,
+                "bindingPlan": binding_plan,
+                "toolCalls": build_tool_call_record_events(records),
+            }
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "bindingPlan": binding_plan}
 
 
 async def _build_binding_plan(
@@ -151,11 +158,8 @@ async def _build_binding_plan(
             return parsed
     except Exception as exc:
         logger.warning(f"BindingPlan LLM failed: {exc}")
-    return {
-        "useGoldenPath": True,
-        "reason": "fallback binding: full task text bound to task slot",
-        "bindings": {"task": message},
-    }
+        return {"useGoldenPath": False, "reason": str(exc), "bindings": {}}
+    return {"useGoldenPath": False, "reason": "invalid_binding_plan", "bindings": {}}
 
 
 def _resolve_step_arguments(
@@ -173,55 +177,46 @@ def _resolve_step_arguments(
         elif source == "step_output":
             value = tool_outputs.get(spec.get("stepId"))
             value = _json_path(value, spec.get("path") or "$")
-        if value is None:
-            continue
-        if key in args and _is_control_argument(key):
-            continue
-        if key in args and not _binding_value_compatible(args[key], value):
-            continue
-        args[key] = value
+        if value is not None:
+            args[key] = value
     return {k: v for k, v in args.items() if v is not None}
 
 
-def _is_control_argument(key: str) -> bool:
-    return key in {"by", "tool_id", "include_references", "include_param_sources"}
-
-
-def _binding_value_compatible(template: Any, value: Any) -> bool:
-    if template is None:
-        return True
-    if isinstance(template, list):
-        if not isinstance(value, list):
-            return False
-        template_tool_ids = _tool_ids_in_calculations(template)
-        value_tool_ids = _tool_ids_in_calculations(value)
-        return not template_tool_ids or template_tool_ids == value_tool_ids
-    if isinstance(template, dict):
-        return isinstance(value, dict)
-    return isinstance(value, type(template))
-
-
-def _tool_ids_in_calculations(value: Any) -> set[str]:
-    if not isinstance(value, list):
-        return set()
-    return {
-        str(row.get("tool_id"))
-        for row in value
-        if isinstance(row, dict) and row.get("tool_id")
-    }
-
-
 async def _run_slow_mode(artifact: dict[str, Any], message: str) -> dict[str, Any]:
-    llm = LLM(config.llm)
-    agent = MetaAppAgent(llm=llm)
-    await agent.initialize_from_config(_artifact_to_meta_app_config(artifact), use_sim=False)
+    services = _artifact_to_simulation_config(artifact, message)["servicesMeta"]
+    task_contract = artifact.get("taskContract") or {}
     events = []
     result = ""
-    async for event in agent.run(message):
-        events.append(event.to_dict())
-        if event.type == "done":
-            result = event.data.get("result", "")
-    return {"success": True, "result": result, "events": events}
+    error = ""
+    completed = False
+    async with ServiceToolSession(services) as session:
+        await session.connect()
+        agent = Agent(
+            name="artifact_slow_mode",
+            llm=LLM(config.llm),
+            tools=session.tools,
+            system_prompt=(
+                "根据任务契约调用已绑定服务完成用户任务，完成后调用 terminate。\n"
+                f"任务契约: {json.dumps(task_contract, ensure_ascii=False)}"
+            ),
+            max_steps=20,
+        )
+        async for event in agent.run(message):
+            events.append(event.to_dict())
+            if event.type == "done":
+                result = event.data.get("result", "")
+                completed = event.data.get("reason") not in {"max_steps", "cancelled"}
+            elif event.type == "error":
+                error = str(event.data.get("error") or "agent_error")
+        records = session.records()
+        annotate_records(records, "slow_mode", "react_action")
+        return {
+            "success": completed and bool(result) and not error,
+            "result": result,
+            "error": error or None,
+            "events": events,
+            "toolCalls": build_tool_call_record_events(records),
+        }
 
 
 async def evaluate_with_verifier(
@@ -229,25 +224,22 @@ async def evaluate_with_verifier(
     task: str,
     run_result: dict[str, Any],
 ) -> dict[str, Any]:
-    verifier = Agent(
-        name="artifact_eval_verifier",
-        llm=LLM(config.llm),
-        system_prompt=(
-            "你是元应用实验评价 Verifier。根据任务契约、用户任务和运行输出，"
-            "判断业务语义是否满足。只输出 JSON："
-            "{\"verdict\":\"passed|failed\",\"reason\":\"...\"}"
-        ),
-        max_steps=1,
-    )
     payload = {
         "taskContract": artifact.get("taskContract") or {},
         "task": task,
         "runResult": run_result,
     }
-    text = ""
-    async for event in verifier.run(json.dumps(payload, ensure_ascii=False)):
-        if event.type in ("think", "done"):
-            text = event.data.get("thought") or event.data.get("result") or text
+    response = await LLM(config.llm).complete([
+        {
+            "role": "system",
+            "content": (
+                "根据任务契约、用户任务和运行输出判断业务语义是否满足。"
+                "只输出 JSON：{\"verdict\":\"passed|failed\",\"reason\":\"...\"}"
+            ),
+        },
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ])
+    text = response.content or ""
     parsed = _extract_json(text) or {}
     verdict = str(parsed.get("verdict") or "").lower()
     return {
@@ -268,42 +260,6 @@ def _artifact_to_simulation_config(artifact: dict[str, Any], message: str) -> di
         "domain": app.get("domain") or "generic",
         "scenarioDescription": message,
         "servicesMeta": services,
-        "serviceIds": [s.get("id") for s in services],
-        "strategy": {"sandbox": "none", "verification": "multi_agent"},
-    }
-
-
-def _artifact_to_meta_app_config(artifact: dict[str, Any]) -> dict[str, Any]:
-    app = artifact.get("app") or {}
-    task = artifact.get("taskContract") or {}
-    services = []
-    for binding in (artifact.get("runtime") or {}).get("serviceBindings") or []:
-        services.append({
-            "id": binding.get("serviceId"),
-            "name": binding.get("serviceName"),
-            "apiList": [{
-                "url": binding.get("endpoint"),
-                "method": "sse",
-                "des": binding.get("serviceName") or binding.get("serviceId"),
-                "tools": [
-                    {
-                        "id": t.get("toolName"),
-                        "name": t.get("toolName"),
-                        "description": t.get("description") or "",
-                    }
-                    for t in binding.get("tools") or []
-                ],
-            }],
-        })
-    return {
-        "info": {
-            "name": app.get("name"),
-            "des": task.get("goal") or app.get("description"),
-            "inputName": ", ".join(s.get("name") for s in task.get("inputSlots") or [] if s.get("name")) or "输入",
-            "outputName": ", ".join(s.get("name") for s in task.get("outputSlots") or [] if s.get("name")) or "输出",
-            "outputVisualization": False,
-        },
-        "services": services,
     }
 
 
@@ -311,7 +267,7 @@ def _binding_to_service_meta(binding: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": binding.get("serviceId"),
         "name": binding.get("serviceName"),
-        "isFake": binding.get("source") != "real_mcp",
+        "isFake": binding.get("isFake") is True,
         "mcpMethod": binding.get("transport") or "sse",
         "mcpUrl": binding.get("endpoint") or "",
         "tools": [

@@ -3,10 +3,11 @@
 
 读取 external-mcp/service_catalog.json 中预解析好的真实场景与服务集，
 对每个场景跑 SimulationOrchestrator，并通过 BuildBundleStore 落地一份
-BuildBundle（trace + MetaAppArtifact v1）。不走追问/推荐，不入库、不验证，
+BuildBundle（trace + MetaAppArtifact v1）。不走追问/推荐和平台入库，
 但对每个场景断言「最小可用」：
 
   - 仿真 complete 且 success=True
+  - manifest.publishable=True
   - artifact.goldenPaths 非空，且 runtime.serviceBindings 非空
   - trace 至少包含一条 source=real_mcp 的 tool_call_record
 
@@ -63,12 +64,8 @@ def build_config(catalog: dict, scenario: dict) -> dict:
         "appId": f"headless-{scenario['key']}",
         "appName": scenario["appName"],
         "domain": catalog.get("domain", "health"),
-        "mode": "production",
         "maxIterations": 2,
         "scenarioDescription": scenario["scenarioDescription"],
-        "scenarioSummary": scenario["scenarioDescription"],
-        "strategy": {"minIterations": 1, "verificationMode": "strict"},
-        "serviceIds": [s["serviceId"] for s in (by_id[i] for i in scenario["services"])],
         "servicesMeta": services_meta,
     }
 
@@ -102,7 +99,7 @@ async def run_one(scenario: dict, cfg: dict, store: BuildBundleStore) -> dict:
         logger.warning(f"orchestrator 抛出 {type(exc).__name__}: {exc}")
 
     try:
-        tool_events = build_tool_call_record_events(orch._collect_call_records())
+        tool_events = build_tool_call_record_events(orch.call_records())
     except Exception as exc:  # noqa: BLE001
         logger.debug(f"收集 tool_call_records 失败（非致命）: {exc}")
         tool_events = []
@@ -113,10 +110,10 @@ async def run_one(scenario: dict, cfg: dict, store: BuildBundleStore) -> dict:
         "session_id": build_id,
         "app_name": cfg["appName"],
         "domain": cfg["domain"],
-        "mode": cfg["mode"],
-        "strategy": cfg["strategy"],
         "events": trace_events + tool_events,
         "success": final_success,
+        "cancelled": False,
+        "terminalStatus": "SUCCEEDED" if final_success else "FAILED",
         "iterations": final_iterations,
         "elapsed_ms": final_elapsed,
         "metadata": build_trace_metadata(cfg, len(tool_events), headless=True),
@@ -144,6 +141,7 @@ async def run_one(scenario: dict, cfg: dict, store: BuildBundleStore) -> dict:
         "goldenPaths_non_empty": bool(golden_paths),
         "serviceBindings_non_empty": bool(bindings),
         "real_mcp_tool_call": len(real_calls) > 0,
+        "publishable": bool(manifest.get("publishable")),
         "researchEligible": bool(manifest.get("researchEligible")),
     }
     minimal_viable = all([
@@ -151,6 +149,7 @@ async def run_one(scenario: dict, cfg: dict, store: BuildBundleStore) -> dict:
         checks["goldenPaths_non_empty"],
         checks["serviceBindings_non_empty"],
         checks["real_mcp_tool_call"],
+        checks["publishable"],
     ])
 
     logger.info(f"    产物：{bundle_dir / 'artifact.json'}")

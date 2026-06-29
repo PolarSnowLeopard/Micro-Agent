@@ -49,7 +49,9 @@ from api.services.sse import sse_response, event_to_legacy, _sse_line
 from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.core.mcp_agent import MCPAgent
-from micro_agent.core.meta_app_agent import MetaAppAgent
+from micro_agent.core.schema import AgentEvent
+from micro_agent.meta_app import PublishedMetaAppError, load_published_artifact
+from micro_agent.simulation.artifact_runtime import run_artifact
 from micro_agent.task.base import get_task, list_tasks, render_prompt
 from micro_agent.tool.mcp.connection import ServerConfig
 
@@ -736,59 +738,47 @@ def _parse_json_form(value: str) -> list | dict | None:
 @router.post("/meta_app/run")
 async def meta_app_run(
     message: str = Form(...),
-    app_config: str = Form(...),
-    use_sim_only: Optional[str] = Form(default=None),
+    meta_app_id: str = Form(...),
 ):
     try:
-        meta_config = json.loads(app_config)
-    except Exception as e:
-        raise HTTPException(400, f"app_config 非法 JSON: {e}")
-
-    use_sim = True
-    if use_sim_only is not None:
-        use_sim = str(use_sim_only).strip().lower() in ("1", "true", "yes", "on")
-
-    llm = LLM(config.llm)
-    agent = MetaAppAgent(llm=llm)
-    await agent.initialize_from_config(meta_config, use_sim=use_sim)
-
-    ctx = await task_manager.submit(agent, message)
-    info = meta_config.get("info") or {}
-    allow_viz = info.get("outputVisualization", False)
+        artifact = await load_published_artifact(meta_app_id)
+    except PublishedMetaAppError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
     async def generate():
         yield _sse_line({"status": "start"})
-        finalized_payload = None
-        last_action_result = None
+        try:
+            result = await run_artifact(
+                artifact,
+                message,
+                prefer_golden_path=False,
+            )
+        except Exception as exc:
+            yield _sse_line({"error": str(exc)})
+            return
 
-        async for event in ctx.subscribe():
-            if event.type == "tool_result":
-                tool_name = event.data.get("tool", "").lower()
-                output = event.data.get("result", "")
-                if tool_name == "finalize_meta_result":
-                    try:
-                        finalized_payload = json.loads(output)
-                    except Exception:
-                        pass
-                elif tool_name not in ("terminate",):
-                    last_action_result = output
+        for row in result.get("events") or []:
+            if not isinstance(row, dict):
+                continue
+            event = AgentEvent(
+                type=row.get("type") or "log",
+                step=int(row.get("step") or 0),
+                data=row.get("data") or {},
+            )
             yield _sse_line(event_to_legacy(event))
 
-        if finalized_payload and isinstance(finalized_payload, dict):
-            text_result = finalized_payload.get("text_result")
-            viz = finalized_payload.get("visualization_data") if allow_viz else None
-            file_result = finalized_payload.get("file_result")
-        else:
-            text_result = last_action_result
-            viz = None
-            file_result = None
+        text_result = result.get("result")
+        if text_result is not None and not isinstance(text_result, str):
+            text_result = json.dumps(text_result, ensure_ascii=False)
+        if not result.get("success"):
+            yield _sse_line({"error": result.get("error") or "元应用执行失败"})
 
         yield _sse_line({
             "is_final_result": True,
             "final_results": {
                 "text_result": text_result,
-                "visualization_data": viz,
-                "file_result": file_result,
+                "visualization_data": None,
+                "file_result": None,
             },
         })
 

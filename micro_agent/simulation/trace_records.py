@@ -4,9 +4,37 @@ from __future__ import annotations
 
 import hashlib
 import platform
+from dataclasses import dataclass
 from typing import Any
 
-from micro_agent.simulation.sandbox_tool import ToolCallRecord
+
+@dataclass
+class ToolCallRecord:
+    tool_name: str
+    service_id: str
+    arguments: dict
+    result: str
+    error: str | None
+    latency_ms: int
+    timestamp: float
+    call_id: str = ""
+    service_name: str = ""
+    channel: str = "unknown"
+    transport: str = "unknown"
+    success: bool = True
+    source: str = ""
+    phase: str = ""
+    purpose: str = ""
+    iteration: int | None = None
+    react_step_id: str = ""
+    action_id: str = ""
+
+
+def annotate_records(records: list[ToolCallRecord], phase: str, purpose: str) -> None:
+    for record in records:
+        record.phase = record.phase or phase
+        record.purpose = record.purpose or purpose
+        record.source = record.source or record.channel
 
 
 def build_tool_call_record_events(records: list[ToolCallRecord]) -> list[dict]:
@@ -56,11 +84,9 @@ def build_trace_metadata(cfg: dict[str, Any], tool_call_count: int, *, headless:
             "appId": cfg.get("appId", ""),
             "appName": cfg.get("appName", ""),
             "domain": cfg.get("domain", ""),
-            "serviceIds": cfg.get("serviceIds", []),
             "servicesMeta": cfg.get("servicesMeta", []),
             "maxIterations": cfg.get("maxIterations", 5),
             "scenarioDescription": cfg.get("scenarioDescription", ""),
-            "scenarioSummary": cfg.get("scenarioSummary", ""),
             "scenarioParsed": cfg.get("scenarioParsed", {}),
         },
         "runtime": runtime,

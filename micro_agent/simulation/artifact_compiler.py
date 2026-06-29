@@ -1,26 +1,16 @@
-"""Meta-app build compiler.
-
-Compiles BuildBundle construction records into three separate objects:
-
-- ServiceSelectionReport: build-time explanation, never part of the artifact.
-- AcceptedTrajectory: verifier-accepted action spine, never part of the artifact.
-- MetaAppArtifact: the minimal runnable meta-app product (`meta_app_artifact.v1`).
-"""
+"""把构建事实编译为验收轨迹和可运行元应用配置。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import re
-import time
-from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 
 ARTIFACT_SCHEMA = "meta_app_artifact.v1"
 ACCEPTED_TRAJECTORY_SCHEMA = "accepted_trajectory.v1"
-SERVICE_SELECTION_SCHEMA = "service_selection_report.v1"
 
 DEFAULT_FALLBACK_POLICY = {
     "onApplicabilityMismatch": "run_slow_mode",
@@ -30,97 +20,9 @@ DEFAULT_FALLBACK_POLICY = {
 }
 
 
-@dataclass
-class MetaAppArtifact:
-    schemaVersion: str
-    artifactId: str
-    app: dict[str, Any]
-    taskContract: dict[str, Any]
-    runtime: dict[str, Any]
-    goldenPaths: list[dict[str, Any]] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class CompiledBuild:
-    buildId: str
-    serviceSelection: dict[str, Any]
-    acceptedTrajectory: dict[str, Any]
-    artifact: dict[str, Any]
-    frontendState: dict[str, Any]
-
-
 def stable_hash(data: Any) -> str:
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def compile_build(trace: dict[str, Any]) -> CompiledBuild:
-    """Compile all new build objects from a single BuildTrace dict."""
-    build_id = _build_id(trace)
-    service_selection = build_service_selection_report(trace)
-    accepted = build_accepted_trajectory(trace)
-    artifact = build_meta_app_artifact(trace, accepted)
-    frontend = build_frontend_state(trace, service_selection, accepted, artifact)
-    return CompiledBuild(
-        buildId=build_id,
-        serviceSelection=service_selection,
-        acceptedTrajectory=accepted,
-        artifact=artifact,
-        frontendState=frontend,
-    )
-
-
-def compile_artifact_spec(trace: dict[str, Any], pipeline_result: Any | None = None) -> MetaAppArtifact:
-    """Compatibility name for callers; returns the new minimal artifact object.
-
-    `pipeline_result` is ignored by design. Evidence/diagnostics are build-time
-    data and do not affect the final runnable artifact.
-    """
-    return MetaAppArtifact(**compile_build(trace).artifact)
-
-
-def build_service_selection_report(trace: dict[str, Any]) -> dict[str, Any]:
-    for ev in trace.get("events", []):
-        if ev.get("type") == "service_selection":
-            data = ev.get("data") or {}
-            if isinstance(data, dict):
-                return data
-
-    cfg = _config(trace)
-    services = list(cfg.get("servicesMeta") or [])
-    requested = {str(x) for x in cfg.get("serviceIds") or [] if x}
-    selected = []
-    rejected = []
-    for svc in services:
-        sid = str(svc.get("id") or "")
-        row = {
-            "serviceId": sid,
-            "serviceName": svc.get("name") or sid,
-            "reason": "fallback selection from provided serviceIds" if requested else "fallback selection from provided catalog",
-            "matchedCapabilities": _tool_names_from_meta(svc),
-        }
-        if not requested or sid in requested:
-            selected.append(row)
-        else:
-            rejected.append({
-                "serviceId": sid,
-                "serviceName": svc.get("name") or sid,
-                "reason": "not listed in requested serviceIds",
-            })
-    return {
-        "schemaVersion": SERVICE_SELECTION_SCHEMA,
-        "selectionId": _short_id("sel", stable_hash(selected)),
-        "strategy": "provided_catalog_fallback",
-        "selectedServices": selected,
-        "rejectedServices": rejected,
-        "missingCapabilities": [],
-        "rationale": "LLM service selection was not available; used provided service ids/catalog.",
-        "model": None,
-        "createdAt": _now(),
-    }
 
 
 def build_accepted_trajectory(trace: dict[str, Any]) -> dict[str, Any]:
@@ -214,12 +116,11 @@ def build_meta_app_artifact(trace: dict[str, Any], accepted: dict[str, Any]) -> 
         "domain": trace.get("domain") or cfg.get("domain") or scenario.get("domain") or "generic",
         "description": scenario.get("description") or cfg.get("scenarioDescription") or "",
     }
-    service_bindings = _runtime_service_bindings(trace, accepted)
+    service_bindings = _runtime_service_bindings(trace)
     task_contract = _task_contract(app, scenario, accepted)
     golden_paths = _golden_paths(accepted, task_contract)
     artifact = {
         "schemaVersion": ARTIFACT_SCHEMA,
-        "artifactId": _short_id("app", stable_hash({"app": app, "task": task_contract, "services": service_bindings})),
         "app": app,
         "taskContract": task_contract,
         "runtime": {
@@ -233,66 +134,8 @@ def build_meta_app_artifact(trace: dict[str, Any], accepted: dict[str, Any]) -> 
         },
         "goldenPaths": golden_paths,
     }
-    return artifact
-
-
-def build_frontend_state(
-    trace: dict[str, Any],
-    service_selection: dict[str, Any],
-    accepted: dict[str, Any],
-    artifact: dict[str, Any],
-) -> dict[str, Any]:
-    events = trace.get("events") or []
-    tool_calls = _tool_records(trace)
-    complete = next((e.get("data") for e in reversed(events) if e.get("type") == "complete"), {})
-    return {
-        "schemaVersion": "simulation_frontend_state.v1",
-        "buildId": _build_id(trace),
-        "app": artifact.get("app") or {},
-        "taskContract": artifact.get("taskContract") or {},
-        "serviceSelection": service_selection,
-        "acceptedTrajectorySummary": {
-            "trajectoryId": accepted.get("trajectoryId"),
-            "status": accepted.get("status"),
-            "acceptedIteration": accepted.get("acceptedIteration"),
-            "actionCount": len(accepted.get("actionSequence") or []),
-            "bindingGaps": accepted.get("bindingGaps") or [],
-        },
-        "artifactSummary": {
-            "artifactId": artifact.get("artifactId"),
-            "schemaVersion": artifact.get("schemaVersion"),
-            "runtimeMode": (artifact.get("runtime") or {}).get("mode"),
-            "goldenPathCount": len(artifact.get("goldenPaths") or []),
-        },
-        "callChain": [
-            f"{c.get('service_name') or c.get('service_id')} · {c.get('tool_name')}"
-            for c in tool_calls if _is_business_action(c)
-        ],
-        "events": {
-            "count": len(events),
-            "toolCallCount": len(tool_calls),
-            "verifierResults": [
-                e.get("data") for e in events if e.get("type") == "verifier_result"
-            ],
-        },
-        "completion": complete or {},
-        "artifact": artifact,
-    }
-
-
-def attach_artifact_hash_to_accepted(
-    accepted: dict[str, Any],
-    *,
-    artifact_id: str,
-    artifact_hash: str,
-) -> dict[str, Any]:
-    updated = json.loads(json.dumps(accepted, ensure_ascii=False))
-    updated["generatedArtifact"] = {
-        "artifactId": artifact_id,
-        "artifactHash": artifact_hash,
-        "recordedAt": _now(),
-    }
-    return updated
+    artifact_id = _short_id("app", stable_hash(artifact))
+    return {"schemaVersion": ARTIFACT_SCHEMA, "artifactId": artifact_id, **artifact}
 
 
 def _golden_paths(accepted: dict[str, Any], task_contract: dict[str, Any]) -> list[dict[str, Any]]:
@@ -377,19 +220,9 @@ def _task_contract(app: dict[str, Any], scenario: dict[str, Any], accepted: dict
     }
 
 
-def _runtime_service_bindings(trace: dict[str, Any], accepted: dict[str, Any]) -> list[dict[str, Any]]:
+def _runtime_service_bindings(trace: dict[str, Any]) -> list[dict[str, Any]]:
     cfg = _config(trace)
     services = {str(s.get("id") or ""): s for s in cfg.get("servicesMeta") or []}
-    action_services = {str(a.get("serviceId") or "") for a in accepted.get("actionSequence") or []}
-    selected = set()
-    report = build_service_selection_report(trace)
-    for row in report.get("selectedServices") or []:
-        if row.get("serviceId"):
-            selected.add(str(row.get("serviceId")))
-    if action_services:
-        selected.update(action_services)
-    if not selected:
-        selected = set(services)
 
     calls_by_service: dict[str, list[dict[str, Any]]] = {}
     for call in _tool_records(trace):
@@ -397,7 +230,7 @@ def _runtime_service_bindings(trace: dict[str, Any], accepted: dict[str, Any]) -
         calls_by_service.setdefault(sid, []).append(call)
 
     bindings = []
-    for sid in sorted(s for s in selected if s):
+    for sid in sorted(s for s in services if s):
         svc = services.get(sid, {})
         calls = calls_by_service.get(sid, [])
         tools = []
@@ -424,6 +257,7 @@ def _runtime_service_bindings(trace: dict[str, Any], accepted: dict[str, Any]) -
         bindings.append({
             "serviceId": sid,
             "serviceName": svc.get("name") or sid,
+            "isFake": _is_fake(svc),
             "source": "demo_fake_mcp" if _is_fake(svc) else "real_mcp",
             "transport": _transport(svc),
             "endpoint": svc.get("mcpUrl") or svc.get("url") or "",
@@ -505,7 +339,7 @@ def _scenario(trace: dict[str, Any]) -> dict[str, Any]:
     if isinstance(parsed, dict) and parsed:
         return parsed
     return {
-        "goal": cfg.get("scenarioSummary") or cfg.get("scenarioDescription") or "",
+        "goal": cfg.get("scenarioDescription") or "",
         "description": cfg.get("scenarioDescription") or "",
         "constraints": [],
         "acceptanceCriteria": [],
@@ -550,10 +384,7 @@ def _json_type(value: Any) -> str:
 
 
 def _is_fake(svc: dict[str, Any]) -> bool:
-    value = svc.get("isFake", svc.get("is_fake", False))
-    if isinstance(value, bool):
-        return value
-    return str(value).lower() in ("1", "true", "yes")
+    return svc.get("isFake") is True
 
 
 def _transport(svc: dict[str, Any]) -> str:
@@ -563,26 +394,10 @@ def _transport(svc: dict[str, Any]) -> str:
     return method
 
 
-def _tool_names_from_meta(svc: dict[str, Any]) -> list[str]:
-    return [
-        str(t.get("name") or t.get("id"))
-        for t in svc.get("tools") or []
-        if t and (t.get("name") or t.get("id"))
-    ]
-
-
 __all__ = [
     "ARTIFACT_SCHEMA",
     "ACCEPTED_TRAJECTORY_SCHEMA",
-    "SERVICE_SELECTION_SCHEMA",
-    "MetaAppArtifact",
-    "CompiledBuild",
-    "compile_build",
-    "compile_artifact_spec",
-    "build_service_selection_report",
     "build_accepted_trajectory",
     "build_meta_app_artifact",
-    "build_frontend_state",
-    "attach_artifact_hash_to_accepted",
     "stable_hash",
 ]

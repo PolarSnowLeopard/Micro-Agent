@@ -54,6 +54,12 @@ class SkillsConfig:
 
 
 @dataclass
+class PlatformConfig:
+    ioeb_api_base_url: str = "http://127.0.0.1:5000/api"
+    request_timeout: float = 10.0
+
+
+@dataclass
 class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     llm_profiles: dict[str, LLMConfig] = field(default_factory=dict)
@@ -61,6 +67,7 @@ class AppConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     rag: RAGConfig = field(default_factory=RAGConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
+    platform: PlatformConfig = field(default_factory=PlatformConfig)
     workspace: Path = field(default_factory=lambda: PROJECT_ROOT / "workspace")
 
     def get_llm(self, profile: str = "default") -> LLMConfig:
@@ -98,6 +105,7 @@ class AppConfig:
         _apply_dict(cfg.memory, data.get("memory", {}))
         _apply_dict(cfg.rag, data.get("rag", {}))
         _apply_dict(cfg.skills, data.get("skills", {}))
+        _apply_dict(cfg.platform, data.get("platform", {}))
 
         # 环境变量覆盖 default profile
         _apply_env(cfg.llm, "model", "LLM_MODEL")
@@ -106,6 +114,8 @@ class AppConfig:
         _apply_env(cfg.llm, "temperature", "LLM_TEMPERATURE", float)
         _apply_env(cfg.llm, "max_tokens", "LLM_MAX_TOKENS", int)
         _apply_env(cfg.agent, "max_steps", "AGENT_MAX_STEPS", int)
+        _apply_env(cfg.platform, "ioeb_api_base_url", "IOEB_API_BASE_URL")
+        _apply_env(cfg.platform, "request_timeout", "IOEB_REQUEST_TIMEOUT", float)
 
         # 非 default profile 若未单独配置 api_key/base_url，则继承 default
         for name, prof in cfg.llm_profiles.items():

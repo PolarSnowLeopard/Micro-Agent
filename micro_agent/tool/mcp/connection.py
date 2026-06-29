@@ -7,16 +7,16 @@
 from __future__ import annotations
 
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from loguru import logger
 
 from mcp import ClientSession, StdioServerParameters
-from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
+from micro_agent.tool.mcp.sse_transport import sse_client
 from micro_agent.tool.mcp.tool import MCPTool
 
 
@@ -108,7 +108,7 @@ class MCPConnectionManager:
 
     async def disconnect_all(self) -> None:
         """断开所有服务器连接。"""
-        for sid in list(self._sessions):
+        for sid in reversed(self.server_ids()):
             await self.disconnect(sid)
 
     def get_session(self, server_id: str) -> Optional[ClientSession]:

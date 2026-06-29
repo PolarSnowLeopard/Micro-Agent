@@ -1,10 +1,10 @@
 # ioeb/ioeb_backend 读写链当前断点
 
-更新：2026-06-21。
+更新：2026-06-28。
 
 当前实现不写回 `ioeb_backend`，不修改数据库。MicroAgent 侧 `BuildBundle` 是仿真构建与科研实验的唯一落盘单位。
 
-注意：当前 SSE `complete` 事件由 stream 先发出，BuildBundle 写入发生在 MicroAgent generator 的 `finally` 中。ioeb 当前通过重试读取规避竞态；后续若要严格平台化，应增加 `artifact_ready`/build status 或调整后端时序。
+SSE `complete` 只在 BuildBundle/manifest 保存完成后发出；ioeb 不再依赖读取重试判断产物是否就绪。
 
 ## 当前可用链路
 
@@ -14,8 +14,8 @@ ioeb 前端
 -> MicroAgent SSE 构建
 -> workspace/data/simulation_builds/{buildId}
 -> ioeb 临时读取 JSON 展示
--> MicroAgent /builds/{buildId}/run 本地运行 artifact
--> MicroAgent /builds/{buildId}/experiments/run 本地运行科研实验
+-> MicroAgent /{buildId}/run 运行 artifact
+-> MicroAgent /{buildId}/experiments/run 运行科研实验
 ```
 
 ## MicroAgent API 读写边界
@@ -24,17 +24,15 @@ ioeb 前端
 
 - `POST /api/simulation/start` 创建 build/session。
 - `GET /api/simulation/{buildId}/stream` 执行 LLM + MCP + Verifier 构建，并在结束后写 `workspace/data/simulation_builds/{buildId}`。
-- `POST /api/simulation/builds/{buildId}/experiments/run` 写 `experiment/latest_result.json`。
+- `POST /api/simulation/{buildId}/experiments/run` 写 `experiment/latest_result.json`。
 
 读取本地 BuildBundle：
 
-- `GET /api/simulation/builds/{buildId}/manifest`
-- `GET /api/simulation/builds/{buildId}/trace`
-- `GET /api/simulation/builds/{buildId}/service-selection`
-- `GET /api/simulation/builds/{buildId}/accepted-trajectory`
-- `GET /api/simulation/builds/{buildId}/artifact`
-- `GET /api/simulation/builds/{buildId}/frontend-state`
-- `POST /api/simulation/builds/{buildId}/run`
+- `GET /api/simulation/{buildId}/manifest`
+- `GET /api/simulation/{buildId}/trace`
+- `GET /api/simulation/{buildId}/accepted-trajectory`
+- `GET /api/simulation/{buildId}/artifact`
+- `POST /api/simulation/{buildId}/run`
 
 兼容展示 URL 只读取新 BuildBundle，不支持旧 trace/artifact/evidence 存储。
 
@@ -54,7 +52,6 @@ ioeb 前端
 以下内容只属于 MicroAgent 本地构建/科研中间数据：
 
 - BuildTrace 原文；
-- ServiceSelectionReport；
 - AcceptedTrajectory；
 - BindingPlan；
 - Eval-time Verifier 详细结果；
@@ -75,7 +72,6 @@ ioeb 前端
 
 以下能力不需要后端改库，但仍是当前 MicroAgent/ioeb 链路断点：
 
-- `complete` 到 Bundle 稳定可读的时序保证；
 - 批量 baseline 实验结果导出；
 - GoldenPath 失败后 fallback 慢模式的专门失败用例验证；
 - token/cost/LLM call count 指标采集。
