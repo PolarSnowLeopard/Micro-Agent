@@ -24,7 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install ".[dev]"
 
-      - name: Run tests
+      - name: Run stable tests
         run: pytest tests/ -x -q --ignore=tests/e2e_demo.py --ignore=tests/bench_rag_quality.py
 
   build:

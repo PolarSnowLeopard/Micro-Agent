@@ -2,6 +2,15 @@
 
 用户需求：{{ message }}
 服务类型：{{ service_type }}
+{% if scenario_summary|default('') %}
+已澄清的想定摘要：{{ scenario_summary }}
+{% endif %}
+{% if scenario_parsed|default('') %}
+结构化想定（scenarioParsed）：{{ scenario_parsed }}
+{% endif %}
+{% if user_remark|default('') %}
+用户备注（preDes，一句话）：{{ user_remark }}
+{% endif %}
 
 你需要完成以下任务：
 
@@ -21,7 +30,7 @@
    WHERE s.type = 'atomic_mcp' AND s.domain = '{{ service_type }}' AND s.deleted = 0;
    ```
 
-3. 根据用户需求，分析哪些 MCP 服务和工具最适合用户的应用场景。
+3. 根据用户需求与已澄清想定，分析哪些 MCP 服务和工具最适合用户的应用场景。
 
 4. 推荐的服务和工具必须严格来源于数据库中的真实数据，不能编造。
 
@@ -34,7 +43,7 @@
   "success": true,
   "result": {
     "preName": "根据用户需求生成的元应用名称",
-    "preDes": "根据用户需求生成的元应用描述",
+    "preDes": "一句话备注（优先使用用户备注；勿写完整想定）",
     "preInputName": "输入数据名称",
     "preOutputName": "输出数据名称",
     "nodeList": [
@@ -49,6 +58,15 @@
       }
     ]
   }
+}
+```
+
+如果没有合适的服务，`result` 为面向用户的自然语言说明：
+
+```json
+{
+  "success": false,
+  "result": "根据实际查询结果说明无法推荐的原因"
 }
 ```
 

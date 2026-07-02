@@ -1,17 +1,12 @@
-"""仿真构建路由：启动仿真、SSE 事件流、轨迹查询。
+"""Meta-app scenario simulation construction routes.
 
-端点与前端 simulation_builder.js HTTP 客户端一一对应：
-  POST /api/simulation/start           → 启动会话，返回 sessionId + streamUrl
-  GET  /api/simulation/{id}/stream     → SSE 命名事件流（EventSource 兼容）
-  POST /api/simulation/{id}/cancel     → 取消
-  GET  /api/simulation/records         → 列出历史轨迹
-  POST /api/simulation/records/compare → 对比
+Each simulation session produces one BuildBundle under
+workspace/data/simulation_builds/{buildId}.
 """
 
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -19,132 +14,182 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from micro_agent.core.config import config
-from micro_agent.simulation.orchestrator import SimulationOrchestrator
+from micro_agent.simulation.artifact_runtime import run_artifact
+from micro_agent.simulation.build_bundle import BuildBundleStore, build_ref
+from micro_agent.simulation.experiments import (
+    list_experiment_runners,
+    run_experiment_for_build,
+)
+from micro_agent.simulation.orchestrator import SimulationEvent, SimulationOrchestrator
 from micro_agent.simulation.trace_records import (
     build_tool_call_record_events,
     build_trace_metadata,
 )
-from micro_agent.simulation.trace_store import FileTraceStore, TraceRecord
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
+# 与 ioeb simulation_builder_data.SIMULATION_BUILD_GEN_TASKS 一致
+_GEN_PREP_TASKS = ("汇总数据", "编译产物", "准备发布")
+
 _sessions: dict[str, dict[str, Any]] = {}
+_store = BuildBundleStore()
 
-_trace_store = FileTraceStore(Path(config.workspace) / "data" / "traces")
-
-
-# --------------- Models ---------------
 
 class SimulationStartRequest(BaseModel):
     appId: str = ""
     appName: str = "元应用"
     domain: str = "generic"
-    serviceIds: list[str] = Field(default_factory=list)
     servicesMeta: list[dict] = Field(default_factory=list)
-    maxIterations: int = 3
+    maxIterations: int = 5
     scenarioDescription: str = ""
-    mode: str = "production"
-    strategy: dict = Field(default_factory=dict)
+    scenarioParsed: dict = Field(default_factory=dict)
+
+
+class ExperimentRunRequest(BaseModel):
+    tasks: list[dict] = Field(default_factory=list)
+    baselines: list[str] = Field(default_factory=list)
+
+
+class ArtifactRunRequest(BaseModel):
+    message: str
+    preferGoldenPath: bool = True
 
 
 class CompareRequest(BaseModel):
-    recordIds: list[str]
+    recordIds: list[str] = Field(default_factory=list)
 
-
-# --------------- 启动 ---------------
 
 @router.post("/start")
 async def start_simulation(req: SimulationStartRequest):
-    session_id = f"sim-{uuid.uuid4().hex[:12]}"
-    _sessions[session_id] = {
-        "config": req.dict(),
-        "orchestrator": None,
-    }
-    logger.info(f"仿真会话已创建: {session_id}")
+    build_id = f"build-{uuid.uuid4().hex[:12]}"
+    _sessions[build_id] = {"config": req.model_dump(), "orchestrator": None}
     return {
         "success": True,
-        "sessionId": session_id,
-        "streamUrl": f"/api/simulation/{session_id}/stream",
+        "sessionId": build_id,
+        "buildId": build_id,
+        "streamUrl": f"/api/simulation/{build_id}/stream",
+        "buildRef": build_ref(build_id),
     }
 
 
-# --------------- SSE 流 ---------------
-
-@router.get("/{session_id}/stream")
-async def simulation_stream(session_id: str):
-    session = _sessions.get(session_id)
+@router.get("/{build_id}/stream")
+async def simulation_stream(build_id: str):
+    session = _sessions.get(build_id)
     if not session:
         raise HTTPException(404, "session not found")
 
     orchestrator = SimulationOrchestrator(session["config"])
     session["orchestrator"] = orchestrator
-
-    trace_events: list[dict] = []
+    trace_events: list[dict[str, Any]] = []
     cfg = session["config"]
 
     async def generate():
-        final_success = False
-        final_iterations = 0
-        final_elapsed = 0
+        terminal_event: SimulationEvent | None = None
+        save_attempted = False
+
+        def make_trace() -> dict[str, Any]:
+            terminal = terminal_event.data if terminal_event else {}
+            metrics = terminal.get("metrics") or {}
+            success = bool(terminal.get("success"))
+            cancelled = bool(terminal.get("cancelled"))
+            try:
+                tool_events = build_tool_call_record_events(orchestrator.call_records())
+            except Exception as exc:
+                logger.warning(f"collect tool call records failed: {exc}")
+                tool_events = []
+            return {
+                "schemaVersion": "build_trace.v1",
+                "build_id": build_id,
+                "session_id": build_id,
+                "app_name": cfg.get("appName", ""),
+                "domain": cfg.get("domain", ""),
+                "events": trace_events + tool_events,
+                "success": success,
+                "cancelled": cancelled,
+                "terminalStatus": "CANCELLED" if cancelled else "SUCCEEDED" if success else "FAILED",
+                "iterations": int(metrics.get("iterations") or 0),
+                "elapsed_ms": int(metrics.get("elapsedMs") or 0),
+                "metadata": build_trace_metadata(cfg, len(tool_events)),
+            }
 
         try:
             async for event in orchestrator.run():
                 trace_events.append(event.to_dict())
-                yield event.to_sse()
                 if event.type == "complete":
-                    data = event.data
-                    final_success = data.get("success", False)
-                    metrics = data.get("metrics", {})
-                    final_iterations = metrics.get("iterations", 0)
-                    final_elapsed = metrics.get("elapsedMs", 0)
+                    terminal_event = event
+                    continue
+                yield event.to_sse()
+
+            if terminal_event is None:
+                terminal_event = SimulationEvent("complete", {
+                    "success": False,
+                    "metrics": {"iterations": 0, "elapsedMs": 0},
+                    "result": {"error": "构建未产生终止事件"},
+                })
+                trace_events.append(terminal_event.to_dict())
+
+            yield SimulationEvent("step", {"step": 3, "name": "方案生成"}).to_sse()
+            for index, text in enumerate(_GEN_PREP_TASKS):
+                yield SimulationEvent(
+                    "progress",
+                    {"ctx": "gen", "index": index, "text": text, "active": True},
+                ).to_sse()
+                yield SimulationEvent(
+                    "progress",
+                    {"ctx": "gen", "index": index, "text": text, "done": True},
+                ).to_sse()
+
+            save_attempted = True
+            try:
+                manifest = _store.save_from_trace(make_trace())
+                logger.info(f"BuildBundle saved: {manifest['buildId']}")
+            except Exception as exc:
+                logger.error(f"BuildBundle save failed: {exc}", exc_info=True)
+                terminal_event.data.update({
+                    "success": False,
+                    "publishable": False,
+                    "buildId": build_id,
+                })
+                terminal_event.data["result"] = {
+                    "error": f"构建产物保存失败: {exc}",
+                    "suggestion": "请检查 Micro-Agent 工作区后重新构建",
+                }
+            else:
+                success = bool(terminal_event.data.get("success"))
+                publishable = bool(manifest.get("publishable"))
+                terminal_event.data.update({
+                    "success": success,
+                    "publishable": publishable,
+                    "buildId": build_id,
+                    "artifactId": manifest.get("artifactId"),
+                    "artifactHash": manifest.get("artifactHash"),
+                    "buildRef": manifest.get("ref") or build_ref(build_id),
+                })
+                if success and not publishable:
+                    terminal_event.data["publishError"] = {
+                        "error": "构建完成，但产物不满足预发布条件",
+                        "suggestion": "请检查最终 Verifier、AcceptedTrajectory 与服务绑定",
+                    }
+
+            yield terminal_event.to_sse()
         finally:
-            tool_call_events: list[dict] = []
-            try:
-                tool_call_events = build_tool_call_record_events(
-                    orchestrator._collect_call_records()
-                )
-            except Exception as e:
-                logger.debug(f"收集 tool_call_records 失败 (non-fatal): {e}")
-
-            metadata = build_trace_metadata(cfg, len(tool_call_events))
-
-            # 合并 tool_call_record 到 trace_events 末尾
-            all_events = trace_events + tool_call_events
-
-            record = TraceRecord(
-                session_id=session_id,
-                app_name=cfg.get("appName", ""),
-                domain=cfg.get("domain", ""),
-                mode=cfg.get("mode", "production"),
-                strategy=cfg.get("strategy", {}),
-                events=all_events,
-                success=final_success,
-                iterations=final_iterations,
-                elapsed_ms=final_elapsed,
-                metadata=metadata,
-            )
-            try:
-                await _trace_store.save(record)
-            except Exception as e:
-                logger.warning(f"保存轨迹失败: {e}")
+            if not save_attempted:
+                try:
+                    _store.save_from_trace(make_trace())
+                except Exception as exc:
+                    logger.error(f"partial BuildBundle save failed: {exc}", exc_info=True)
+            _sessions.pop(build_id, None)
 
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Session-ID": session_id,
-        },
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Build-ID": build_id},
     )
 
 
-# --------------- 取消 ---------------
-
-@router.post("/{session_id}/cancel")
-async def cancel_simulation(session_id: str):
-    session = _sessions.get(session_id)
+@router.post("/{build_id}/cancel")
+async def cancel_simulation(build_id: str):
+    session = _sessions.get(build_id)
     if not session:
         raise HTTPException(404, "session not found")
     orch = session.get("orchestrator")
@@ -153,61 +198,98 @@ async def cancel_simulation(session_id: str):
     return {"success": True}
 
 
-# --------------- 轨迹查询 ---------------
-
 @router.get("/records")
 async def list_records():
-    return await _trace_store.list_all()
+    return {"records": _store.list_builds()}
 
 
 @router.post("/records/compare")
 async def compare_records(req: CompareRequest):
-    records = await _trace_store.compare(req.recordIds)
+    records = []
+    for build_id in req.recordIds:
+        item = _store.load_part(build_id, "manifest")
+        if item:
+            records.append(item)
     return {"records": records}
 
 
-@router.get("/{session_id}/trace")
-async def get_trace(session_id: str):
-    record = await _trace_store.load(session_id)
-    if not record:
-        raise HTTPException(404, "trace not found")
-    return record.to_dict()
+@router.get("/{build_id}/manifest")
+async def get_build_manifest(build_id: str):
+    return _load(build_id, "manifest")
 
 
-@router.post("/{session_id}/evidence")
-async def build_evidence(session_id: str):
-    record = await _trace_store.load(session_id)
-    if not record:
-        raise HTTPException(404, "trace not found")
+@router.get("/{build_id}/trace")
+async def get_build_trace(build_id: str):
+    return _load(build_id, "trace")
+
+
+@router.get("/{build_id}/accepted-trajectory")
+async def get_accepted_trajectory(build_id: str):
+    return _load(build_id, "accepted_trajectory")
+
+
+@router.get("/{build_id}/artifact")
+async def get_build_artifact(build_id: str):
+    return _load(build_id, "artifact")
+
+
+@router.post("/{build_id}/run")
+async def run_build_artifact(build_id: str, req: ArtifactRunRequest):
+    artifact = _load(build_id, "artifact")
     try:
-        from trace_evidence import run_pipeline
-
-        result = run_pipeline(record.to_dict())
+        return await run_artifact(
+            artifact,
+            req.message,
+            prefer_golden_path=req.preferGoldenPath,
+        )
     except Exception as exc:
-        logger.warning(f"证据分析失败 {session_id}: {exc}")
+        logger.warning(f"artifact run failed {build_id}: {exc}")
         raise HTTPException(422, str(exc)) from exc
 
-    report = result.report
-    from trace_evidence.evidence_checker import summarize_evidence_dimensions
 
-    def _check_api(c):
-        return {
-            "checkName": c.check_name,
-            "status": c.status,
-            "detail": (c.detail or "")[:240],
-            "category": c.category,
-        }
+@router.get("/experiments/runners")
+async def get_experiment_runners():
+    return {"runners": list_experiment_runners()}
 
-    checks = [_check_api(c) for c in report.checks]
-    non_pass = [c for c in checks if c["status"] != "PASS"]
+
+@router.post("/{build_id}/experiments/run")
+async def run_build_experiment(build_id: str, req: ExperimentRunRequest):
+    if not req.tasks:
+        raise HTTPException(400, "tasks is required")
+    try:
+        return await run_experiment_for_build(
+            build_id,
+            req.tasks,
+            baselines=req.baselines or None,
+            store=_store,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        logger.warning(f"experiment run failed {build_id}: {exc}")
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/{build_id}/evidence")
+async def get_evidence(build_id: str):
+    manifest = _load(build_id, "manifest")
+    accepted = _load(build_id, "accepted_trajectory")
+    artifact = _load(build_id, "artifact")
+    bindings = (artifact.get("runtime") or {}).get("serviceBindings") or []
     return {
-        "evidenceId": result.card.evidence_id,
-        "overallStatus": report.overall_status,
-        "summary": report.summary,
-        "checks": checks,
-        "failedChecks": non_pass,
-        "dimensions": summarize_evidence_dimensions(report.checks),
-        "cardSummary": result.card.summary,
-        "verification": result.card.verification,
-        "missingEvidence": result.bundle.missing_evidence,
+        "schemaVersion": "build_evidence_summary.v1",
+        "overallStatus": "PASS" if accepted.get("status") == "accepted" else "WARN",
+        "summary": {
+            "acceptedTrajectory": accepted.get("status"),
+            "selectedServices": len(bindings),
+            "researchEligible": manifest.get("researchEligible"),
+        },
+        "missingEvidence": [] if accepted.get("status") == "accepted" else ["accepted_trajectory"],
     }
+
+
+def _load(build_id: str, part: str) -> dict[str, Any]:
+    data = _store.load_part(build_id, part)
+    if data is None:
+        raise HTTPException(404, f"{part} not found for build {build_id}")
+    return data

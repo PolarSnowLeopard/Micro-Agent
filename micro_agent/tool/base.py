@@ -14,6 +14,7 @@ from typing import Any, Optional
 class ToolResult:
     output: str = ""
     error: Optional[str] = None
+    meta: Optional[dict[str, Any]] = None
 
     def __str__(self) -> str:
         return self.error if self.error else self.output

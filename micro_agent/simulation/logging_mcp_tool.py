@@ -6,7 +6,7 @@ import time
 import uuid as _uuid
 from typing import Any
 
-from micro_agent.simulation.sandbox_tool import ToolCallRecord
+from micro_agent.simulation.trace_records import ToolCallRecord
 from micro_agent.tool.base import Tool, ToolResult
 from micro_agent.tool.mcp.tool import MCPTool
 
@@ -51,6 +51,7 @@ class LoggingMCPTool(Tool):
                 channel="real_mcp",
                 transport=self._transport,
                 success=result.error is None,
+                source="real_mcp",
             )
         )
         return result

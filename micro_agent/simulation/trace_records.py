@@ -4,9 +4,37 @@ from __future__ import annotations
 
 import hashlib
 import platform
+from dataclasses import dataclass
 from typing import Any
 
-from micro_agent.simulation.sandbox_tool import ToolCallRecord
+
+@dataclass
+class ToolCallRecord:
+    tool_name: str
+    service_id: str
+    arguments: dict
+    result: str
+    error: str | None
+    latency_ms: int
+    timestamp: float
+    call_id: str = ""
+    service_name: str = ""
+    channel: str = "unknown"
+    transport: str = "unknown"
+    success: bool = True
+    source: str = ""
+    phase: str = ""
+    purpose: str = ""
+    iteration: int | None = None
+    react_step_id: str = ""
+    action_id: str = ""
+
+
+def annotate_records(records: list[ToolCallRecord], phase: str, purpose: str) -> None:
+    for record in records:
+        record.phase = record.phase or phase
+        record.purpose = record.purpose or purpose
+        record.source = record.source or record.channel
 
 
 def build_tool_call_record_events(records: list[ToolCallRecord]) -> list[dict]:
@@ -23,6 +51,12 @@ def build_tool_call_record_events(records: list[ToolCallRecord]) -> list[dict]:
                 "service_name": rec.service_name,
                 "channel": rec.channel,
                 "transport": rec.transport,
+                "source": rec.source or rec.channel,
+                "phase": rec.phase,
+                "purpose": rec.purpose,
+                "iteration": rec.iteration,
+                "react_step_id": rec.react_step_id,
+                "action_id": rec.action_id,
                 "arguments": rec.arguments,
                 "result": result_stored,
                 "result_hash": result_hash,
@@ -48,10 +82,12 @@ def build_trace_metadata(cfg: dict[str, Any], tool_call_count: int, *, headless:
         "trace_version": "v1.0.0",
         "config_snapshot": {
             "appId": cfg.get("appId", ""),
-            "serviceIds": cfg.get("serviceIds", []),
+            "appName": cfg.get("appName", ""),
+            "domain": cfg.get("domain", ""),
             "servicesMeta": cfg.get("servicesMeta", []),
-            "maxIterations": cfg.get("maxIterations", 3),
+            "maxIterations": cfg.get("maxIterations", 5),
             "scenarioDescription": cfg.get("scenarioDescription", ""),
+            "scenarioParsed": cfg.get("scenarioParsed", {}),
         },
         "runtime": runtime,
         "tool_call_count": tool_call_count,

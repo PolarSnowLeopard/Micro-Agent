@@ -72,6 +72,27 @@ async def test_mcp_connection_manager_init():
     print("[PASS] MCPConnectionManager 基础")
 
 
+async def test_mcp_connections_close_in_reverse_order():
+    """AnyIO transport scopes must unwind in reverse connection order."""
+    from micro_agent.tool.mcp.connection import MCPConnectionManager
+
+    closed = []
+
+    class Stack:
+        def __init__(self, name):
+            self.name = name
+
+        async def aclose(self):
+            closed.append(self.name)
+
+    mgr = MCPConnectionManager()
+    mgr._sessions = {"first": object(), "second": object()}
+    mgr._stacks = {"first": Stack("first"), "second": Stack("second")}
+    await mgr.disconnect_all()
+
+    assert closed == ["second", "first"]
+
+
 async def test_mcp_agent_init():
     """测试 MCPAgent 初始化（不连接真实服务器）。"""
     from micro_agent.core.mcp_agent import MCPAgent

@@ -90,6 +90,8 @@ def test_render_mcp_recommendation_template():
     )
     assert "报告生成应用" in result
     assert "atomic_mcp" in result
+    assert '"success": false' in result
+    assert '"result"' in result
 
 
 # === 2. 任务注册表 ===
