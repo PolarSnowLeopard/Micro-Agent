@@ -28,6 +28,9 @@ from micro_agent.simulation.trace_records import (
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
+# 与 ioeb simulation_builder_data.SIMULATION_BUILD_GEN_TASKS 一致
+_GEN_PREP_TASKS = ("汇总数据", "编译产物", "准备发布")
+
 _sessions: dict[str, dict[str, Any]] = {}
 _store = BuildBundleStore()
 
@@ -124,6 +127,17 @@ async def simulation_stream(build_id: str):
                     "result": {"error": "构建未产生终止事件"},
                 })
                 trace_events.append(terminal_event.to_dict())
+
+            yield SimulationEvent("step", {"step": 3, "name": "方案生成"}).to_sse()
+            for index, text in enumerate(_GEN_PREP_TASKS):
+                yield SimulationEvent(
+                    "progress",
+                    {"ctx": "gen", "index": index, "text": text, "active": True},
+                ).to_sse()
+                yield SimulationEvent(
+                    "progress",
+                    {"ctx": "gen", "index": index, "text": text, "done": True},
+                ).to_sse()
 
             save_attempted = True
             try:

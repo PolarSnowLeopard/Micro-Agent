@@ -25,10 +25,7 @@ jobs:
           pip install ".[dev]"
 
       - name: Run stable tests
-        run: pytest tests/ -x -q --ignore=tests/functional --ignore=tests/e2e_demo.py --ignore=tests/bench_rag_quality.py
-
-      - name: Run functional tests
-        run: pytest tests/functional -x -q
+        run: pytest tests/ -x -q --ignore=tests/e2e_demo.py --ignore=tests/bench_rag_quality.py
 
   build:
     name: Build & Push Image

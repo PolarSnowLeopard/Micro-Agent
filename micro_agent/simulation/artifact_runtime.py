@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
@@ -14,12 +14,17 @@ from micro_agent.core.llm import LLM
 from micro_agent.simulation.service_tool_session import ServiceToolSession
 from micro_agent.simulation.trace_records import annotate_records, build_tool_call_record_events
 
+if TYPE_CHECKING:
+    from micro_agent.data_file import FileRegistry
+
 
 async def run_artifact(
     artifact: dict[str, Any],
     message: str,
     *,
     prefer_golden_path: bool = True,
+    file_registry: FileRegistry | None = None,
+    input_file_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run a meta-app artifact once.
 
@@ -29,8 +34,12 @@ async def run_artifact(
     is used.
     """
     started = time.time()
+    input_file_ids = input_file_ids or []
+    if file_registry and input_file_ids:
+        from micro_agent.tool.data_file import data_file_context
+        message = f"{message.strip()}\n\n{data_file_context(file_registry, input_file_ids)}".strip()
     fast_result = None
-    if prefer_golden_path and artifact.get("goldenPaths"):
+    if prefer_golden_path and artifact.get("goldenPaths") and not input_file_ids:
         fast_result = await _try_golden_path(artifact, message)
         if fast_result.get("success"):
             return {
@@ -46,7 +55,7 @@ async def run_artifact(
                 "toolCalls": fast_result.get("toolCalls") or [],
             }
 
-    slow_result = await _run_slow_mode(artifact, message)
+    slow_result = await _run_slow_mode(artifact, message, file_registry)
     return {
         "schemaVersion": "artifact_run_result.v1",
         "artifactId": artifact.get("artifactId"),
@@ -182,14 +191,23 @@ def _resolve_step_arguments(
     return {k: v for k, v in args.items() if v is not None}
 
 
-async def _run_slow_mode(artifact: dict[str, Any], message: str) -> dict[str, Any]:
+async def _run_slow_mode(
+    artifact: dict[str, Any],
+    message: str,
+    file_registry: FileRegistry | None = None,
+) -> dict[str, Any]:
     services = _artifact_to_simulation_config(artifact, message)["servicesMeta"]
     task_contract = artifact.get("taskContract") or {}
     events = []
     result = ""
     error = ""
     completed = False
-    async with ServiceToolSession(services) as session:
+    from micro_agent.tool.data_file import data_file_tools
+
+    async with ServiceToolSession(
+        services,
+        local_tools=data_file_tools(file_registry) if file_registry else None,
+    ) as session:
         await session.connect()
         agent = Agent(
             name="artifact_slow_mode",
@@ -202,7 +220,10 @@ async def _run_slow_mode(artifact: dict[str, Any], message: str) -> dict[str, An
             max_steps=20,
         )
         async for event in agent.run(message):
-            events.append(event.to_dict())
+            row = event.to_dict()
+            if event.type == "tool_result" and event.data.get("tool") in {"inspect_data_file", "read_data_file"}:
+                row["data"]["result"] = "数据文件读取结果仅供当前 Agent 使用，运行记录已省略正文。"
+            events.append(row)
             if event.type == "done":
                 result = event.data.get("result", "")
                 completed = event.data.get("reason") not in {"max_steps", "cancelled"}

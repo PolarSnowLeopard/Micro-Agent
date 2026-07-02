@@ -11,7 +11,7 @@
   POST /api/agent/aml_report                 文件/URL → AML 报告生成
   POST /api/agent/aml_model_evaluation       表单+文件/URL → AML 模型评测（支持数据适配）
   POST /api/agent/aml_auto_generate            表单+文件 → 算法模型想定式开发
-  POST /api/agent/meta_app/run               表单 → 元应用执行
+  POST /api/agent/meta_app/run               表单+数据文件 → 元应用执行
   POST /api/agent/capability_describe        表单 → 能力描述翻译（直接 LLM）
   POST /api/agent/capability_chat            表单 → 引导式问答（直接 LLM）
   POST /api/agent/custom                     JSON → 自定义 prompt 任务
@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import sys
+import uuid
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -53,6 +54,7 @@ from micro_agent.core.schema import AgentEvent
 from micro_agent.meta_app import PublishedMetaAppError, load_published_artifact
 from micro_agent.simulation.artifact_runtime import run_artifact
 from micro_agent.task.base import get_task, list_tasks, render_prompt
+from micro_agent.data_file import DataFileError, FileRegistry
 from micro_agent.tool.mcp.connection import ServerConfig
 
 import tasks.builtin  # noqa: F401
@@ -737,25 +739,42 @@ def _parse_json_form(value: str) -> list | dict | None:
 
 @router.post("/meta_app/run")
 async def meta_app_run(
-    message: str = Form(...),
+    message: str = Form(default=""),
     meta_app_id: str = Form(...),
+    input_files: list[UploadFile] = File(default=[]),
 ):
     try:
         artifact = await load_published_artifact(meta_app_id)
     except PublishedMetaAppError as exc:
         raise HTTPException(422, str(exc)) from exc
 
+    registry = FileRegistry(Path(WORKSPACE) / "runtime_files", f"run_{uuid.uuid4().hex}")
+    try:
+        input_file_ids = [
+            (await registry.register(upload)).file_id
+            for upload in input_files if upload and upload.filename
+        ]
+    except DataFileError as exc:
+        registry.cleanup()
+        raise HTTPException(400, exc.payload()["error"]) from exc
+
+    request = message.strip() or ("请读取所附数据文件并完成元应用任务。" if input_file_ids else "请根据任务契约完成元应用任务。")
+
     async def generate():
-        yield _sse_line({"status": "start"})
+        yield _sse_line({"status": "start", "inputFileIds": input_file_ids})
         try:
             result = await run_artifact(
                 artifact,
-                message,
+                request,
                 prefer_golden_path=False,
+                file_registry=registry if input_file_ids else None,
+                input_file_ids=input_file_ids,
             )
         except Exception as exc:
             yield _sse_line({"error": str(exc)})
             return
+        finally:
+            registry.cleanup()
 
         for row in result.get("events") or []:
             if not isinstance(row, dict):

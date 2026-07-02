@@ -23,6 +23,13 @@ from micro_agent.simulation.trace_records import ToolCallRecord
 from micro_agent.tool.registry import ToolRegistry
 from micro_agent.tool.terminate import Terminate
 
+# 与 ioeb simulation_builder / inmemory mock 主步骤条索引一致
+_ENV_PREP_TASKS = (
+    "初始化构建会话",
+    "加载课题服务契约",
+    "准备结构化想定上下文",
+)
+
 
 @dataclass
 class SimulationEvent:
@@ -111,7 +118,7 @@ class SimulationOrchestrator:
         if not self.services_meta:
             raise _BuildFailedError("未提供可调度服务", "请先完成服务推荐")
 
-        yield SimulationEvent("step", {"step": 0, "name": "连接服务"})
+        yield SimulationEvent("step", {"step": 0, "name": "服务匹配"})
         await self._service_session.connect(self._check_cancel)
         for service in self._service_session.statuses():
             yield SimulationEvent("service", {
@@ -121,9 +128,13 @@ class SimulationOrchestrator:
                 "tools": service["tools"],
             })
         yield self._log("SUCCESS", f"已连接 {len(self.services_meta)} 个服务")
+        yield SimulationEvent("step", {"step": 1, "name": "环境准备"})
+        for index, text in enumerate(_ENV_PREP_TASKS):
+            yield SimulationEvent("progress", {"ctx": "env", "index": index, "text": text, "active": True})
+            yield SimulationEvent("progress", {"ctx": "env", "index": index, "text": text, "done": True})
 
     async def _build(self) -> AsyncIterator[SimulationEvent]:
-        yield SimulationEvent("step", {"step": 1, "name": "智能构建"})
+        yield SimulationEvent("step", {"step": 2, "name": "智能构建"})
         previous_trace: list[AgentEvent] = []
 
         for iteration in range(1, self.max_iterations + 1):

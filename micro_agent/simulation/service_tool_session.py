@@ -9,6 +9,7 @@ from micro_agent.simulation.logging_mcp_tool import LoggingMCPTool
 from micro_agent.simulation.sandbox_tool import SandboxTool
 from micro_agent.simulation.trace_records import ToolCallRecord
 from micro_agent.tool.mcp.connection import MCPConnectionManager, ServerConfig
+from micro_agent.tool.base import Tool
 from micro_agent.tool.registry import ToolRegistry
 from micro_agent.tool.terminate import Terminate
 
@@ -28,6 +29,7 @@ class ServiceToolSession:
         services: list[dict[str, Any]],
         *,
         connection: MCPConnectionManager | None = None,
+        local_tools: list[Tool] | None = None,
     ) -> None:
         self.services = services
         self.tools = ToolRegistry()
@@ -37,6 +39,9 @@ class ServiceToolSession:
         self._sandboxes: list[SandboxTool] = []
         self._statuses: list[dict[str, Any]] = []
         self._tool_names: set[str] = set()
+        self._local_tools = local_tools or []
+        for tool in self._local_tools:
+            self.tools.register(tool)
 
     async def connect(self, check_cancel: Callable[[], None] | None = None) -> None:
         for service in self.services:
@@ -56,7 +61,8 @@ class ServiceToolSession:
         return list(self._statuses)
 
     def records(self) -> list[ToolCallRecord]:
-        rows = [record for tool in self._sandboxes for record in tool.call_log]
+        rows = [record for tool in self._local_tools for record in getattr(tool, "call_log", [])]
+        rows.extend(record for tool in self._sandboxes for record in tool.call_log)
         rows.extend(
             record
             for tool in self._mcp_tools
