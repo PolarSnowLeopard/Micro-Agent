@@ -18,9 +18,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 
 import pymysql
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+# 部署（ioeb/docker-compose.yml agent volumes）：
+#   env/micro-agent.env -> /app/.env
+#   env/mysql.env       -> app/mcp/mysql_server/.env
+# 本地无 mysql.env 时 load_dotenv 无操作；有 Micro-Agent/.env 即可联调。
+# override=False：stdio 父进程已传入的 DB_* 优先。
+_APP_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(_APP_ROOT / ".env")
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("mysql_mcp_server")
