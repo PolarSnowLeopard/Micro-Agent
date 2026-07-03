@@ -26,7 +26,7 @@ _PART_FILES = {
 
 
 def build_ref(build_id: str) -> dict[str, str]:
-    base = f"/api/simulation/{build_id}"
+    base = f"/api/agent/simulation/{build_id}"
     return {
         "buildId": build_id,
         "manifestUrl": f"{base}/manifest",

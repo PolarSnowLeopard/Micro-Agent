@@ -26,7 +26,7 @@ from micro_agent.simulation.trace_records import (
     build_trace_metadata,
 )
 
-router = APIRouter(prefix="/api/simulation", tags=["simulation"])
+router = APIRouter(prefix="/api/agent/simulation", tags=["simulation"])
 
 # 与 ioeb simulation_builder_data.SIMULATION_BUILD_GEN_TASKS 一致
 _GEN_PREP_TASKS = ("汇总数据", "编译产物", "准备发布")
@@ -67,7 +67,7 @@ async def start_simulation(req: SimulationStartRequest):
         "success": True,
         "sessionId": build_id,
         "buildId": build_id,
-        "streamUrl": f"/api/simulation/{build_id}/stream",
+        "streamUrl": f"/api/agent/simulation/{build_id}/stream",
         "buildRef": build_ref(build_id),
     }
 
