@@ -19,15 +19,16 @@
    - `service_apis` - API 表，关联到 services 表
    - `service_api_tools` - 工具表，关联到 service_apis 表
 
-2. 使用以下 SQL 查询获取符合条件的服务数据：
+2. 只推荐**发布态**服务（预发布或已发布）。使用以下 SQL 查询获取符合条件的服务数据（含工具信息，用于判断服务能力是否匹配需求）：
    ```sql
-   SELECT s.id, s.name, s.attribute, s.type, s.domain, s.industry, s.scenario, s.technology, s.status, s.number, s.deleted,
-          a.name as api_name, a.url, a.method, a.des, a.parameter_type, a.response_type, a.is_fake,
-          t.id as tool_id, t.name as tool_name, t.description as tool_description
+   SELECT s.id, s.name, s.domain, s.scenario,
+          a.des,
+          t.name AS tool_name, t.description AS tool_description
    FROM services s
    LEFT JOIN service_apis a ON s.id = a.service_id
    LEFT JOIN service_api_tools t ON a.id = t.api_id
-   WHERE s.type = 'atomic_mcp' AND s.domain = '{{ service_type }}' AND s.deleted = 0;
+   WHERE s.type = 'atomic_mcp' AND s.domain = '{{ service_type }}' AND s.deleted = 0
+     AND s.status IN ('pre_release_unrated', 'pre_release_pending', 'released');
    ```
 
 3. 根据用户需求与已澄清想定，分析哪些 MCP 服务和工具最适合用户的应用场景。
@@ -38,6 +39,8 @@
 
 6. 将推荐结果按以下 JSON 格式保存到 `{{ workspace }}/temp/mcp_recommendation_result.json`：
 
+推荐结果只需包含元应用文案与**服务 ID 列表**（须为 SQL 查询结果中的真实 `services.id`）。服务名称、URL、状态、工具等由前端根据 ID 调用平台目录接口获取，请勿在 JSON 中重复填写。
+
 ```json
 {
   "success": true,
@@ -46,17 +49,9 @@
     "preDes": "一句话备注（优先使用用户备注；勿写完整想定）",
     "preInputName": "输入数据名称",
     "preOutputName": "输出数据名称",
-    "nodeList": [
-      {
-        "id": "services 表的实际 ID",
-        "name": "服务名称",
-        "des": "API 描述",
-        "url": "API 地址",
-        "status": "services 表的 status 字段（如 released）",
-        "tools": [
-          { "id": "工具 ID", "name": "工具名称", "description": "工具描述" }
-        ]
-      }
+    "serviceIds": [
+      "services 表的实际 UUID",
+      "另一个服务的 UUID"
     ]
   }
 }
