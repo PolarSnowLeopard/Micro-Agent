@@ -13,7 +13,8 @@
 - 每个 PR 应聚焦于**单一目的**（一个 Bug 修复或一个功能）
 - 代码改动需附带相应的测试
 - 文档改动应提供**新增价值**，而非重组已有内容
-- 确保 `pytest` 测试通过
+- 确保 `pytest`（`tests/` 目录）测试通过
+- 仿真构建等开发中功能的手动验收见 `dev/simulation/`，不纳入 CI
 
 ## 开发环境
 
@@ -21,7 +22,8 @@
 git clone https://github.com/fdueblab/Micro-Agent.git
 cd Micro-Agent
 pip install -e ".[dev]"
-pytest
+pytest                    # CI 单元测试（tests/）
+pytest dev/simulation/    # 仿真构建开发期验收（手动，非 CI）
 ```
 
 ## 行为准则

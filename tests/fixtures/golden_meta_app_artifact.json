@@ -1,0 +1,174 @@
+{
+  "schemaVersion": "meta_app_artifact.v1",
+  "artifactId": "app-37e3436d473b4479",
+  "app": {
+    "name": "用药辅助",
+    "domain": "health",
+    "description": "根据患者体重和肾功能给出用药建议"
+  },
+  "taskContract": {
+    "goal": "给出用药建议",
+    "domain": "health",
+    "inputSlots": [
+      {
+        "name": "weight_kg",
+        "type": "integer",
+        "required": true
+      },
+      {
+        "name": "renal_function",
+        "type": "string",
+        "required": true
+      }
+    ],
+    "outputSlots": [
+      {
+        "name": "result",
+        "type": "object",
+        "required": true
+      }
+    ],
+    "constraints": [
+      "使用已绑定服务"
+    ],
+    "successCriteria": [
+      "输出剂量建议"
+    ]
+  },
+  "runtime": {
+    "mode": "agent_with_optional_golden_path",
+    "serviceBindings": [
+      {
+        "serviceId": "linezolid",
+        "serviceName": "Linezolid",
+        "isFake": false,
+        "source": "real_mcp",
+        "transport": "sse",
+        "endpoint": "http://fdueblab.cn:25013/sse",
+        "schemaHash": "60c71abefd08909f",
+        "tools": [
+          {
+            "toolName": "linezolid_calculate_dose",
+            "description": "",
+            "inputSchema": {}
+          },
+          {
+            "toolName": "calculate_dose",
+            "description": "dose",
+            "inputSchema": {}
+          }
+        ]
+      }
+    ],
+    "fallbackPolicy": {
+      "onApplicabilityMismatch": "run_slow_mode",
+      "onBindingFailure": "run_slow_mode",
+      "onToolFailure": "run_slow_mode",
+      "onAssertionFailure": "run_slow_mode"
+    },
+    "agent": {
+      "style": "react_slow_mode",
+      "goldenPathDecision": "agent_internal"
+    }
+  },
+  "goldenPaths": [
+    {
+      "pathId": "gp-23ef7cec365c2d6b",
+      "primary": true,
+      "status": "active",
+      "sourceTrajectoryId": "traj-81002712cd49dcb2",
+      "applicability": {
+        "requiredServices": [
+          "linezolid"
+        ],
+        "requiredInputSlots": [
+          {
+            "name": "weight_kg",
+            "type": "integer",
+            "required": true
+          },
+          {
+            "name": "renal_function",
+            "type": "string",
+            "required": true
+          }
+        ],
+        "agentSemanticDecision": true
+      },
+      "steps": [
+        {
+          "stepId": "s1",
+          "serviceId": "linezolid",
+          "toolName": "linezolid_calculate_dose",
+          "argumentTemplate": {
+            "weight_kg": 70,
+            "renal_function": "normal"
+          },
+          "inputMapping": {
+            "weight_kg": {
+              "from": "slot",
+              "name": "weight_kg"
+            },
+            "renal_function": {
+              "from": "slot",
+              "name": "renal_function"
+            }
+          },
+          "outputSlots": [
+            {
+              "name": "s1_output",
+              "path": "$"
+            }
+          ],
+          "dependsOn": []
+        }
+      ],
+      "assertions": [
+        {
+          "assertionId": "s1_call_success",
+          "level": "L1",
+          "type": "tool_call_success",
+          "target": {
+            "stepId": "s1"
+          },
+          "expected": {
+            "success": true
+          },
+          "checkMode": "rule"
+        },
+        {
+          "assertionId": "s1_weight_kg_bound",
+          "level": "L2",
+          "type": "input_slot_bound",
+          "target": {
+            "stepId": "s1",
+            "slot": "weight_kg"
+          },
+          "expected": {
+            "bound": true
+          },
+          "checkMode": "rule"
+        },
+        {
+          "assertionId": "s1_renal_function_bound",
+          "level": "L2",
+          "type": "input_slot_bound",
+          "target": {
+            "stepId": "s1",
+            "slot": "renal_function"
+          },
+          "expected": {
+            "bound": true
+          },
+          "checkMode": "rule"
+        }
+      ],
+      "fallbackPolicy": {
+        "onApplicabilityMismatch": "run_slow_mode",
+        "onBindingFailure": "run_slow_mode",
+        "onToolFailure": "run_slow_mode",
+        "onAssertionFailure": "run_slow_mode"
+      }
+    }
+  ]
+}

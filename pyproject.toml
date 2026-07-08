@@ -33,8 +33,10 @@ api = [
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
     "python-multipart>=0.0.9",
+    "openpyxl>=3.1.0",
+    "xlrd>=2.0.1",
 ]
-mcp = ["mcp>=1.4.0"]
+mcp = ["mcp>=1.4.0", "pymysql>=1.1.0"]
 rag = ["PyPDF2>=3.0.0", "python-docx>=1.0.0"]
 all = ["fdu-micro-agent[api,mcp,rag]"]
 dev = [
@@ -54,6 +56,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["micro_agent*"]

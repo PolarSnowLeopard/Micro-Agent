@@ -90,6 +90,15 @@ def test_render_mcp_recommendation_template():
     )
     assert "报告生成应用" in result
     assert "atomic_mcp" in result
+    assert "serviceIds" in result
+    assert "tool_name" in result
+    assert "tool_description" in result
+    assert "pre_release_unrated" in result
+    assert "pre_release_pending" in result
+    assert "released" in result
+    assert "nodeList" not in result
+    assert '"success": false' in result
+    assert '"result"' in result
 
 
 # === 2. 任务注册表 ===
