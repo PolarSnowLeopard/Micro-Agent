@@ -10,6 +10,7 @@ build/
 .env
 .venv/
 env/
+config/config.toml
 
 # IDE
 .vscode/
