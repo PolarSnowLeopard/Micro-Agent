@@ -67,3 +67,11 @@ register_task(TaskConfig(
     system_prompt=AGENT_SYSTEM_PROMPT,
     max_steps=30,
 ))
+
+register_task(TaskConfig(
+    name="service_upgrade_advice",
+    description="为用户成果生成领先分析与升级建议三段论",
+    prompt_template="service_upgrade_advice.md.j2",
+    system_prompt=AGENT_SYSTEM_PROMPT,
+    max_steps=20,
+))
