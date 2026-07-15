@@ -1,0 +1,51 @@
+{
+  "specVersion": "ioeb.algorithm-package/v1",
+  "service": {
+    "name": "gene-set-overlap",
+    "description": "Compute deterministic overlap coefficients between two gene sets."
+  },
+  "entrypoint": "main:main_process",
+  "benchmark": {
+    "source": "AMQ-Bench",
+    "track": "ioeb-template",
+    "sampleId": "meb_cytopus_db_002",
+    "repository": "https://github.com/wallet-maker/cytopus",
+    "commit": "638dd91"
+  },
+  "parameterConstraints": {
+    "gene_set_a": {
+      "minItems": 1,
+      "maxItems": 100000,
+      "uniqueItems": true,
+      "items": {
+        "minLength": 1,
+        "maxLength": 40,
+        "pattern": "^[A-Z0-9._-]+$"
+      }
+    },
+    "gene_set_b": {
+      "minItems": 1,
+      "maxItems": 100000,
+      "uniqueItems": true,
+      "items": {
+        "minLength": 1,
+        "maxLength": 40,
+        "pattern": "^[A-Z0-9._-]+$"
+      }
+    }
+  },
+  "tests": [
+    {
+      "name": "three-of-five-overlap",
+      "arguments": {
+        "gene_set_a": ["TP53", "BRCA1", "EGFR", "MYC", "RB1"],
+        "gene_set_b": ["TP53", "EGFR", "KRAS", "PTEN", "MYC"]
+      },
+      "expected": {
+        "common_genes": ["EGFR", "MYC", "TP53"],
+        "common_count": "3",
+        "overlap_coefficient": "0.600000"
+      }
+    }
+  ]
+}

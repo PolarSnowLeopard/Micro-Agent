@@ -1,0 +1,25 @@
+{
+  "specVersion": "ioeb.algorithm-package/v1",
+  "service": {
+    "name": "invalid-dangerous-process",
+    "description": "Negative control that must be rejected for process execution."
+  },
+  "entrypoint": "main:main_process",
+  "benchmark": {
+    "source": "IoEB-negative-control",
+    "track": "ioeb-template",
+    "sampleId": "negative_dangerous_process_001",
+    "expectedDisposition": "reject",
+    "expectedIssueCodes": ["DANGEROUS_CALL"]
+  },
+  "parameterConstraints": {
+    "command": {"minLength": 1, "maxLength": 100}
+  },
+  "tests": [
+    {
+      "name": "must-not-run",
+      "arguments": {"command": "true"},
+      "expected": {"status": "0"}
+    }
+  ]
+}

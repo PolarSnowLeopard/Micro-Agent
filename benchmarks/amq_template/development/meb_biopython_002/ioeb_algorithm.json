@@ -1,0 +1,40 @@
+{
+  "specVersion": "ioeb.algorithm-package/v1",
+  "service": {
+    "name": "protein-property-analysis",
+    "description": "Compute deterministic protein molecular weight and isoelectric point using Biopython."
+  },
+  "entrypoint": "main:main_process",
+  "benchmark": {
+    "source": "AMQ-Bench",
+    "track": "ioeb-template",
+    "sampleId": "meb_biopython_002",
+    "repository": "https://github.com/biopython/biopython",
+    "commit": "a25e8c780f1cf0f9171cca4cd88b1bfc57a5d710"
+  },
+  "parameterConstraints": {
+    "sequence": {
+      "minLength": 1,
+      "maxLength": 100000,
+      "pattern": "^[ACDEFGHIKLMNPQRSTVWY]+$"
+    },
+    "properties": {
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true
+    }
+  },
+  "tests": [
+    {
+      "name": "signal-peptide-properties",
+      "arguments": {
+        "sequence": "MKFLVLLFNILCLFPVLAADNHGVS",
+        "properties": ["molecular_weight", "isoelectric_point"]
+      },
+      "expected": {
+        "molecular_weight": "2775.375600",
+        "isoelectric_point": "6.491604"
+      }
+    }
+  ]
+}
