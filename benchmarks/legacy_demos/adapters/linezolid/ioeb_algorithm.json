@@ -1,0 +1,41 @@
+{
+  "specVersion": "ioeb.algorithm-package/v1",
+  "service": {
+    "name": "linezolid-dose",
+    "description": "Calculate individualized linezolid dosing and predicted AUC24 exposure."
+  },
+  "entrypoint": "main:main_process",
+  "parameterConstraints": {
+    "age": {"minimum": 0, "maximum": 100},
+    "height": {"minimum": 50, "maximum": 250},
+    "weight": {"exclusiveMinimum": 0, "maximum": 300},
+    "scr": {"exclusiveMinimum": 0, "maximum": 2000},
+    "tb": {"minimum": 0, "maximum": 5000},
+    "auc_min": {"exclusiveMinimum": 0},
+    "auc_max": {"exclusiveMinimum": 0}
+  },
+  "tests": [
+    {
+      "name": "older-male-standard-target",
+      "arguments": {
+        "sex": 1,
+        "age": 65,
+        "height": 170,
+        "weight": 70,
+        "scr": 80.0,
+        "tb": 20.0,
+        "auc_min": 160.0,
+        "auc_max": 240.0
+      },
+      "expected": {
+        "bsa": 1.82,
+        "egfr": 89.31,
+        "dose": 417,
+        "interval": 12,
+        "daily_dose": 834,
+        "auc_24": 196,
+        "target_auc": 196
+      }
+    }
+  ]
+}

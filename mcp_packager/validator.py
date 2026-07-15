@@ -538,14 +538,19 @@ def _collect_imports(tree: ast.Module) -> List[str]:
 
 def _validate_dangerous_calls(tree: ast.Module, entry_path: str, report: ValidationReport) -> None:
     dangerous_names = {"eval", "exec", "compile", "__import__"}
+    dangerous_qualified_names = {
+        f"builtins.{item}" for item in dangerous_names
+    }
     warned: Set[Tuple[str, int]] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         name = _annotation_name(node.func)
-        leaf = name.split(".")[-1]
         reason: Optional[str] = None
-        if leaf in dangerous_names:
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in dangerous_names
+        ) or name in dangerous_qualified_names:
             reason = f"dynamic execution call {name} requires manual review"
         elif name in {"os.system", "os.popen"} or name.startswith("subprocess."):
             reason = f"process execution call {name} requires manual review"

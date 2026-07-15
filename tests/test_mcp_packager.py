@@ -168,6 +168,52 @@ def main_process(value):
     assert "RETURN_ANNOTATION_MISSING" in codes
 
 
+def test_validation_distinguishes_model_eval_from_builtin_eval(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "main.py",
+        '''class Model:
+    def eval(self) -> None:
+        pass
+
+
+def main_process(value: int) -> int:
+    """Run a model-style eval method.
+
+    Args:
+        value: Value to return.
+
+    Returns:
+        Original value.
+    """
+    model = Model()
+    model.eval()
+    return value
+''',
+    )
+
+    report = validate_package(tmp_path)
+
+    assert "DANGEROUS_CALL" not in {issue.code for issue in report.issues}
+    assert report.valid is True
+
+    _write(
+        tmp_path / "main.py",
+        '''def main_process(expression: str) -> int:
+    """Evaluate an expression.
+
+    Args:
+        expression: Python expression.
+
+    Returns:
+        Expression result.
+    """
+    return eval(expression)
+''',
+    )
+    report = validate_package(tmp_path)
+    assert "DANGEROUS_CALL" in {issue.code for issue in report.issues}
+
+
 def test_validation_rejects_manifest_test_argument_mismatch(tmp_path: Path) -> None:
     _copy_fixture(tmp_path)
     manifest_path = tmp_path / "ioeb_algorithm.json"
