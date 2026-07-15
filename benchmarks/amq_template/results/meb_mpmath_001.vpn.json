@@ -1,0 +1,68 @@
+{
+  "resultVersion": "ioeb.amq-template-baseline/v1",
+  "sampleId": "meb_mpmath_001",
+  "runDate": "2026-07-14",
+  "sourceHash": "sha256:99a8464b7748e1e115a6ca058f737c2f70b40bd172e08a836bc53d613729658e",
+  "environment": {
+    "runner": "vpn-experiment-server",
+    "dockerServerVersion": "26.1.3",
+    "composeVersion": "2.27.1",
+    "artifactPythonVersion": "3.11"
+  },
+  "verification": {
+    "mode": "docker",
+    "success": true,
+    "checks": {
+      "dockerBuild": true,
+      "dockerStart": true,
+      "mcpListen": true,
+      "mcpProtocolAndCases": true,
+      "invalidArgumentsHandled": true
+    }
+  },
+  "quality": {
+    "qualityVersion": "ioeb.amq-quality/v1",
+    "profile": "amq-compatible-strict-oracle",
+    "d1Availability": {
+      "buildSuccess": true,
+      "healthSuccess": true,
+      "score": 1.0
+    },
+    "d2Usability": {
+      "goe": {
+        "argumentConstructionSupport": 1.0,
+        "constraintRichness": 1.0,
+        "paramDescCoverage": 1.0,
+        "paramTypeCoverage": 1.0,
+        "requiredClarity": 1.0,
+        "score": 1.0,
+        "toolDescCoverage": 1.0,
+        "toolDescDistinguishability": 1.0,
+        "toolDescInformativeness": 1.0,
+        "toolSelectionSupport": 1.0
+      },
+      "gov": {
+        "errorHandlingRate": 1.0,
+        "errorRecoverability": 1.0,
+        "errorSpecificity": 1.0,
+        "responseStructureRate": 1.0,
+        "resultInterpretability": 1.0,
+        "returnDescCoverage": 1.0,
+        "score": 1.0
+      },
+      "score": 1.0
+    },
+    "d3Utility": {
+      "differentialMatches": 1,
+      "expectedMatches": 1,
+      "passedCases": 1,
+      "score": 1.0,
+      "totalCases": 1
+    },
+    "aqs": 1.0,
+    "failureCategory": null,
+    "provisionalQualityWithoutBuild": 1.0,
+    "publishable": true,
+    "qualityGatePassed": true
+  }
+}

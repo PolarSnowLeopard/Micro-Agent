@@ -1,0 +1,31 @@
+{
+  "specVersion": "ioeb.algorithm-package/v1",
+  "service": {
+    "name": "repeat-text",
+    "description": "Repeat text a requested number of times."
+  },
+  "entrypoint": "main:main_process",
+  "parameterConstraints": {
+    "text": {
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "repeat": {
+      "minimum": 1,
+      "maximum": 5
+    }
+  },
+  "tests": [
+    {
+      "name": "repeat-twice",
+      "arguments": {
+        "text": "IoEB",
+        "repeat": 2
+      },
+      "expected": {
+        "value": "IoEBIoEB",
+        "length": "8"
+      }
+    }
+  ]
+}

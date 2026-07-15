@@ -50,6 +50,9 @@ Homepage = "https://github.com/fdueblab/Micro-Agent"
 Repository = "https://github.com/fdueblab/Micro-Agent"
 Issues = "https://github.com/fdueblab/Micro-Agent/issues"
 
+[project.scripts]
+mcp-packager = "mcp_packager.cli:main"
+
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
@@ -59,4 +62,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
-include = ["micro_agent*"]
+include = ["micro_agent*", "mcp_packager*"]
+
+[tool.setuptools.package-data]
+mcp_packager = ["templates/ioeb_algorithm_v1/*"]

@@ -1,0 +1,18 @@
+{
+  "aml": {
+    "url": "https://ioeb-1317429791.cos.ap-shanghai.myqcloud.com/demo/AML_repo.zip",
+    "sha256": "7f56b379d3bb698f0f6cef3961b5922e93a3be85c36bdf3367ced3140cae09df",
+    "root": "aml"
+  },
+  "gnn": {
+    "url": "https://ioeb-1317429791.cos.ap-shanghai.myqcloud.com/demo/GNN_repo.zip",
+    "sha256": "7df8b9596fcdcdcbaadb1e4810e3a3b4e47950127c2c7052f7adab0e8c413328",
+    "root": "gnn",
+    "renameMainTo": "inference.py"
+  },
+  "linezolid": {
+    "url": "https://ioeb-1317429791.cos.ap-shanghai.myqcloud.com/demo/linezolid_repo.zip",
+    "sha256": "a5182f520fdc55feb44e289a24dd43e1f71f028e44d67647b8a582a1a467275a",
+    "root": "linezolid"
+  }
+}
