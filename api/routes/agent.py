@@ -7,6 +7,7 @@
   POST /api/agent/service_evaluation         表单+文件 → 服务评测
   POST /api/agent/service_upgrade_advice     表单 → 成果升级建议
   POST /api/agent/scenario_intake               表单 → 想定场景追问（grill-me）
+  POST /api/agent/aml_scenario_intake           表单 → 算法想定对话填表
   POST /api/agent/mcp_service_recommendation 表单 → MCP 服务推荐
   POST /api/agent/meta_app_validation        表单+文件 → 元应用数据验证
   POST /api/agent/aml_report                 文件/URL → AML 报告生成
@@ -334,6 +335,40 @@ async def scenario_intake(
         return {"success": True, **result}
     except Exception as e:
         logger.error(f"scenario_intake 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ============================================================
+#  端点：算法想定对话填表（自然语言 → formDraft）
+# ============================================================
+
+@router.post("/aml_scenario_intake")
+async def aml_scenario_intake(
+    message: str = Form(...),
+    domain: str = Form(default="generic"),
+    session_id: Optional[str] = Form(default=None),
+    partial_form: str = Form(default=""),
+    dictionary_snapshot: str = Form(default=""),
+    followup_count: str = Form(default="0"),
+):
+    from micro_agent.scenario import run_aml_scenario_intake_turn
+
+    try:
+        try:
+            followup_n = int(followup_count or "0")
+        except (TypeError, ValueError):
+            followup_n = 0
+        result = await run_aml_scenario_intake_turn(
+            message=message,
+            domain=domain,
+            session_id=session_id or None,
+            partial_form=partial_form or None,
+            dictionary_snapshot=dictionary_snapshot or None,
+            followup_count=followup_n,
+        )
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"aml_scenario_intake 失败: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
