@@ -240,6 +240,7 @@ def aggregate(results: list[dict[str, Any]], expected_ids: list[str]) -> dict[st
         result.get("d1_failure_category", "healthy") if not result.get("d1_service_health") else "healthy"
         for result in ordered
     )
+    driver_status_counts = Counter(result.get("d3_driver_status", "not_run") for result in ordered)
     return {
         "complete": not missing and not duplicates and len(ordered) == denominator,
         "expectedSamples": denominator,
@@ -261,7 +262,23 @@ def aggregate(results: list[dict[str, Any]], expected_ids: list[str]) -> dict[st
         "successfulToolCalls": successful_calls,
         "totalToolCalls": total_calls,
         "failureCounts": dict(sorted(failure_counts.items())),
+        "d3DriverStatusCounts": dict(sorted(driver_status_counts.items())),
     }
+
+
+def driver_diagnostic(agent_result: dict[str, Any] | None) -> tuple[str, str]:
+    if agent_result is None:
+        return "not_run", ""
+    final_answer = str(agent_result.get("final_answer", ""))
+    normalized = final_answer.lower()
+    if agent_result.get("total_calls", 0) == 0 and any(
+        marker in normalized
+        for marker in ("error code:", "terms of service", "rate limit", "authentication", "connection error")
+    ):
+        return "provider_error", final_answer[:500]
+    if "max turns reached" in normalized:
+        return "max_turns", final_answer[:500]
+    return "completed", ""
 
 
 async def main() -> int:
@@ -327,6 +344,14 @@ async def main() -> int:
         skip_d3=args.skip_d3,
         verify_model="deterministic-only",
     )
+    original_agent_loop = runner.run_agent_loop
+
+    async def recording_agent_loop(session: Any, task: dict[str, Any], tools: list[Any]) -> dict[str, Any]:
+        agent_result = await original_agent_loop(session, task, tools)
+        runner._paper_last_agent_result = agent_result
+        return agent_result
+
+    runner.run_agent_loop = recording_agent_loop
     log_path = results_file.parent / "logs" / f"{results_file.stem}.log"
     file_handler = harness.add_file_handler(harness.logger, str(log_path))
     try:
@@ -336,7 +361,12 @@ async def main() -> int:
                 harness.logger.info("[%d/%d] resume skip %s", index, len(tasks), sample_id)
                 continue
             harness.logger.info("[%d/%d] strict paper evaluation", index, len(tasks))
+            runner._paper_last_agent_result = None
             result = await runner.run_task(task)
+            driver_status, driver_error = driver_diagnostic(runner._paper_last_agent_result)
+            result["d3_driver_status"] = driver_status
+            if driver_error:
+                result["d3_driver_error"] = driver_error
             d1 = 1.0 if result.get("d1_service_health") else 0.0
             d2 = float(result.get("d2_score", 0.0))
             d3 = 1.0 if result.get("d3_pass") else 0.0

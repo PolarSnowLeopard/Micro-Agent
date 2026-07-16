@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scripts.run_amq_agentic_generation import EXPORT_FILES, export_submission
-from scripts.run_amq_paper_evaluation import aggregate, paper_goe
+from scripts.run_amq_paper_evaluation import aggregate, driver_diagnostic, paper_goe
 
 
 def _tool(description: str, properties: dict | None = None) -> SimpleNamespace:
@@ -91,3 +91,15 @@ def test_aggregate_uses_all_expected_samples_as_aqs_denominator() -> None:
     assert summary["aqs"] == 0.4
     assert summary["usabilityHealthyMean"] == 0.5
     assert summary["tcsrPaperMacro"] == 0.5
+
+
+def test_driver_diagnostic_separates_provider_refusal_from_utility_failure() -> None:
+    status, detail = driver_diagnostic(
+        {
+            "final_answer": "Error code: 403 - prohibited due to provider Terms Of Service",
+            "total_calls": 0,
+        }
+    )
+
+    assert status == "provider_error"
+    assert "403" in detail
