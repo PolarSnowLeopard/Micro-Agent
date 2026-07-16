@@ -109,6 +109,50 @@ async def test_task_manager_subscribe_realtime():
     print("[PASS] TaskContext 实时订阅")
 
 
+async def test_task_manager_marks_terminal_error_as_failed():
+    """A yielded error is a failed task even when the generator exits normally."""
+    from unittest.mock import MagicMock
+
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.schema import AgentEvent
+    from micro_agent.core.task import TaskManager
+
+    agent = MagicMock(spec=Agent)
+    agent.memory = None
+
+    async def fake_run(_request):
+        yield AgentEvent(type="error", step=99, data={"error": "invalid plan"})
+
+    agent.run = fake_run
+    manager = TaskManager()
+    ctx = await manager.submit(agent, "analyze", task_id="failed_plan")
+    await ctx._runner
+
+    assert ctx.status == "failed"
+
+
+async def test_task_manager_allows_recovery_after_intermediate_error():
+    from unittest.mock import MagicMock
+
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.schema import AgentEvent
+    from micro_agent.core.task import TaskManager
+
+    agent = MagicMock(spec=Agent)
+    agent.memory = None
+
+    async def fake_run(_request):
+        yield AgentEvent(type="error", step=1, data={"error": "retryable"})
+        yield AgentEvent(type="done", step=2, data={"result": "recovered"})
+
+    agent.run = fake_run
+    manager = TaskManager()
+    ctx = await manager.submit(agent, "analyze", task_id="recovered_plan")
+    await ctx._runner
+
+    assert ctx.status == "completed"
+
+
 async def test_fastapi_import():
     """测试 FastAPI app 能正常导入。"""
     from api.app import app

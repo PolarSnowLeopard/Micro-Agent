@@ -48,7 +48,9 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 8. smokeTest 只能使用仓库中真实存在、可执行的 fixture，或从源码中明确的字段约束机械选择输入；enabled=true 时 evidence 必须引用对应仓库文件/行号。没有可追溯输入时必须 enabled=false 并写 rationale，绝不能编造 Base64、文件路径或预期输出。
 9. 每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
    独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
+   excludedSymbols 必须位于规划 JSON 根节点，和 services 同级；绝不能写入 services[i] 内。
 10. 必须用 save_packaging_plan_json 提交一段无 Markdown fence 的完整严格 JSON。每次调用都是完整替换，不是局部 PATCH；校验失败后也必须重发包含非空 services 的完整规划，不能只发送修改字段。保存成功后调用 terminate。
+    顶层结构固定为 {"schemaVersion": ..., "decision": ..., "analysisSummary": ..., "services": [...], "excludedSymbols": [...], "assumptions": [...], "riskNotes": [...]}。
 """
 
 
@@ -315,6 +317,7 @@ async def _run_planner(
         prompt = _planner_prompt(ir, user_request) if attempt == 0 else (
             "你尚未提交一个有效规划。必须使用 save_packaging_plan_json 重新发送完整严格 JSON；"
             "这不是 PATCH，decision=package 时 services 绝对不能省略或为空。"
+            "excludedSymbols 必须位于 JSON 根节点并与 services 同级，不能放进任一 service。"
             + ("\n上次校验错误：\n- " + "\n- ".join(store.last_errors) if store.last_errors else "")
         )
         async for event in agent.run(prompt):
