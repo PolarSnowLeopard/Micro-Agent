@@ -44,23 +44,11 @@ from api.services.files import (
     parse_dataset_file,
     read_paper_content,
     read_reference_text,
-    pack_directory_as_zip_base64,
     resolve_file_or_url,
     resolve_project_dir,
     save_upload,
 )
-from api.services.deterministic_packaging import (
-    DeterministicPackagingError,
-    build_for_frontend,
-    function_graph,
-    validate_for_frontend,
-)
-from api.services.sse import (
-    _sse_line,
-    event_to_legacy,
-    immediate_sse_response,
-    sse_response,
-)
+from api.services.sse import sse_response, event_to_legacy, _sse_line
 from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.core.mcp_agent import MCPAgent
@@ -85,40 +73,26 @@ WORKSPACE = str(config.workspace)
 @router.post("/code_analysis")
 async def code_analysis(file: UploadFile = File(...)):
     saved = await save_upload(file, Path(WORKSPACE))
-    try:
-        report = await asyncio.to_thread(validate_for_frontend, saved)
-        graph = function_graph(report)
-        return immediate_sse_response(
-            {
-                "function": graph,
-                "packaging_validation": report.to_dict(),
-            },
-            steps=[
-                {
-                    "thought": "使用 IoEB 确定性契约分析算法入口和参数类型",
-                    "action": "mcp_packager.validate",
-                    "action_result": "算法代码校验通过，已识别 main_process MCP Tool",
-                }
-            ],
-            components_meta={
-                "engine": "mcp_packager",
-                "validation_profile": report.to_dict()["validationProfile"],
-            },
-        )
-    except DeterministicPackagingError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": str(exc),
-                "validation": exc.report.to_dict(),
-            },
-        ) from exc
-    finally:
-        cleanup_paths(saved)
+    project_dir = resolve_project_dir(saved, Path(WORKSPACE))
+    main_code = find_main_file(project_dir)
+
+    prompt = render_prompt(
+        "code_analysis.md.j2",
+        workspace=WORKSPACE, input_dir=project_dir, main_code=main_code,
+        temp_dir="temp", function_info_path="function.json",
+    )
+    agent, _ = await build_agent(name="code_analysis", system_prompt=get_task("code_analysis").system_prompt)
+    ctx = await task_manager.submit(agent, prompt)
+
+    return await sse_response(
+        ctx,
+        output_files=[{"name": "function", "file": f"{WORKSPACE}/temp/function.json"}],
+        cleanup=partial(cleanup_paths, str(saved), project_dir),
+    )
 
 
 # ============================================================
-#  端点：服务封装（确定性 mcp_packager，保持旧 SSE 返回协议）
+#  端点：服务封装（支持会话记忆 + Skills + RAG）
 # ============================================================
 
 _packaging_retriever = None
@@ -151,67 +125,51 @@ async def service_packaging(
     session_id: Optional[str] = Form(default=None),
 ):
     saved = await save_upload(file, Path(WORKSPACE))
-    output_dir = Path(WORKSPACE) / "temp" / f"mcp-service-{uuid.uuid4().hex}"
-    try:
-        packaged = await asyncio.to_thread(
-            build_for_frontend,
-            saved,
-            output_dir,
-        )
-        service_package = await asyncio.to_thread(
-            pack_directory_as_zip_base64,
-            str(packaged.artifact),
-        )
-        output_files = [
-            {
-                "name": path.relative_to(packaged.artifact).as_posix(),
-                "size": path.stat().st_size,
-            }
-            for path in sorted(packaged.artifact.rglob("*"))
-            if path.is_file()
-        ]
-        return immediate_sse_response(
-            {
-                "service_package": service_package,
-                "output_files": output_files,
-                "packaging_validation": packaged.report.to_dict(),
-                "packaging_plan": packaged.plan.to_dict(),
-                "packaging_verification": packaged.verification,
-            },
-            steps=[
-                {
-                    "thought": "按 IoEB 算法提交契约执行静态校验",
-                    "action": "mcp_packager.validate",
-                    "action_result": "入口、类型、依赖和测试契约校验通过",
-                },
-                {
-                    "thought": "生成 FastMCP Streamable HTTP 服务和容器文件",
-                    "action": "mcp_packager.build",
-                    "action_result": "MCP 服务代码与 Docker Compose 已生成",
-                },
-                {
-                    "thought": "检查生成产物的文件、语法和运行时声明",
-                    "action": "mcp_packager.verify",
-                    "action_result": "服务包静态验证通过，可以交给现有部署接口",
-                },
-            ],
-            components_meta={
-                "engine": "mcp_packager",
-                "engine_version": "v2",
-                "session_id": session_id,
-                "validation_profile": packaged.report.to_dict()["validationProfile"],
-            },
-        )
-    except DeterministicPackagingError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": str(exc),
-                "validation": exc.report.to_dict(),
-            },
-        ) from exc
-    finally:
-        cleanup_paths(saved, output_dir)
+    project_dir = resolve_project_dir(saved, Path(WORKSPACE))
+    main_code = find_main_file(project_dir)
+    output_dir = f"{WORKSPACE}/app-demo-output"
+
+    retriever = await _get_packaging_retriever()
+
+    skill_names = ["mcp_protocol", "docker_packaging", "code_analysis_patterns"]
+    llm_profile = "reasoning"
+
+    agent, sid = await build_agent(
+        name="service_packaging",
+        system_prompt=get_task("service_packaging").system_prompt,
+        max_steps=40,
+        llm_profile=llm_profile,
+        enable_session=True,
+        session_id=session_id,
+        skills=skill_names,
+        retriever=retriever,
+    )
+
+    components_meta = {
+        "skills": skill_names,
+        "llm_profile": llm_profile,
+        "llm_model": config.get_llm(llm_profile).model,
+        "rag_ready": retriever is not None and len(retriever._docs) > 0,
+        "rag_docs_count": len(retriever._docs) if retriever else 0,
+        "memory_loaded": len(agent.memory) if sid and session_id else 0,
+        "session_id": sid,
+        "session_resumed": bool(session_id),
+    }
+
+    prompt = render_prompt(
+        "service_packaging.md.j2",
+        workspace=WORKSPACE, input_dir=project_dir, main_code=main_code,
+        output_dir=output_dir, temp_dir="temp", function_info_path="function.json",
+    )
+    ctx = await task_manager.submit(agent, prompt)
+
+    return await sse_response(
+        ctx,
+        zip_dir=output_dir,
+        cleanup=partial(cleanup_paths, str(saved), project_dir),
+        session_id=sid,
+        components_meta=components_meta,
+    )
 
 
 # ============================================================

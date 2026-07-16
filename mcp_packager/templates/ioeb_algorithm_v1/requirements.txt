@@ -1,2 +1,0 @@
-# Add third-party dependencies here with exact versions, for example:
-# numpy==2.3.1
