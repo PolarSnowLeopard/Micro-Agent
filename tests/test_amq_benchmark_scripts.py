@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from scripts.run_amq_agentic_generation import EXPORT_FILES, export_submission
+from scripts.run_amq_agentic_generation import (
+    EXPORT_FILES,
+    export_submission,
+    is_retryable_provider_failure,
+)
 from scripts.run_amq_paper_evaluation import aggregate, driver_diagnostic, paper_goe
 
 
@@ -103,3 +107,15 @@ def test_driver_diagnostic_separates_provider_refusal_from_utility_failure() -> 
 
     assert status == "provider_error"
     assert "403" in detail
+
+
+def test_generation_resume_retries_credit_failure_but_not_algorithm_failure() -> None:
+    assert is_retryable_provider_failure(
+        {"status": "failed", "analysisErrors": ["OpenRouter 402: Insufficient credits"]}
+    )
+    assert not is_retryable_provider_failure(
+        {"status": "failed", "analysisErrors": ["no valid packaging plan"]}
+    )
+    assert not is_retryable_provider_failure(
+        {"status": "rejected", "analysisErrors": ["Insufficient credits"]}
+    )

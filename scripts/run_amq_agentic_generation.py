@@ -32,6 +32,15 @@ EXPORT_FILES = (
     "ioeb-service.json",
 )
 
+RETRYABLE_PROVIDER_MARKERS = (
+    "insufficient credits",
+    "ratelimiterror",
+    "rate limit",
+    "service unavailable",
+    "connectionerror",
+    "connection error",
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate AMQ-Bench submissions with IOEB Agent packaging")
@@ -168,6 +177,13 @@ def _write_json_atomic(path: Path, data: Any) -> None:
     temp.replace(path)
 
 
+def is_retryable_provider_failure(summary: dict[str, Any]) -> bool:
+    if summary.get("status") != "failed":
+        return False
+    serialized = json.dumps(summary, ensure_ascii=False).lower()
+    return any(marker in serialized for marker in RETRYABLE_PROVIDER_MARKERS)
+
+
 async def generate_one(
     sample: dict[str, Any],
     *,
@@ -182,7 +198,9 @@ async def generate_one(
     summary_path = output / "summary.json"
     if resume and summary_path.is_file():
         previous = json.loads(summary_path.read_text(encoding="utf-8"))
-        if previous.get("status") in {"ready", "rejected", "failed"}:
+        if is_retryable_provider_failure(previous):
+            print(f"[{sample_id}] resume retry: provider infrastructure failure", flush=True)
+        elif previous.get("status") in {"ready", "rejected", "failed"}:
             print(f"[{sample_id}] resume: {previous['status']}", flush=True)
             return previous
 
