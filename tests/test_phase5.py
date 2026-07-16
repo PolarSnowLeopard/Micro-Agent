@@ -31,7 +31,27 @@ def test_llm_profiles_multiple():
     assert "fast" in cfg.llm_profiles
     assert "reasoning" in cfg.llm_profiles
     assert cfg.llm_profiles["fast"].max_tokens == 4096
-    assert cfg.llm_profiles["reasoning"].model == "openrouter/qwen/qwen3-coder-flash"
+    reasoning = cfg.llm_profiles["reasoning"]
+    assert reasoning.model == "openrouter/qwen/qwen3.6-flash"
+    assert reasoning.base_url == "https://openrouter.ai/api/v1"
+    assert reasoning.reasoning_enabled is False
+
+
+def test_llm_reasoning_env_override(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[llm]\nmodel = "legacy/model"\nbase_url = "http://legacy.invalid/v1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLM_MODEL", "openrouter/qwen/qwen3.6-flash")
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_REASONING_ENABLED", "false")
+
+    cfg = AppConfig.load(config_path)
+
+    assert cfg.llm.model == "openrouter/qwen/qwen3.6-flash"
+    assert cfg.llm.base_url == "https://openrouter.ai/api/v1"
+    assert cfg.llm.reasoning_enabled is False
 
 
 async def test_build_agent_with_profile():

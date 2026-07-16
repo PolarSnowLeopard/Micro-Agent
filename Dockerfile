@@ -6,6 +6,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
+ENV LLM_MODEL="openrouter/qwen/qwen3.6-flash" \
+    LLM_BASE_URL="https://openrouter.ai/api/v1" \
+    LLM_REASONING_ENABLED="false"
+
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir ".[all]" 2>/dev/null || true
 

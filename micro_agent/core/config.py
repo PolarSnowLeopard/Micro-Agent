@@ -28,6 +28,7 @@ class LLMConfig:
     max_tokens: int = 8192
     timeout: int = 60
     num_retries: int = 3
+    reasoning_enabled: Optional[bool] = None
 
 
 @dataclass
@@ -113,6 +114,12 @@ class AppConfig:
         _apply_env(cfg.llm, "base_url", "LLM_BASE_URL")
         _apply_env(cfg.llm, "temperature", "LLM_TEMPERATURE", float)
         _apply_env(cfg.llm, "max_tokens", "LLM_MAX_TOKENS", int)
+        _apply_env(
+            cfg.llm,
+            "reasoning_enabled",
+            "LLM_REASONING_ENABLED",
+            _parse_bool,
+        )
         _apply_env(cfg.agent, "max_steps", "AGENT_MAX_STEPS", int)
         _apply_env(cfg.platform, "ioeb_api_base_url", "IOEB_API_BASE_URL")
         _apply_env(cfg.platform, "request_timeout", "IOEB_REQUEST_TIMEOUT", float)
@@ -137,6 +144,15 @@ def _apply_dict(obj: object, d: dict) -> None:
     for k, v in d.items():
         if hasattr(obj, k):
             setattr(obj, k, v)
+
+
+def _parse_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"无效布尔值: {value}")
 
 
 def _apply_env(
