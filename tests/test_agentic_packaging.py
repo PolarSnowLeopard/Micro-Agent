@@ -348,6 +348,41 @@ async def test_save_plan_json_canonicalizes_only_nonsemantic_fields(tmp_path):
     assert isinstance(store.plan.tools[0]["smokeTest"]["evidence"], list)
 
 
+async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path):
+    """Regression for the GNN plan that nested the repository audit in a service."""
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(
+        tmp_path / "plan.json",
+        ir.known_symbols,
+        candidate_symbols={"core.predict", "core.evaluate"},
+    )
+    tool = SavePackagingPlanJson(store)
+    raw = _plan(ir).to_dict()
+    expected = raw.pop("excludedSymbols")
+    raw["services"][0]["excludedSymbols"] = expected
+
+    result = await tool.execute(content=json.dumps(raw, ensure_ascii=False))
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.data["excludedSymbols"] == expected
+    assert "excludedSymbols" not in store.plan.data["services"][0]
+
+
+async def test_save_plan_reports_malformed_service_scoped_exclusions(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(tmp_path / "plan.json", ir.known_symbols)
+    tool = SavePackagingPlanJson(store)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["excludedSymbols"] = "not-an-array"
+
+    result = await tool.execute(content=json.dumps(raw, ensure_ascii=False))
+
+    assert result.error
+    assert "services[0].excludedSymbols 字段层级错误" in result.error
+    assert "规划顶层 excludedSymbols" in result.error
+
+
 def test_plan_rejects_operational_metadata_as_algorithm_tool(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()

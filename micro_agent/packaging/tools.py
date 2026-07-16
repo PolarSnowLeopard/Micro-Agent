@@ -149,6 +149,7 @@ class SavePackagingPlanJson(Tool):
     description = (
         "当复杂 services 被函数调用序列化损坏时，以一段严格 JSON 文本提交完整规划；"
         "内容仍执行与 save_packaging_plan 完全相同的所有质量门禁。"
+        "excludedSymbols 是规划根节点字段，不能放在 services 内。"
     )
     parameters = {
         "type": "object",
@@ -188,9 +189,16 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
     services = raw.get("services")
     if not isinstance(services, list):
         return
+    nested_exclusions: list[Any] = []
     for service in services:
         if not isinstance(service, dict):
             continue
+        service_exclusions = service.get("excludedSymbols")
+        if isinstance(service_exclusions, list):
+            # excludedSymbols audits the whole repository, not one logical service.
+            # Some providers nevertheless place it next to service tools. Moving a
+            # well-formed list is a structural repair and does not alter semantics.
+            nested_exclusions.extend(service.pop("excludedSymbols"))
         service_id = service.get("id")
         if (not isinstance(service_id, str) or not service_id.strip()) and isinstance(
             service.get("name"), str
@@ -211,6 +219,28 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
             smoke = tool.get("smokeTest")
             if isinstance(smoke, dict) and isinstance(smoke.get("evidence"), str):
                 smoke["evidence"] = [smoke["evidence"]]
+
+    if nested_exclusions:
+        root_exclusions = raw.get("excludedSymbols", [])
+        if isinstance(root_exclusions, list):
+            raw["excludedSymbols"] = _merge_excluded_symbols(
+                root_exclusions,
+                nested_exclusions,
+            )
+
+
+def _merge_excluded_symbols(root: list[Any], nested: list[Any]) -> list[Any]:
+    """Merge misplaced exclusions deterministically, preferring root reasons."""
+    merged: list[Any] = []
+    seen_symbols: set[str] = set()
+    for item in [*root, *nested]:
+        symbol = item.get("symbol") if isinstance(item, dict) else None
+        if isinstance(symbol, str):
+            if symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+        merged.append(item)
+    return merged
 
 
 def _snake_identifier(value: str, *, fallback: str) -> str:

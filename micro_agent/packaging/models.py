@@ -89,6 +89,11 @@ class PackagingPlan:
             if not isinstance(service, dict):
                 errors.append(f"{prefix} 必须是 object")
                 continue
+            if "excludedSymbols" in service:
+                errors.append(
+                    f"{prefix}.excludedSymbols 字段层级错误；"
+                    "必须移动到规划顶层 excludedSymbols"
+                )
             service_id = service.get("id")
             if not isinstance(service_id, str) or not _SNAKE_CASE.match(service_id):
                 errors.append(f"{prefix}.id 必须是 snake_case")
@@ -584,6 +589,7 @@ PLAN_JSON_SCHEMA: dict[str, Any] = {
                     },
                 },
                 "required": ["id", "name", "description", "rationale", "tools"],
+                "additionalProperties": False,
             },
         },
         "excludedSymbols": {
@@ -601,5 +607,8 @@ PLAN_JSON_SCHEMA: dict[str, Any] = {
         "assumptions": {"type": "array", "items": {"type": "string"}},
         "riskNotes": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["schemaVersion", "decision", "analysisSummary", "services"],
+    "required": [
+        "schemaVersion", "decision", "analysisSummary", "services", "excludedSymbols",
+    ],
+    "additionalProperties": False,
 }
