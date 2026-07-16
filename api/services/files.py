@@ -6,9 +6,11 @@ import base64
 import os
 import re
 import shutil
+import stat
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Optional
 
 import httpx
@@ -76,9 +78,47 @@ async def save_upload(upload: UploadFile, dest_dir: Path) -> Path:
 
 
 def extract_zip(zip_path: Path, dest_dir: Path) -> Path:
+    """Safely extract an untrusted uploaded repository ZIP."""
+    max_entries = 10_000
+    max_uncompressed_bytes = 2_000_000_000
+    max_compression_ratio = 200.0
     dest_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(dest_dir)
+    root = dest_dir.resolve()
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            members = zf.infolist()
+            if len(members) > max_entries:
+                raise ValueError("ZIP 文件条目过多")
+            total = 0
+            for member in members:
+                normalized = member.filename.replace("\\", "/")
+                relative = PurePosixPath(normalized)
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or (relative.parts and ":" in relative.parts[0])
+                ):
+                    raise ValueError(f"ZIP 包含不安全路径: {member.filename}")
+                mode = member.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise ValueError(f"ZIP 不允许符号链接: {member.filename}")
+                total += member.file_size
+                if total > max_uncompressed_bytes:
+                    raise ValueError("ZIP 解压后大小超过限制")
+                if member.file_size / max(member.compress_size, 1) > max_compression_ratio:
+                    raise ValueError(f"ZIP 条目压缩比异常: {member.filename}")
+                target = (dest_dir / normalized).resolve()
+                if not target.is_relative_to(root):
+                    raise ValueError(f"ZIP 包含越界路径: {member.filename}")
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as source, target.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise HTTPException(400, f"无法安全解压 ZIP: {exc}") from exc
     logger.info(f"ZIP 已解压: {zip_path} -> {dest_dir}")
     return dest_dir
 
