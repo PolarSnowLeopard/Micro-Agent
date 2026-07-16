@@ -160,32 +160,3 @@ async def sse_response(
 
 def _sse_line(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-def immediate_sse_response(
-    final_results: dict[str, Any],
-    *,
-    steps: Sequence[dict[str, Any]] | None = None,
-    components_meta: dict[str, Any] | None = None,
-) -> StreamingResponse:
-    """Return already-computed results using the frontend's existing SSE contract."""
-
-    async def generate():
-        yield _sse_line({"status": "start"})
-        if components_meta:
-            yield _sse_line({"status": "components", **components_meta})
-        for index, step in enumerate(steps or (), start=1):
-            yield _sse_line({"step": index, **step})
-        yield _sse_line(
-            {
-                "is_last": True,
-                "is_final_result": True,
-                "final_results": final_results,
-            }
-        )
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
