@@ -373,7 +373,10 @@ def test_scaffold_and_verifier_accept_exact_multi_tool_contract(tmp_path):
 
     assert report.passed, report.to_json()
     assert report.checks["registeredTools"] == ["evaluate_risk", "predict_risk"]
-    assert '"FROM' not in (artifact / "Dockerfile").read_text(encoding="utf-8")
+    dockerfile = (artifact / "Dockerfile").read_text(encoding="utf-8")
+    assert '"FROM' not in dockerfile
+    assert "PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple" in dockerfile
+    assert '--index-url "${PIP_INDEX_URL}" --timeout 120 --retries 5' in dockerfile
 
 
 def test_verifier_blocks_incomplete_agent_output(tmp_path):

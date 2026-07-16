@@ -48,10 +48,12 @@ def prepare_artifact(project_dir: str | Path, artifact_dir: str | Path, plan: Pa
     compose_name = re.sub(r"[^a-z0-9_-]", "-", service_id.lower()).strip("-") or "mcp-service"
     (output_root / "Dockerfile").write_text(
         "FROM python:3.11-slim\n"
+        "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
         "WORKDIR /app\n"
         "COPY requirements.txt /app/requirements.txt\n"
-        "RUN pip install --no-cache-dir -r /app/requirements.txt\n"
+        "RUN pip install --no-cache-dir --index-url \"${PIP_INDEX_URL}\" "
+        "--timeout 120 --retries 5 -r /app/requirements.txt\n"
         "COPY . /app\n"
         "EXPOSE 8000\n"
         "CMD [\"python\", \"server.py\"]\n",
