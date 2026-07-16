@@ -2,7 +2,7 @@
 
 端点列表（与旧版一一对应）：
   POST /api/agent/code_analysis              文件上传 → 代码分析
-  POST /api/agent/service_packaging          文件上传 → 服务封装（含 ZIP 回传 + 会话记忆）
+  POST /api/agent/service_packaging          文件上传 → Agent 服务封装（含 ZIP 回传）
   POST /api/agent/mcp_test                   表单 → MCP 测试
   POST /api/agent/service_evaluation         表单+文件 → 服务评测
   POST /api/agent/service_upgrade_advice     表单 → 成果升级建议
@@ -53,6 +53,12 @@ from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.core.mcp_agent import MCPAgent
 from micro_agent.core.schema import AgentEvent
+from micro_agent.packaging.analyzer import RepositoryAnalyzer
+from micro_agent.packaging.workflow import (
+    AgenticAnalysisWorkflow,
+    AgenticPackagingWorkflow,
+    analysis_cache,
+)
 from micro_agent.meta_app import PublishedMetaAppError, load_published_artifact
 from micro_agent.simulation.artifact_runtime import run_artifact
 from micro_agent.task.base import get_task, list_tasks, render_prompt
@@ -72,51 +78,31 @@ WORKSPACE = str(config.workspace)
 
 @router.post("/code_analysis")
 async def code_analysis(file: UploadFile = File(...)):
-    saved = await save_upload(file, Path(WORKSPACE))
-    project_dir = resolve_project_dir(saved, Path(WORKSPACE))
-    main_code = find_main_file(project_dir)
-
-    prompt = render_prompt(
-        "code_analysis.md.j2",
-        workspace=WORKSPACE, input_dir=project_dir, main_code=main_code,
-        temp_dir="temp", function_info_path="function.json",
-    )
-    agent, _ = await build_agent(name="code_analysis", system_prompt=get_task("code_analysis").system_prompt)
-    ctx = await task_manager.submit(agent, prompt)
+    job_root = Path(WORKSPACE) / "temp" / f"mcp-analysis-{uuid.uuid4().hex}"
+    saved = await save_upload(file, job_root / "upload")
+    project_dir = resolve_project_dir(saved, job_root / "input")
+    ir = RepositoryAnalyzer().analyze(project_dir)
+    graph_path = job_root / "function.json"
+    workflow = AgenticAnalysisWorkflow(project_dir=project_dir, ir=ir, graph_path=graph_path)
+    ctx = await task_manager.submit(workflow, file.filename or "uploaded repository")
 
     return await sse_response(
         ctx,
-        output_files=[{"name": "function", "file": f"{WORKSPACE}/temp/function.json"}],
-        cleanup=partial(cleanup_paths, str(saved), project_dir),
+        output_files=[{"name": "function", "file": str(graph_path)}],
+        cleanup=partial(cleanup_paths, job_root),
+        components_meta={
+            "engine": "agentic",
+            "phase": "semantic_planning",
+            "repository_fingerprint": ir.fingerprint,
+            "files_scanned": len(ir.files),
+            "symbols_scanned": len(ir.symbols),
+        },
     )
 
 
 # ============================================================
-#  端点：服务封装（支持会话记忆 + Skills + RAG）
+#  端点：Agent 语义规划、实现与验收
 # ============================================================
-
-_packaging_retriever = None
-
-
-async def _get_packaging_retriever():
-    """延迟初始化服务封装知识库检索器（模块级单例）。"""
-    global _packaging_retriever
-    if _packaging_retriever is not None:
-        return _packaging_retriever
-
-    knowledge_dir = Path(config.workspace) / "knowledge" / "service_packaging"
-    if not knowledge_dir.exists():
-        return None
-
-    from micro_agent.core.rag.embedding import EmbeddingRetriever
-    _packaging_retriever = EmbeddingRetriever(
-        model=config.rag.embedding_model,
-        chunk_size=config.rag.chunk_size,
-        api_key=config.llm.api_key,
-        base_url=config.llm.base_url,
-    )
-    await _packaging_retriever.load_directory(knowledge_dir)
-    return _packaging_retriever
 
 
 @router.post("/service_packaging")
@@ -124,51 +110,38 @@ async def service_packaging(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(default=None),
 ):
-    saved = await save_upload(file, Path(WORKSPACE))
-    project_dir = resolve_project_dir(saved, Path(WORKSPACE))
-    main_code = find_main_file(project_dir)
-    output_dir = f"{WORKSPACE}/app-demo-output"
-
-    retriever = await _get_packaging_retriever()
-
-    skill_names = ["mcp_protocol", "docker_packaging", "code_analysis_patterns"]
-    llm_profile = "reasoning"
-
-    agent, sid = await build_agent(
-        name="service_packaging",
-        system_prompt=get_task("service_packaging").system_prompt,
-        max_steps=40,
-        llm_profile=llm_profile,
-        enable_session=True,
-        session_id=session_id,
-        skills=skill_names,
-        retriever=retriever,
+    job_root = Path(WORKSPACE) / "temp" / f"mcp-package-{uuid.uuid4().hex}"
+    saved = await save_upload(file, job_root / "upload")
+    project_dir = resolve_project_dir(saved, job_root / "input")
+    ir = RepositoryAnalyzer().analyze(project_dir)
+    output_dir = job_root / "artifact"
+    cached_plan = analysis_cache.get(ir.fingerprint)
+    response_session_id = session_id or uuid.uuid4().hex
+    workflow = AgenticPackagingWorkflow(
+        project_dir=project_dir,
+        ir=ir,
+        artifact_dir=output_dir,
+        plan=cached_plan,
     )
-
-    components_meta = {
-        "skills": skill_names,
-        "llm_profile": llm_profile,
-        "llm_model": config.get_llm(llm_profile).model,
-        "rag_ready": retriever is not None and len(retriever._docs) > 0,
-        "rag_docs_count": len(retriever._docs) if retriever else 0,
-        "memory_loaded": len(agent.memory) if sid and session_id else 0,
-        "session_id": sid,
-        "session_resumed": bool(session_id),
-    }
-
-    prompt = render_prompt(
-        "service_packaging.md.j2",
-        workspace=WORKSPACE, input_dir=project_dir, main_code=main_code,
-        output_dir=output_dir, temp_dir="temp", function_info_path="function.json",
-    )
-    ctx = await task_manager.submit(agent, prompt)
+    ctx = await task_manager.submit(workflow, file.filename or "uploaded repository")
 
     return await sse_response(
         ctx,
-        zip_dir=output_dir,
-        cleanup=partial(cleanup_paths, str(saved), project_dir),
-        session_id=sid,
-        components_meta=components_meta,
+        zip_dir=str(output_dir),
+        ready_marker=str(output_dir / ".ioeb-ready"),
+        cleanup=partial(cleanup_paths, job_root),
+        session_id=response_session_id,
+        components_meta={
+            "engine": "agentic",
+            "phase": "implementation_and_verification",
+            "llm_profile": "reasoning",
+            "llm_model": config.get_llm("reasoning").model,
+            "repository_fingerprint": ir.fingerprint,
+            "analysis_cache_hit": cached_plan is not None,
+            "session_id": response_session_id,
+            "max_repair_attempts": workflow.max_repairs,
+            "host_bash_enabled": False,
+        },
     )
 
 

@@ -1,0 +1,455 @@
+"""Two-stage Agent workflow: semantic planning, implementation, verification, repair."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import time
+from collections import OrderedDict
+from pathlib import Path
+from typing import AsyncIterator
+
+from micro_agent.core.agent import Agent
+from micro_agent.core.config import config
+from micro_agent.core.llm import LLM
+from micro_agent.core.schema import AgentEvent
+from micro_agent.packaging.analyzer import RepositoryIR
+from micro_agent.packaging.models import PackagingPlan
+from micro_agent.packaging.scaffold import prepare_artifact
+from micro_agent.packaging.tools import (
+    InspectRepository,
+    PlanStore,
+    ReadArtifactFile,
+    ReadProjectFile,
+    SavePackagingPlanJson,
+    VerifyArtifact,
+    WriteArtifactFile,
+)
+from micro_agent.packaging.verifier import ArtifactVerifier, VerificationReport
+from micro_agent.tool.registry import ToolRegistry
+from micro_agent.tool.terminate import Terminate
+
+
+PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责不是逐函数机械加装饰器，而是从用户提交的完整算法仓库中抽象稳定、可理解、可测试的服务能力。
+
+必须遵守：
+1. 先用 inspect_repository 查看全仓库，再阅读 README、测试、入口和核心实现等证据；不能只看 main.py。
+2. 以用户意图划分 MCP Tool。数据加载、日志、格式转换、私有方法、get_model_info/health 等运维元数据通常不应成为 Tool；一个 Tool 可以编排多个源码符号。任何返回都不得泄露容器内模型路径或临时目录。
+3. services 表示逻辑服务边界。按模型生命周期、共享状态、领域内聚性和部署依赖划分，不得为了增加数量而拆分。
+4. 每个工具必须给出明确 JSON Schema、源码符号、证据、适配/重构策略和依赖关系。禁止把复杂输入一律降级成 JSON 字符串。
+   MCP 调用者无法访问容器文件系统，public schema 严禁暴露 data_path、save_dir、model_path 等服务端路径；上传、解压、预处理、推理等内部阶段必须组合成端到端用户能力。
+   同一组源码和相同输入输出只能形成一个工具，严禁仅换名字制造重复能力。直接封装单个源码函数时，Schema 必须提供调用它所需的全部必填信息。
+   inputSchema.required 必须覆盖执行所需的用户输入，不能为了绕过校验把源码必填参数标成可选；object 输出声明了 properties 时，outputSchema.required 必须标明稳定返回字段。
+   源码函数含 yield/YieldFrom 时是多结果生成器，面向 MCP 的 outputSchema 必须是 array（由适配层收集为可序列化列表），不能伪装成单个 object。
+5. 不得使用隐藏样例答案、文件名特判、伪实现或硬编码返回值。
+6. 如果仓库没有可调用算法、源码无法解析、关键实现/依赖/模型资产缺失，decision=reject 并给出可操作原因。
+7. schemaVersion 必须逐字填写 ioeb.agentic-mcp-plan/v1。dependsOn 只能填写本规划中其他 Tool 的 name；不要填写服务 id、源码模块、模型或文件名，无依赖时填 []。
+8. smokeTest 只能使用仓库中真实存在、可执行的 fixture，或从源码中明确的字段约束机械选择输入；enabled=true 时 evidence 必须引用对应仓库文件/行号。没有可追溯输入时必须 enabled=false 并写 rationale，绝不能编造 Base64、文件路径或预期输出。
+9. 每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
+   独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
+10. 必须用 save_packaging_plan_json 提交一段无 Markdown fence 的完整严格 JSON。每次调用都是完整替换，不是局部 PATCH；校验失败后也必须重发包含非空 services 的完整规划，不能只发送修改字段。保存成功后调用 terminate。
+"""
+
+
+BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的 packaging_plan.json 已通过独立语义审核，你要把计划实现为真实可运行的 MCP 服务，而不是生成演示代码。
+
+必须遵守：
+1. 原始仓库已原样放在 algorithm/。阅读真实源码后，在 adapters.py 中完成参数校验、对象构造、数据转换、生命周期管理和结果序列化。
+2. server.py 已由审核后的工具名和 JSON Schema 确定性生成，是只读的协议边界。adapters.py 必须为每个计划工具实现一个同名、同参数的函数。
+3. 不复制或重写算法核心，不返回伪造结果，不做文件名/样例特判，不吞掉异常并伪装成功。
+   必须检查所有 sourceSymbols 是否在 except 中以“错误/失败/error/failed”等字符串作为普通返回值；若有，适配器必须识别该失败哨兵并 raise，使 MCP 返回 isError，而不是成功 payload。
+4. 产物内已有只读 algorithm_loader.py。adapters.py 必须先 `from algorithm_loader import ALGORITHM_DIR`，再导入 predictor、api、main 等原仓库模块；所有模型/资源路径必须以 ALGORITHM_DIR 开始，不能使用 adapters.py 所在目录冒充算法目录，也不能依赖进程当前目录。
+   源码函数必须用 alias 导入，避免适配函数覆盖同名导入后递归。任何执行异常都必须抛出，禁止返回“失败/错误”字符串伪装为成功。
+   若工具接收 Base64/ZIP，必须把原始字符串直接传给只读模块 runtime_guardrails.decode_safe_zip（该函数已经完成 Base64 解码和 ZIP 安全校验），再把返回的 BytesIO 交给原算法；禁止自行先 b64decode，也禁止给 guardrail 写 fallback。
+5. 只能用 write_artifact_file 写 adapters.py 和可选测试。不得使用 Bash、安装依赖、启动服务、覆盖 server.py、runtime_guardrails.py 或容器基线。
+6. 写完后必须调用 verify_artifact。若验收失败，阅读错误和现有文件，修复后重新验收。通过后调用 terminate。
+"""
+
+
+class AnalysisCache:
+    """Small immutable content-addressed cache joining the two existing UI calls."""
+
+    def __init__(self, *, max_entries: int = 32, ttl_seconds: int = 1800) -> None:
+        self.max_entries = max_entries
+        self.ttl_seconds = ttl_seconds
+        self._items: OrderedDict[str, tuple[float, dict]] = OrderedDict()
+
+    def get(self, fingerprint: str) -> PackagingPlan | None:
+        item = self._items.get(fingerprint)
+        if not item:
+            return None
+        created, raw = item
+        if time.monotonic() - created > self.ttl_seconds:
+            self._items.pop(fingerprint, None)
+            return None
+        self._items.move_to_end(fingerprint)
+        return PackagingPlan.validate(copy.deepcopy(raw))
+
+    def put(self, fingerprint: str, plan: PackagingPlan) -> None:
+        self._items[fingerprint] = (time.monotonic(), plan.to_dict())
+        self._items.move_to_end(fingerprint)
+        while len(self._items) > self.max_entries:
+            self._items.popitem(last=False)
+
+    def clear(self) -> None:
+        self._items.clear()
+
+
+analysis_cache = AnalysisCache()
+
+
+class AgenticAnalysisWorkflow:
+    """Run repository inspection and semantic planning for the existing analysis SSE."""
+
+    def __init__(self, *, project_dir: str | Path, ir: RepositoryIR, graph_path: str | Path) -> None:
+        self.project_dir = Path(project_dir).resolve()
+        self.ir = ir
+        self.graph_path = Path(graph_path).resolve()
+        self.plan_store = PlanStore(
+            path=self.graph_path.with_name("packaging_plan.json"),
+            known_symbols=ir.known_symbols,
+            known_files={file.path for file in ir.files},
+            symbol_required_parameters={
+                symbol.qualifiedName: symbol.requiredParameters for symbol in ir.symbols
+            },
+            symbol_calls={symbol.qualifiedName: symbol.calls for symbol in ir.symbols},
+            symbol_is_generator={symbol.qualifiedName: symbol.isGenerator for symbol in ir.symbols},
+            candidate_symbols=ir.public_callable_symbols,
+        )
+        self.agent = _build_planning_agent(self.project_dir, ir, self.plan_store)
+
+    def cancel(self) -> None:
+        self.agent.cancel()
+
+    async def run(self, request: str) -> AsyncIterator[AgentEvent]:
+        yield AgentEvent(
+            type="think",
+            step=0,
+            data={
+                "thought": (
+                    f"[全仓库证据提取] 已扫描 {len(self.ir.files)} 个文件、"
+                    f"{len(self.ir.symbols)} 个源码符号、{len(self.ir.testFiles)} 个测试文件；"
+                    "开始由 Agent 规划服务边界与 MCP 能力。"
+                )
+            },
+        )
+        async for event in _run_planner(self.agent, self.plan_store, self.ir, request):
+            yield event
+
+        plan = self.plan_store.plan
+        if plan is None:
+            yield AgentEvent(type="error", step=99, data={"error": _plan_failure(self.plan_store)})
+            return
+        if plan.decision == "reject":
+            reasons = "；".join(plan.data.get("rejectionReasons", []))
+            yield AgentEvent(type="error", step=99, data={"error": f"提交不满足自动封装要求：{reasons}"})
+            return
+
+        self.graph_path.parent.mkdir(parents=True, exist_ok=True)
+        self.graph_path.write_text(
+            json.dumps(plan.to_frontend_graph(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        analysis_cache.put(self.ir.fingerprint, plan)
+        yield AgentEvent(
+            type="done",
+            step=100,
+            data={
+                "result": (
+                    f"Agent 规划完成：{len(plan.data['services'])} 个逻辑服务边界、"
+                    f"{len(plan.tools)} 个 MCP 工具。"
+                )
+            },
+        )
+
+
+class AgenticPackagingWorkflow:
+    """Generate an artifact, then force the same Agent through bounded repairs."""
+
+    def __init__(
+        self,
+        *,
+        project_dir: str | Path,
+        ir: RepositoryIR,
+        artifact_dir: str | Path,
+        plan: PackagingPlan | None = None,
+        max_repairs: int = 2,
+    ) -> None:
+        self.project_dir = Path(project_dir).resolve()
+        self.ir = ir
+        self.artifact_dir = Path(artifact_dir).resolve()
+        self.plan = plan
+        self.max_repairs = max_repairs
+        self._active_agent: Agent | None = None
+
+    def cancel(self) -> None:
+        if self._active_agent:
+            self._active_agent.cancel()
+
+    async def run(self, request: str) -> AsyncIterator[AgentEvent]:
+        step_offset = 0
+        if self.plan is None:
+            plan_store = PlanStore(
+                path=self.artifact_dir.parent / "packaging_plan.json",
+                known_symbols=self.ir.known_symbols,
+                known_files={file.path for file in self.ir.files},
+                symbol_required_parameters={
+                    symbol.qualifiedName: symbol.requiredParameters for symbol in self.ir.symbols
+                },
+                symbol_calls={symbol.qualifiedName: symbol.calls for symbol in self.ir.symbols},
+                symbol_is_generator={
+                    symbol.qualifiedName: symbol.isGenerator for symbol in self.ir.symbols
+                },
+                candidate_symbols=self.ir.public_callable_symbols,
+            )
+            planner = _build_planning_agent(self.project_dir, self.ir, plan_store)
+            self._active_agent = planner
+            yield AgentEvent(
+                type="think",
+                step=0,
+                data={"thought": "未命中同文件分析缓存，先运行 Agent 语义规划阶段。"},
+            )
+            async for event in _run_planner(planner, plan_store, self.ir, request):
+                step_offset = max(step_offset, event.step + 1)
+                yield event
+            self.plan = plan_store.plan
+            if self.plan is None:
+                yield AgentEvent(type="error", step=step_offset, data={"error": _plan_failure(plan_store)})
+                return
+            if self.plan.decision == "reject":
+                reasons = "；".join(self.plan.data.get("rejectionReasons", []))
+                yield AgentEvent(type="error", step=step_offset, data={"error": f"提交不满足自动封装要求：{reasons}"})
+                return
+            analysis_cache.put(self.ir.fingerprint, self.plan)
+
+        plan = self.plan
+        assert plan is not None
+        prepare_artifact(self.project_dir, self.artifact_dir, plan)
+        yield AgentEvent(
+            type="think",
+            step=step_offset,
+            data={
+                "thought": (
+                    f"[隔离产物准备] 已复制完整算法仓库并固化部署基线；"
+                    f"协议层已从审核规划确定性生成；现在由实现 Agent 生成 {len(plan.tools)} 个工具的语义适配层。"
+                )
+            },
+        )
+        step_offset += 1
+
+        builder = _build_builder_agent(self.project_dir, self.artifact_dir, plan, self.ir)
+        self._active_agent = builder
+        report: VerificationReport | None = None
+        for attempt in range(self.max_repairs + 1):
+            prompt = _builder_prompt(plan, self.ir) if attempt == 0 else _repair_prompt(report, attempt)
+            async for event in builder.run(prompt):
+                if event.type == "done":
+                    continue
+                forwarded = AgentEvent(type=event.type, step=step_offset + event.step, data=event.data)
+                yield forwarded
+            step_offset += builder.max_steps + 1
+
+            report = ArtifactVerifier(self.artifact_dir, plan).verify()
+            (self.artifact_dir / "verification_report.json").write_text(
+                report.to_json() + "\n", encoding="utf-8"
+            )
+            if report.passed:
+                marker = {
+                    "schemaVersion": "ioeb.mcp-artifact-ready/v1",
+                    "repositoryFingerprint": self.ir.fingerprint,
+                    "planSha256": hashlib.sha256(plan.to_json(indent=None).encode("utf-8")).hexdigest(),
+                    "toolCount": len(plan.tools),
+                    "repairAttempts": attempt,
+                }
+                (self.artifact_dir / ".ioeb-ready").write_text(
+                    json.dumps(marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+                )
+                yield AgentEvent(
+                    type="done",
+                    step=step_offset,
+                    data={
+                        "result": (
+                            f"Agent 封装通过验收：{len(plan.tools)} 个工具，"
+                            f"修复循环 {attempt} 次。"
+                        )
+                    },
+                )
+                return
+
+            if attempt < self.max_repairs:
+                yield AgentEvent(
+                    type="think",
+                    step=step_offset,
+                    data={
+                        "thought": (
+                            f"[独立验收未通过] 发现 {len(report.errors)} 个问题，"
+                            f"将验收报告退回同一 Agent，进行第 {attempt + 1} 次定向修复。"
+                        ),
+                        "verification_errors": report.errors,
+                    },
+                )
+                step_offset += 1
+
+        assert report is not None
+        yield AgentEvent(
+            type="error",
+            step=step_offset,
+            data={
+                "error": (
+                    "Agent 生成产物经过有限修复后仍未通过验收，已阻止发布：\n- "
+                    + "\n- ".join(report.errors)
+                )
+            },
+        )
+
+
+async def _run_planner(
+    agent: Agent,
+    store: PlanStore,
+    ir: RepositoryIR,
+    user_request: str,
+) -> AsyncIterator[AgentEvent]:
+    step_offset = 0
+    for attempt in range(3):
+        prompt = _planner_prompt(ir, user_request) if attempt == 0 else (
+            "你尚未提交一个有效规划。必须使用 save_packaging_plan_json 重新发送完整严格 JSON；"
+            "这不是 PATCH，decision=package 时 services 绝对不能省略或为空。"
+            + ("\n上次校验错误：\n- " + "\n- ".join(store.last_errors) if store.last_errors else "")
+        )
+        async for event in agent.run(prompt):
+            if event.type == "done":
+                continue
+            yield AgentEvent(type=event.type, step=step_offset + event.step, data=event.data)
+        if store.plan is not None:
+            return
+        step_offset += agent.max_steps + 1
+        yield AgentEvent(
+            type="think",
+            step=step_offset,
+            data={"thought": "[规划质量门禁] 未收到有效结构化规划，要求 Agent 根据校验反馈重试。"},
+        )
+
+
+def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore) -> Agent:
+    tools = ToolRegistry()
+    tools.register(InspectRepository(ir))
+    tools.register(ReadProjectFile(project_dir))
+    tools.register(SavePackagingPlanJson(store))
+    tools.register(Terminate())
+    return Agent(
+        name="mcp_service_architect",
+        llm=LLM(config.get_llm("reasoning")),
+        tools=tools,
+        system_prompt=PLANNER_SYSTEM_PROMPT,
+        max_steps=24,
+        max_observe=50_000,
+    )
+
+
+def _build_builder_agent(
+    project_dir: Path,
+    artifact_dir: Path,
+    plan: PackagingPlan,
+    ir: RepositoryIR,
+) -> Agent:
+    tools = ToolRegistry()
+    tools.register(InspectRepository(ir))
+    tools.register(ReadProjectFile(project_dir))
+    tools.register(ReadArtifactFile(artifact_dir))
+    tools.register(WriteArtifactFile(artifact_dir))
+    tools.register(VerifyArtifact(artifact_dir, plan))
+    tools.register(Terminate())
+    return Agent(
+        name="mcp_service_builder",
+        llm=LLM(config.get_llm("reasoning")),
+        tools=tools,
+        system_prompt=BUILDER_SYSTEM_PROMPT,
+        max_steps=30,
+        max_observe=50_000,
+    )
+
+
+def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
+    public_symbols = [
+        {
+            "qualifiedName": symbol.qualifiedName,
+            "kind": symbol.kind,
+            "file": symbol.file,
+            "signature": symbol.signature,
+            "docstring": symbol.docstring[:240],
+            "calls": symbol.calls[:15],
+            "isGenerator": symbol.isGenerator,
+        }
+        for symbol in ir.symbols
+        if symbol.isPublic
+    ][:160]
+    overview = {
+        "fingerprint": ir.fingerprint,
+        "fileCount": len(ir.files),
+        "symbolCount": len(ir.symbols),
+        "entrypointHints": ir.entrypointHints,
+        "testFiles": ir.testFiles,
+        "assetFiles": ir.assetFiles,
+        "documentationFiles": list(ir.documentation),
+        "parseErrors": ir.parseErrors,
+        "publicSymbols": public_symbols,
+        "truncated": ir.truncated,
+    }
+    return (
+        "请分析这个算法仓库，规划可投入真实使用的 MCP 服务。\n"
+        f"用户请求补充：{user_request or '无'}\n"
+        "以下只是索引，必须使用工具读取证据后再决策：\n"
+        + json.dumps(overview, ensure_ascii=False, indent=2)
+    )
+
+
+def _builder_prompt(plan: PackagingPlan, ir: RepositoryIR) -> str:
+    files_by_symbol = {
+        symbol.qualifiedName: {
+            "file": symbol.file,
+            "line": symbol.line,
+            "signature": symbol.signature,
+            "calls": symbol.calls,
+        }
+        for symbol in ir.symbols
+        if symbol.qualifiedName in {name for tool in plan.tools for name in tool["sourceSymbols"]}
+    }
+    for symbol in ir.symbols:
+        if symbol.qualifiedName in files_by_symbol and symbol.failureReturns:
+            files_by_symbol[symbol.qualifiedName]["failureReturns"] = symbol.failureReturns
+    return (
+        "请实现以下已审核规划。先阅读所有 sourceSymbols 对应源码及其必要依赖，再只写 adapters.py（server.py 是只读协议边界）。\n"
+        "inspect_repository 可查看完整提交清单；read_project_file 的路径相对提交仓库，不能加 algorithm/ 前缀；"
+        "read_artifact_file 才用于查看 server.py、algorithm_loader.py 等生成产物。\n"
+        "源码导入的标准前缀是 `from algorithm_loader import ALGORITHM_DIR`，它必须出现在 predictor/api/main 等提交模块导入之前。\n"
+        "sourceSymbols 索引：\n"
+        + json.dumps(files_by_symbol, ensure_ascii=False, indent=2)
+        + "\n仓库中已静态发现的失败字符串返回（包括 sourceSymbols 的下游调用，必须追踪）：\n"
+        + json.dumps(
+            {
+                symbol.qualifiedName: symbol.failureReturns
+                for symbol in ir.symbols
+                if symbol.failureReturns
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n完整规划：\n"
+        + plan.to_json()
+    )
+
+
+def _repair_prompt(report: VerificationReport | None, attempt: int) -> str:
+    return (
+        f"这是第 {attempt} 次定向修复。独立验收报告如下。请阅读现有 server.py/adapters.py，"
+        "只修复 adapters.py 中报告指出的问题；不得改变 server.py、packaging_plan.json 或删除计划中的工具。"
+        "修复后再次调用 verify_artifact。\n"
+        + (report.to_json() if report else "无验收报告")
+    )
+
+
+def _plan_failure(store: PlanStore) -> str:
+    if store.last_errors:
+        return "Agent 未能提交有效封装规划：\n- " + "\n- ".join(store.last_errors)
+    return "Agent 在有限步骤内未调用 save_packaging_plan，已终止任务。"
