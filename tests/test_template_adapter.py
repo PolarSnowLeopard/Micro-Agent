@@ -104,6 +104,35 @@ def main_process(value: float) -> float:
     assert any("模块级调用" in error for error in report.errors)
 
 
+def test_template_validator_allows_pure_derived_module_constants_and_type_ellipsis(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(values):\n    return len(values)\n", encoding="utf-8"
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+LABELS = ["a", "b"]
+LABEL_COUNT = len(LABELS)
+
+def main_process(values: tuple[float, ...]) -> dict[str, int]:
+    """Run an algorithm.
+
+    Args:
+        values: Input values.
+
+    Returns:
+        Output count.
+    """
+    return {"count": run(values), "labels": LABEL_COUNT}
+''',
+    )
+
+    assert validate_algorithm_template(project).passed
+
+
 def test_l0_requires_explicit_negative_control_opt_in(tmp_path: Path) -> None:
     project = _project(
         tmp_path,

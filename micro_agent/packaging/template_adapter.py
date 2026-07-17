@@ -120,19 +120,35 @@ def validate_algorithm_template(
     if any(isinstance(node, (ast.Pass, ast.Yield, ast.YieldFrom)) for node in ast.walk(function)):
         errors.append("main_process 不得包含 pass/yield 占位或流式返回")
     if any(
-        isinstance(node, ast.Constant) and node.value is Ellipsis for node in ast.walk(function)
+        (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and node.value.value is Ellipsis
+        )
+        or (
+            isinstance(node, (ast.Assign, ast.AnnAssign, ast.Return))
+            and isinstance(getattr(node, "value", None), ast.Constant)
+            and getattr(node, "value").value is Ellipsis
+        )
+        for node in ast.walk(function)
     ):
         errors.append("main_process 不得使用省略号代替实现")
 
     runtime_assignments: list[int] = []
+    safe_module_calls = {"len", "min", "max", "sum", "tuple", "frozenset"}
     for node in tree.body:
         value: ast.AST | None = None
         if isinstance(node, ast.Assign):
             value = node.value
         elif isinstance(node, ast.AnnAssign):
             value = node.value
-        if value is not None and any(isinstance(child, ast.Call) for child in ast.walk(value)):
-            runtime_assignments.append(getattr(node, "lineno", 0))
+        if value is not None:
+            calls = [child for child in ast.walk(value) if isinstance(child, ast.Call)]
+            if any(
+                not isinstance(call.func, ast.Name) or call.func.id not in safe_module_calls
+                for call in calls
+            ):
+                runtime_assignments.append(getattr(node, "lineno", 0))
     if runtime_assignments:
         errors.append(
             "禁止模块级调用初始化运行状态，相关行: "
@@ -270,10 +286,44 @@ class VerifyTemplate(Tool):
         return ToolResult(output=report.to_json() if report.passed else "模板校验失败:\n" + report.to_json())
 
 
+class BudgetedInspectRepository(InspectRepository):
+    """Prevent repeated full-IR reads from consuming the adaptation budget."""
+
+    def __init__(self, ir: RepositoryIR) -> None:
+        super().__init__(ir)
+        self.calls = 0
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        self.calls += 1
+        if self.calls > 1:
+            return ToolResult(error="inspect_repository 已调用过；请使用已有清单并开始编写模板入口")
+        return await super().execute(**kwargs)
+
+
+class BudgetedReadProjectFile(ReadProjectFile):
+    """Bound source inspection while retaining the path-containment guarantees."""
+
+    def __init__(self, project_dir: str | Path, *, max_reads: int = 12) -> None:
+        super().__init__(project_dir)
+        self.max_reads = max_reads
+        self.calls = 0
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        self.calls += 1
+        if self.calls > self.max_reads:
+            return ToolResult(
+                error=(
+                    f"本轮最多读取 {self.max_reads} 个文件，额度已用完；"
+                    "请根据已有证据写 main.py、requirements.txt 并调用 verify_template"
+                )
+            )
+        return await super().execute(**kwargs)
+
+
 def build_template_adapter_agent(project_dir: Path, ir: RepositoryIR) -> Agent:
     tools = ToolRegistry()
-    tools.register(InspectRepository(ir))
-    tools.register(ReadProjectFile(project_dir))
+    tools.register(BudgetedInspectRepository(ir))
+    tools.register(BudgetedReadProjectFile(project_dir))
     tools.register(WriteTemplateFile(project_dir))
     tools.register(VerifyTemplate(project_dir))
     tools.register(Terminate())
@@ -282,7 +332,7 @@ def build_template_adapter_agent(project_dir: Path, ir: RepositoryIR) -> Agent:
         llm=LLM(config.get_llm("reasoning")),
         tools=tools,
         system_prompt=TEMPLATE_ADAPTER_SYSTEM_PROMPT,
-        max_steps=32,
+        max_steps=24,
         max_observe=50_000,
         terminal_tools={"verify_template", "terminate"},
     )
