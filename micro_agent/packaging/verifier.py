@@ -614,7 +614,11 @@ def _asset_literals_without_algorithm_root(tree: ast.Module, algorithm_root: Pat
     asset_names = {
         path.name
         for path in algorithm_root.rglob("*")
-        if path.is_file() and path.suffix.lower() not in {".py", ".pyc", ".md", ".txt"}
+        if (
+            path.is_file()
+            and path.suffix
+            and path.suffix.lower() not in {".py", ".pyc", ".md", ".txt"}
+        )
     }
     if not asset_names:
         return set()

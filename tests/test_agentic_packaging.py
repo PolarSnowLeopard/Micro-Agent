@@ -912,6 +912,24 @@ def evaluate_risk(values: list[float]) -> dict[str, float]:
     assert any("risk-model.bin" in error and "ALGORITHM_DIR" in error for error in report.errors)
 
 
+def test_verifier_does_not_treat_extensionless_data_name_as_asset_path(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "data").write_bytes(b"opaque fixture")
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    adapters = _valid_adapters().replace(
+        '"""Predict one normalized risk score."""',
+        '"""Predict one score after validating input data."""',
+    )
+    (artifact / "adapters.py").write_text(adapters, encoding="utf-8")
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert report.passed, report.to_json()
+
+
 def test_verifier_requires_direct_single_base64_zip_guard(tmp_path):
     project = _sample_project(tmp_path)
     ir = RepositoryAnalyzer().analyze(project)
