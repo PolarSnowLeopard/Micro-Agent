@@ -50,7 +50,7 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 9. 普通仓库中每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
    独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
    excludedSymbols 必须位于规划 JSON 根节点，和 services 同级；绝不能写入 services[i] 内。
-   若索引声明 templateContract=true，则根目录 main.main_process 是用户提交模板的公共契约和审计边界；底层公开符号是实现证据，不要求逐项写入 excludedSymbols。必须阅读 main_process 及其调用的底层代码，并可按其中稳定 operation/工作流分支抽象成多个 Tool；不得因为只有一个契约入口就机械地只生成一个 Tool。
+   若索引声明 templateContract=true，则根目录 main.main_process 是用户提交模板的公共契约和审计边界；底层公开符号是实现证据，不要求逐项写入 excludedSymbols。索引已内嵌完整模板入口和 README 摘要，最多再读取 6 个必要的底层文件。必须阅读 main_process 及其调用的底层代码，并可按其中稳定 operation/工作流分支抽象成多个 Tool；不得因为只有一个契约入口就机械地只生成一个 Tool。
 10. 必须用 save_packaging_plan_json 提交一段无 Markdown fence 的完整严格 JSON。每次调用都是完整替换，不是局部 PATCH；校验失败后外层流程会反馈错误并开启下一轮，仍必须重发包含非空 services 的完整规划，不能只发送修改字段。调用 save_packaging_plan_json 后本轮即结束，无需再调用 terminate。
     顶层结构固定为 {"schemaVersion": ..., "decision": ..., "analysisSummary": ..., "services": [...], "excludedSymbols": [...], "assumptions": [...], "riskNotes": [...]}。
 """
@@ -337,9 +337,10 @@ async def _run_planner(
 
 
 def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore) -> Agent:
+    template_contract = bool(_template_contract_entries(ir))
     tools = ToolRegistry()
     tools.register(InspectRepository(ir, max_calls=1))
-    tools.register(ReadProjectFile(project_dir, max_reads=14))
+    tools.register(ReadProjectFile(project_dir, max_reads=6 if template_contract else 14))
     tools.register(SavePackagingPlanJson(store))
     tools.register(Terminate())
     return Agent(
@@ -347,7 +348,13 @@ def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore)
         llm=LLM(config.get_llm("reasoning")),
         tools=tools,
         system_prompt=PLANNER_SYSTEM_PROMPT,
-        max_steps=24,
+        next_step_prompt=(
+            "模板入口与文档证据已在初始请求中。最多补读 6 个底层文件；"
+            "证据足够后立即调用 save_packaging_plan_json，不得重复读取。"
+            if template_contract
+            else "证据足够后立即调用 save_packaging_plan_json，不得重复读取。"
+        ),
+        max_steps=16 if template_contract else 24,
         max_observe=50_000,
         terminal_tools={"save_packaging_plan_json", "terminate"},
     )
@@ -407,6 +414,15 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "templateContract": template_contract,
         "contractEntrySymbols": contract_symbols if template_contract else [],
     }
+    if template_contract:
+        main_path = Path(ir.root) / "main.py"
+        overview["templateEntrySource"] = main_path.read_text(
+            encoding="utf-8", errors="replace"
+        )[:60_000]
+        overview["documentationExcerpts"] = {
+            path: content[:6_000]
+            for path, content in list(ir.documentation.items())[:3]
+        }
     return (
         "请分析这个算法仓库，规划可投入真实使用的 MCP 服务。\n"
         f"用户请求补充：{user_request or '无'}\n"

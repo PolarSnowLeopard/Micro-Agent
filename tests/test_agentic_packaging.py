@@ -393,6 +393,29 @@ async def test_save_plan_json_canonicalizes_only_nonsemantic_fields(tmp_path):
     assert isinstance(store.plan.tools[0]["smokeTest"]["evidence"], list)
 
 
+async def test_save_plan_json_fills_conservative_nonsemantic_defaults(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(tmp_path / "plan.json", ir.known_symbols)
+    tool = SavePackagingPlanJson(store)
+    raw = _plan(ir).to_dict()
+    raw.pop("schemaVersion")
+    raw["decision"] = "packaged"
+    raw.pop("analysisSummary")
+    raw["services"][0].pop("rationale")
+    for item in raw["services"][0]["tools"]:
+        item.pop("adapterStrategy")
+        item.pop("dependsOn")
+        item.pop("smokeTest")
+
+    result = await tool.execute(content=json.dumps(raw, ensure_ascii=False))
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.decision == "package"
+    assert store.plan.data["schemaVersion"] == "ioeb.agentic-mcp-plan/v1"
+    assert all(not item["smokeTest"]["enabled"] for item in store.plan.tools)
+
+
 async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path):
     """Regression for the GNN plan that nested the repository audit in a service."""
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))

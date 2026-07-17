@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from micro_agent.packaging.analyzer import RepositoryIR
-from micro_agent.packaging.models import PLAN_JSON_SCHEMA, PackagingPlan, PlanValidationError
+from micro_agent.packaging.models import (
+    PLAN_JSON_SCHEMA,
+    SCHEMA_VERSION,
+    PackagingPlan,
+    PlanValidationError,
+)
 from micro_agent.packaging.verifier import ArtifactVerifier
 from micro_agent.tool.base import Tool, ToolResult
 
@@ -210,6 +215,24 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
     services = raw.get("services")
     if not isinstance(services, list):
         return
+    raw.setdefault("schemaVersion", SCHEMA_VERSION)
+    if raw.get("decision") not in {"package", "reject"}:
+        if services:
+            raw["decision"] = "package"
+        elif raw.get("rejectionReasons"):
+            raw["decision"] = "reject"
+    if not isinstance(raw.get("analysisSummary"), str) or len(raw["analysisSummary"].strip()) < 10:
+        descriptions = [
+            str(service.get("description", "")).strip()
+            for service in services
+            if isinstance(service, dict) and service.get("description")
+        ]
+        raw["analysisSummary"] = (
+            "；".join(descriptions) or "根据仓库源码证据规划可远程调用的算法服务能力。"
+        )
+    raw.setdefault("excludedSymbols", [])
+    raw.setdefault("assumptions", [])
+    raw.setdefault("riskNotes", [])
     nested_exclusions: list[Any] = []
     for service in services:
         if not isinstance(service, dict):
@@ -227,6 +250,13 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
             service["id"] = _snake_identifier(service["name"], fallback="algorithm_service")
         elif isinstance(service_id, str):
             service["id"] = _snake_identifier(service_id, fallback="algorithm_service")
+        service_name = str(service.get("name") or service.get("description") or "Algorithm service")
+        service.setdefault("name", service_name)
+        service.setdefault("description", service_name)
+        service.setdefault(
+            "rationale",
+            "These tools share the same algorithm contract, runtime dependencies, and lifecycle.",
+        )
         tools = service.get("tools")
         if not isinstance(tools, list):
             continue
@@ -237,7 +267,19 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
                 tool["evidence"] = [tool["evidence"]]
             elif not tool.get("evidence") and isinstance(tool.get("sourceSymbols"), list):
                 tool["evidence"] = list(tool["sourceSymbols"])
+            tool.setdefault("dependsOn", [])
+            if not isinstance(tool.get("adapterStrategy"), str) or not tool["adapterStrategy"].strip():
+                symbols = ", ".join(tool.get("sourceSymbols", [])) or "the audited source capability"
+                tool["adapterStrategy"] = (
+                    f"Validate the public JSON inputs, call {symbols}, and serialize its result."
+                )
             smoke = tool.get("smokeTest")
+            if not isinstance(smoke, dict):
+                smoke = {
+                    "enabled": False,
+                    "rationale": "The planner did not identify a repository-backed executable fixture.",
+                }
+                tool["smokeTest"] = smoke
             if isinstance(smoke, dict) and isinstance(smoke.get("evidence"), str):
                 smoke["evidence"] = [smoke["evidence"]]
 
