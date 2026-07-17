@@ -902,6 +902,50 @@ def test_verifier_requires_guard_on_source_failure_sentinel(tmp_path):
     assert helper_report.passed, helper_report.to_json()
 
 
+def test_verifier_requires_guard_on_structured_failure_result(tmp_path):
+    project = _sample_project(tmp_path)
+    core = project / "core.py"
+    core.write_text(
+        core.read_text(encoding="utf-8")
+        + "\ndef structured(value: float) -> dict:\n"
+        + "    if value < 0:\n"
+        + '        return {"success": False, "error": "negative value"}\n'
+        + '    return {"success": True, "score": value}\n',
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    structured = next(symbol for symbol in ir.symbols if symbol.qualifiedName == "core.structured")
+    assert structured.failureReturns == ["structured failure: success=false"]
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"][0]["sourceSymbols"] = ["core.structured"]
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    unguarded = _valid_adapters().replace(
+        "from algorithm.core import predict as algorithm_predict",
+        "from algorithm.core import structured as algorithm_predict",
+    )
+    (artifact / "adapters.py").write_text(unguarded, encoding="utf-8")
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert any("返回值并 raise" in error for error in report.errors)
+
+    guarded = unguarded.replace(
+        "    return algorithm_predict(float(value))",
+        "    result = algorithm_predict(float(value))\n"
+        '    if result.get("success") is False:\n'
+        '        raise RuntimeError(result.get("error", "algorithm failed"))\n'
+        "    return result",
+    )
+    (artifact / "adapters.py").write_text(guarded, encoding="utf-8")
+
+    fixed_report = ArtifactVerifier(artifact, plan).verify()
+
+    assert fixed_report.passed, fixed_report.to_json()
+
+
 def test_verifier_rejects_legacy_import_before_loader_and_wrong_asset_root(tmp_path):
     project = _sample_project(tmp_path)
     (project / "risk-model.bin").write_bytes(b"model")
@@ -1156,6 +1200,8 @@ def test_runtime_probe_is_valid_python_and_checks_smoke_output_schema():
 
     compile(source, "<runtime-probe>", "exec")
     assert "assert_schema(" in source
+    assert "imported_attribute_gaps()" in source
+    assert '"runtimeApiCompatibilityFailures": api_gaps' in source
     assert "smoke output schema mismatch" in source
     assert '"smokeTestFailures": smoke_failures' in source
     assert "timeout=17" in source

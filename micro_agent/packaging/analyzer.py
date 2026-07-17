@@ -339,6 +339,15 @@ def _function_calls(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
 def _failure_return_texts(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     result: set[str] = set()
     for child in ast.walk(node):
+        if isinstance(child, ast.Return) and isinstance(child.value, ast.Dict):
+            pairs = {
+                key.value: value
+                for key, value in zip(child.value.keys, child.value.values)
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+            success = pairs.get("success")
+            if isinstance(success, ast.Constant) and success.value is False:
+                result.add("structured failure: success=false")
         if not isinstance(child, ast.ExceptHandler):
             continue
         for nested in ast.walk(child):

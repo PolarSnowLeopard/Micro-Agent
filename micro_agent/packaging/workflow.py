@@ -67,7 +67,8 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
 1. 原始仓库已原样放在 algorithm/。阅读真实源码后，在 adapters.py 中完成参数校验、对象构造、数据转换、生命周期管理和结果序列化。
 2. server.py 已由审核后的工具名和 JSON Schema 确定性生成，是只读的协议边界。adapters.py 必须为每个计划工具实现一个同名、同参数的函数。
 3. 不复制或重写算法核心，不返回伪造结果，不做文件名/样例特判，不吞掉异常并伪装成功。
-   必须检查所有 sourceSymbols 是否在 except 中以“错误/失败/error/failed”等字符串作为普通返回值；若有，适配器必须识别该失败哨兵并 raise，使 MCP 返回 isError，而不是成功 payload。
+   必须检查所有 sourceSymbols 是否以“错误/失败/error/failed”等字符串，或 `success=false` 结构化对象作为普通返回值；
+   若有，适配器必须识别该失败契约并 raise，使 MCP 返回 isError，而不是成功 payload。
 4. 产物内已有只读 algorithm_loader.py。adapters.py 必须先 `from algorithm_loader import ALGORITHM_DIR`，再导入 predictor、api、main 等原仓库模块；所有模型/资源路径必须以 ALGORITHM_DIR 开始，不能使用 adapters.py 所在目录冒充算法目录，也不能依赖进程当前目录。
    源码函数必须用 alias 导入，避免适配函数覆盖同名导入后递归。任何执行异常都必须抛出，禁止返回“失败/错误”字符串伪装为成功。
    若工具接收 Base64/ZIP，必须把原始字符串直接传给只读模块 runtime_guardrails.decode_safe_zip（该函数已经完成 Base64 解码和 ZIP 安全校验），再把返回的 BytesIO 交给原算法；禁止自行先 b64decode，也禁止给 guardrail 写 fallback。

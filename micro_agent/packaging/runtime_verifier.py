@@ -205,7 +205,10 @@ class ContainerRuntimeVerifier:
 def _runtime_probe_source(smoke_timeout_seconds: int) -> str:
     return f"""
 import asyncio
+import ast
 import json
+from pathlib import Path
+import sys
 
 import server
 
@@ -267,6 +270,53 @@ def assert_schema(value, schema, path="$"):
         for index, item in enumerate(value):
             assert_schema(item, schema["items"], f"{{path}}[{{index}}]")
 
+def imported_attribute_gaps():
+    algorithm_root = Path("/app/algorithm").resolve()
+    modules = {{}}
+    for name, module in list(sys.modules.items()):
+        module_file = getattr(module, "__file__", None)
+        if module_file:
+            modules[(name, str(module_file))] = module
+    adapters_module = sys.modules.get("adapters")
+    if adapters_module is not None:
+        for name, value in vars(adapters_module).items():
+            module_file = getattr(value, "__file__", None)
+            if module_file:
+                modules[(name, str(module_file))] = value
+
+    gaps = {{}}
+    for (module_name, _), module in modules.items():
+        module_file = getattr(module, "__file__", None)
+        if not module_file:
+            continue
+        try:
+            path = Path(module_file).resolve()
+            if not path.is_relative_to(algorithm_root) or path.suffix != ".py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        imported_names = set()
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                imported_names.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                imported_names.update(alias.asname or alias.name for alias in node.names)
+        missing = set()
+        namespace = vars(module)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in imported_names
+                and node.value.id in namespace
+                and not hasattr(namespace[node.value.id], node.attr)
+            ):
+                missing.add(f"{{node.value.id}}.{{node.attr}}")
+        if missing:
+            gaps[f"{{module_name}} ({{path.relative_to(algorithm_root)}})"] = sorted(missing)
+    return gaps
+
 async def verify():
     plan = json.load(open("/app/packaging_plan.json", encoding="utf-8"))
     planned = [
@@ -280,6 +330,20 @@ async def verify():
         raise RuntimeError(
             "runtime tool registry mismatch: "
             + json.dumps({{"expected": expected, "actual": registered}})
+        )
+    api_gaps = imported_attribute_gaps()
+    if api_gaps:
+        payload = {{
+            "registeredTools": registered,
+            "smokeTestsExecuted": [],
+            "smokeTestCount": 0,
+            "smokeTestFailures": {{}},
+            "runtimeApiCompatibilityFailures": api_gaps,
+        }}
+        print({PROBE_MARKER!r} + json.dumps(payload, sort_keys=True))
+        raise RuntimeError(
+            "runtime API compatibility failures: "
+            + json.dumps(api_gaps, sort_keys=True)
         )
     smoke = []
     smoke_failures = {{}}
@@ -364,6 +428,8 @@ def _classify_failure(text: str, *, phase: str) -> str:
         return "runtime_filesystem"
     if "runtime tool registry mismatch" in normalized:
         return "tool_registry"
+    if "runtime api compatibility failures" in normalized:
+        return "runtime_api_compatibility"
     if (
         "validation error" in normalized
         or "smoketest" in normalized
