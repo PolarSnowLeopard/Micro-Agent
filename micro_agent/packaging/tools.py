@@ -31,10 +31,15 @@ class InspectRepository(Tool):
     description = "读取全仓库静态清单：文件、函数/类/方法、签名、调用、入口、测试、资产和 README 摘要。"
     parameters = {"type": "object", "properties": {}, "additionalProperties": False}
 
-    def __init__(self, ir: RepositoryIR) -> None:
+    def __init__(self, ir: RepositoryIR, *, max_calls: int | None = None) -> None:
         self.ir = ir
+        self.max_calls = max_calls
+        self.calls = 0
 
     async def execute(self, **kwargs: Any) -> ToolResult:
+        self.calls += 1
+        if self.max_calls is not None and self.calls > self.max_calls:
+            return ToolResult(error="仓库完整清单已读取过；请使用已有证据继续规划")
         return ToolResult(output=self.ir.to_json(indent=None))
 
 
@@ -52,11 +57,27 @@ class ReadProjectFile(Tool):
         "additionalProperties": False,
     }
 
-    def __init__(self, project_dir: str | Path, *, max_chars: int = 60_000) -> None:
+    def __init__(
+        self,
+        project_dir: str | Path,
+        *,
+        max_chars: int = 60_000,
+        max_reads: int | None = None,
+    ) -> None:
         self.root = Path(project_dir).resolve()
         self.max_chars = max_chars
+        self.max_reads = max_reads
+        self.calls = 0
 
     async def execute(self, **kwargs: Any) -> ToolResult:
+        self.calls += 1
+        if self.max_reads is not None and self.calls > self.max_reads:
+            return ToolResult(
+                error=(
+                    f"本轮源码读取上限为 {self.max_reads} 个文件，额度已用完；"
+                    "请根据已有证据提交结构化规划"
+                )
+            )
         path = _contained_path(self.root, str(kwargs.get("path", "")))
         if not path.is_file() or path.is_symlink():
             return ToolResult(error=f"文件不存在或不可读: {kwargs.get('path', '')}")

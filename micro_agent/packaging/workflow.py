@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import json
@@ -34,7 +35,7 @@ from micro_agent.tool.terminate import Terminate
 PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责不是逐函数机械加装饰器，而是从用户提交的完整算法仓库中抽象稳定、可理解、可测试的服务能力。
 
 必须遵守：
-1. 先用 inspect_repository 查看全仓库，再阅读 README、测试、入口和核心实现等证据；不能只看 main.py。
+1. 只调用一次 inspect_repository 查看全仓库，再阅读 README、测试、入口和核心实现等证据；最多读取 14 个最相关文件，不能只看 main.py，也不得漫无目的遍历。
 2. 以用户意图划分 MCP Tool。数据加载、日志、格式转换、私有方法、get_model_info/health 等运维元数据通常不应成为 Tool；一个 Tool 可以编排多个源码符号。任何返回都不得泄露容器内模型路径或临时目录。
 3. services 表示逻辑服务边界。按模型生命周期、共享状态、领域内聚性和部署依赖划分，不得为了增加数量而拆分。
 4. 每个工具必须给出明确 JSON Schema、源码符号、证据、适配/重构策略和依赖关系。禁止把复杂输入一律降级成 JSON 字符串。
@@ -46,10 +47,11 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 6. 如果仓库没有可调用算法、源码无法解析、关键实现/依赖/模型资产缺失，decision=reject 并给出可操作原因。
 7. schemaVersion 必须逐字填写 ioeb.agentic-mcp-plan/v1。dependsOn 只能填写本规划中其他 Tool 的 name；不要填写服务 id、源码模块、模型或文件名，无依赖时填 []。
 8. smokeTest 只能使用仓库中真实存在、可执行的 fixture，或从源码中明确的字段约束机械选择输入；enabled=true 时 evidence 必须引用对应仓库文件/行号。没有可追溯输入时必须 enabled=false 并写 rationale，绝不能编造 Base64、文件路径或预期输出。
-9. 每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
+9. 普通仓库中每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
    独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
    excludedSymbols 必须位于规划 JSON 根节点，和 services 同级；绝不能写入 services[i] 内。
-10. 必须用 save_packaging_plan_json 提交一段无 Markdown fence 的完整严格 JSON。每次调用都是完整替换，不是局部 PATCH；校验失败后也必须重发包含非空 services 的完整规划，不能只发送修改字段。保存成功后调用 terminate。
+   若索引声明 templateContract=true，则根目录 main.main_process 是用户提交模板的公共契约和审计边界；底层公开符号是实现证据，不要求逐项写入 excludedSymbols。必须阅读 main_process 及其调用的底层代码，并可按其中稳定 operation/工作流分支抽象成多个 Tool；不得因为只有一个契约入口就机械地只生成一个 Tool。
+10. 必须用 save_packaging_plan_json 提交一段无 Markdown fence 的完整严格 JSON。每次调用都是完整替换，不是局部 PATCH；校验失败后外层流程会反馈错误并开启下一轮，仍必须重发包含非空 services 的完整规划，不能只发送修改字段。调用 save_packaging_plan_json 后本轮即结束，无需再调用 terminate。
     顶层结构固定为 {"schemaVersion": ..., "decision": ..., "analysisSummary": ..., "services": [...], "excludedSymbols": [...], "assumptions": [...], "riskNotes": [...]}。
 """
 
@@ -117,7 +119,7 @@ class AgenticAnalysisWorkflow:
             },
             symbol_calls={symbol.qualifiedName: symbol.calls for symbol in ir.symbols},
             symbol_is_generator={symbol.qualifiedName: symbol.isGenerator for symbol in ir.symbols},
-            candidate_symbols=ir.public_callable_symbols,
+            candidate_symbols=planning_candidate_symbols(ir),
         )
         self.agent = _build_planning_agent(self.project_dir, ir, self.plan_store)
 
@@ -203,7 +205,7 @@ class AgenticPackagingWorkflow:
                 symbol_is_generator={
                     symbol.qualifiedName: symbol.isGenerator for symbol in self.ir.symbols
                 },
-                candidate_symbols=self.ir.public_callable_symbols,
+                candidate_symbols=planning_candidate_symbols(self.ir),
             )
             planner = _build_planning_agent(self.project_dir, self.ir, plan_store)
             self._active_agent = planner
@@ -336,8 +338,8 @@ async def _run_planner(
 
 def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore) -> Agent:
     tools = ToolRegistry()
-    tools.register(InspectRepository(ir))
-    tools.register(ReadProjectFile(project_dir))
+    tools.register(InspectRepository(ir, max_calls=1))
+    tools.register(ReadProjectFile(project_dir, max_reads=14))
     tools.register(SavePackagingPlanJson(store))
     tools.register(Terminate())
     return Agent(
@@ -347,6 +349,7 @@ def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore)
         system_prompt=PLANNER_SYSTEM_PROMPT,
         max_steps=24,
         max_observe=50_000,
+        terminal_tools={"save_packaging_plan_json", "terminate"},
     )
 
 
@@ -370,10 +373,13 @@ def _build_builder_agent(
         system_prompt=BUILDER_SYSTEM_PROMPT,
         max_steps=30,
         max_observe=50_000,
+        terminal_tools={"verify_artifact", "terminate"},
     )
 
 
 def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
+    contract_symbols = sorted(planning_candidate_symbols(ir))
+    template_contract = bool(_template_contract_entries(ir))
     public_symbols = [
         {
             "qualifiedName": symbol.qualifiedName,
@@ -398,6 +404,8 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "parseErrors": ir.parseErrors,
         "publicSymbols": public_symbols,
         "truncated": ir.truncated,
+        "templateContract": template_contract,
+        "contractEntrySymbols": contract_symbols if template_contract else [],
     }
     return (
         "请分析这个算法仓库，规划可投入真实使用的 MCP 服务。\n"
@@ -405,6 +413,53 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "以下只是索引，必须使用工具读取证据后再决策：\n"
         + json.dumps(overview, ensure_ascii=False, indent=2)
     )
+
+
+def planning_candidate_symbols(ir: RepositoryIR) -> set[str]:
+    """Use a valid root template entry as the audit boundary, not the whole implementation."""
+    entries = _template_contract_entries(ir)
+    if len(entries) == 1:
+        return entries
+    return ir.public_callable_symbols
+
+
+def _template_contract_entries(ir: RepositoryIR) -> set[str]:
+    entries = {
+        symbol.qualifiedName
+        for symbol in ir.symbols
+        if symbol.file == "main.py"
+        and symbol.name == "main_process"
+        and symbol.kind == "function"
+        and symbol.isPublic
+    }
+    main_path = Path(ir.root) / "main.py"
+    if len(entries) != 1 or not main_path.is_file():
+        return set()
+    try:
+        tree = ast.parse(main_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, SyntaxError):
+        return set()
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main_process"
+    ]
+    if len(functions) != 1 or isinstance(functions[0], ast.AsyncFunctionDef):
+        return set()
+    function = functions[0]
+    parameters = [*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs]
+    docstring = ast.get_docstring(function) or ""
+    if (
+        not parameters
+        or any(parameter.annotation is None for parameter in parameters)
+        or function.returns is None
+        or function.args.vararg is not None
+        or function.args.kwarg is not None
+        or "Args:" not in docstring
+        or "Returns:" not in docstring
+    ):
+        return set()
+    return entries
 
 
 def _builder_prompt(plan: PackagingPlan, ir: RepositoryIR) -> str:

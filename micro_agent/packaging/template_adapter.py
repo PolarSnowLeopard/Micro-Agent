@@ -401,34 +401,14 @@ class BudgetedInspectRepository(InspectRepository):
     """Prevent repeated full-IR reads from consuming the adaptation budget."""
 
     def __init__(self, ir: RepositoryIR) -> None:
-        super().__init__(ir)
-        self.calls = 0
-
-    async def execute(self, **kwargs: Any) -> ToolResult:
-        self.calls += 1
-        if self.calls > 1:
-            return ToolResult(error="inspect_repository 已调用过；请使用已有清单并开始编写模板入口")
-        return await super().execute(**kwargs)
+        super().__init__(ir, max_calls=1)
 
 
 class BudgetedReadProjectFile(ReadProjectFile):
     """Bound source inspection while retaining the path-containment guarantees."""
 
     def __init__(self, project_dir: str | Path, *, max_reads: int = 12) -> None:
-        super().__init__(project_dir)
-        self.max_reads = max_reads
-        self.calls = 0
-
-    async def execute(self, **kwargs: Any) -> ToolResult:
-        self.calls += 1
-        if self.calls > self.max_reads:
-            return ToolResult(
-                error=(
-                    f"本轮最多读取 {self.max_reads} 个文件，额度已用完；"
-                    "请根据已有证据写 main.py、requirements.txt 并调用 verify_template"
-                )
-            )
-        return await super().execute(**kwargs)
+        super().__init__(project_dir, max_reads=max_reads)
 
 
 def build_template_adapter_agent(project_dir: Path, ir: RepositoryIR) -> Agent:

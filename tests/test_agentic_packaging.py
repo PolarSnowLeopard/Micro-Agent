@@ -15,7 +15,12 @@ from micro_agent.packaging.scaffold import prepare_artifact
 from micro_agent.packaging.runtime_guardrails import decode_safe_zip
 from micro_agent.packaging.tools import PlanStore, SavePackagingPlan, SavePackagingPlanJson
 from micro_agent.packaging.verifier import ArtifactVerifier
-from micro_agent.packaging.workflow import AgenticPackagingWorkflow, AnalysisCache
+from micro_agent.packaging.workflow import (
+    AgenticAnalysisWorkflow,
+    AgenticPackagingWorkflow,
+    AnalysisCache,
+    planning_candidate_symbols,
+)
 from api.services.files import extract_zip
 from fastapi import HTTPException
 
@@ -166,6 +171,46 @@ def test_repository_analyzer_scans_nested_symbols_and_evidence(tmp_path):
     assert ir.testFiles == ["tests/test_core.py"]
     assert "README.md" in ir.documentation
     assert len(ir.fingerprint) == 64
+
+
+def test_template_main_process_is_planning_audit_boundary_not_only_possible_source(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        '''from core import evaluate, predict
+
+def main_process(operation: str, value: float) -> dict[str, float]:
+    """Dispatch the supported algorithm operations.
+
+    Args:
+        operation: Operation name.
+        value: Input value.
+
+    Returns:
+        Algorithm result.
+    """
+    if operation == "predict":
+        return predict(value)
+    return evaluate([value])
+''',
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    assert planning_candidate_symbols(ir) == {"main.main_process"}
+    workflow = AgenticAnalysisWorkflow(
+        project_dir=project,
+        ir=ir,
+        graph_path=tmp_path / "function.json",
+    )
+    assert workflow.plan_store.candidate_symbols == {"main.main_process"}
+    assert {"core.predict", "core.evaluate"} <= ir.known_symbols
+
+
+def test_non_template_repository_retains_full_public_symbol_audit(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+
+    assert planning_candidate_symbols(ir) == ir.public_callable_symbols
+    assert {"core.predict", "core.evaluate"} <= planning_candidate_symbols(ir)
 
 
 def test_plan_generates_multi_tool_legacy_graph(tmp_path):
