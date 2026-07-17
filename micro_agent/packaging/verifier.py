@@ -240,7 +240,11 @@ class ArtifactVerifier:
             if (
                 risky
                 and function is not None
-                and not _guards_failure_return_from_calls(function, risky_names)
+                and not _guards_failure_return_from_calls(
+                    function,
+                    risky_names,
+                    adapter_functions=adapter_functions,
+                )
             ):
                 report.errors.append(
                     f"适配函数 {tool_name} 调用的源码会把异常作为普通字符串返回，"
@@ -393,6 +397,9 @@ def _returns_from_except(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
 def _guards_failure_return_from_calls(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
     risky_call_names: set[str],
+    *,
+    adapter_functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] | None = None,
+    visited: set[str] | None = None,
 ) -> bool:
     """Require a branch that raises based on a risky source call's result.
 
@@ -433,6 +440,27 @@ def _guards_failure_return_from_calls(
         )
         if raises and tested_names & risky_results:
             return True
+    if adapter_functions:
+        seen = set(visited or ())
+        if function.name in seen:
+            return False
+        seen.add(function.name)
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Call):
+                continue
+            call_name = _call_name(node.func)
+            if not call_name:
+                continue
+            helper = adapter_functions.get(call_name.rsplit(".", 1)[-1])
+            if helper is None or helper.name in seen:
+                continue
+            if _guards_failure_return_from_calls(
+                helper,
+                risky_call_names,
+                adapter_functions=adapter_functions,
+                visited=seen,
+            ):
+                return True
     return False
 
 

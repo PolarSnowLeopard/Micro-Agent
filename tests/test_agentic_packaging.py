@@ -684,6 +684,23 @@ def test_verifier_requires_guard_on_source_failure_sentinel(tmp_path):
 
     assert fixed_report.passed, fixed_report.to_json()
 
+    guarded_by_helper = unguarded.replace(
+        "    return algorithm_predict(float(value))",
+        "    return _checked_predict(float(value))",
+    )
+    guarded_by_helper += (
+        "\n\ndef _checked_predict(value: float) -> dict[str, float]:\n"
+        "    result = algorithm_predict(value)\n"
+        "    if isinstance(result, str) and result.lower().startswith('error'):\n"
+        "        raise RuntimeError(result)\n"
+        "    return result\n"
+    )
+    (artifact / "adapters.py").write_text(guarded_by_helper, encoding="utf-8")
+
+    helper_report = ArtifactVerifier(artifact, plan).verify()
+
+    assert helper_report.passed, helper_report.to_json()
+
 
 def test_verifier_rejects_legacy_import_before_loader_and_wrong_asset_root(tmp_path):
     project = _sample_project(tmp_path)
