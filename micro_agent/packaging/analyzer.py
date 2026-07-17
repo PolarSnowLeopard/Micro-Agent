@@ -22,6 +22,15 @@ IGNORED_DIRS = {
     "env", "node_modules", "dist", "build",
 }
 DOC_NAMES = {"readme", "readme.md", "readme.rst", "readme.txt"}
+ROOT_EVIDENCE_PRIORITY = {
+    "main.py": 0,
+    "requirements.txt": 1,
+    "pyproject.toml": 2,
+    "readme": 3,
+    "readme.md": 3,
+    "readme.rst": 3,
+    "readme.txt": 3,
+}
 ASSET_SUFFIXES = {
     ".bin", ".ckpt", ".joblib", ".model", ".onnx", ".pkl", ".pickle",
     ".pt", ".pth", ".safetensors", ".csv", ".json", ".yaml", ".yml",
@@ -113,7 +122,7 @@ class RepositoryAnalyzer:
             raise ValueError(f"项目目录不存在: {root_path}")
 
         candidates = [path for path in root_path.rglob("*") if self._include(path, root_path)]
-        candidates.sort(key=lambda path: path.relative_to(root_path).as_posix())
+        candidates.sort(key=lambda path: _candidate_sort_key(path, root_path))
         truncated = len(candidates) > self.max_files
         candidates = candidates[: self.max_files]
 
@@ -207,6 +216,16 @@ class RepositoryAnalyzer:
         if any(part.startswith(".") and part not in {".github"} for part in rel_parts):
             return False
         return True
+
+
+def _candidate_sort_key(path: Path, root: Path) -> tuple[int, int, str]:
+    relative = path.relative_to(root)
+    rel = relative.as_posix()
+    if len(relative.parts) == 1:
+        priority = ROOT_EVIDENCE_PRIORITY.get(relative.name.lower())
+        if priority is not None:
+            return (0, priority, rel)
+    return (1, 0, rel)
 
 
 def _inspect_module(tree: ast.Module, module: str, rel: str) -> tuple[list[str], list[SymbolInfo]]:

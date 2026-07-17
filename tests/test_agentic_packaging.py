@@ -173,6 +173,25 @@ def test_repository_analyzer_scans_nested_symbols_and_evidence(tmp_path):
     assert len(ir.fingerprint) == 64
 
 
+def test_repository_analyzer_never_truncates_root_template_evidence(tmp_path):
+    project = tmp_path / "large"
+    project.mkdir()
+    (project / "main.py").write_text(
+        "def main_process(value: float) -> float:\n    return value\n", encoding="utf-8"
+    )
+    (project / "requirements.txt").write_text("numpy\n", encoding="utf-8")
+    (project / "README.md").write_text("# Large repository\n", encoding="utf-8")
+    for index in range(20):
+        (project / f"a_{index:02}.py").write_text(f"VALUE = {index}\n", encoding="utf-8")
+
+    ir = RepositoryAnalyzer(max_files=3).analyze(project)
+
+    assert [file.path for file in ir.files] == ["main.py", "requirements.txt", "README.md"]
+    assert "main.main_process" in ir.known_symbols
+    assert "README.md" in ir.documentation
+    assert ir.truncated
+
+
 def test_template_main_process_is_planning_audit_boundary_not_only_possible_source(tmp_path):
     project = _sample_project(tmp_path)
     (project / "main.py").write_text(
