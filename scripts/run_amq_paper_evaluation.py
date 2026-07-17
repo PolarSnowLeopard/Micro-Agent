@@ -28,6 +28,7 @@ PAPER_TOOL_PROBE_CAP = 5
 PAPER_MAX_UTILITY_TURNS = 8
 PAPER_SOLVER_MODEL = "openai/gpt-5.4"
 BACKFILL_RETRY_STATUS = "provider_error"
+SOLVER_REASONING_MODES = ("provider_default", "disabled")
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,6 +55,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--solver-substitution-reason",
         help="Required audit reason when D3 backfill uses a solver other than the paper solver.",
+    )
+    parser.add_argument(
+        "--solver-reasoning",
+        choices=SOLVER_REASONING_MODES,
+        default="provider_default",
+        help=(
+            "Reasoning mode sent to the solver. 'provider_default' preserves the "
+            "released harness request; 'disabled' sends OpenRouter "
+            "reasoning.enabled=false and is recorded as a solver substitution setting."
+        ),
     )
     return parser.parse_args()
 
@@ -300,6 +311,7 @@ def merge_d3_backfill_result(
     rerun: dict[str, Any],
     *,
     solver_model: str,
+    solver_reasoning: str,
     source_solver_model: str,
     driver_status: str,
     driver_error: str,
@@ -324,6 +336,7 @@ def merge_d3_backfill_result(
         "attemptedAt": attempted_at,
         "sourceSolverModel": source_solver_model,
         "solverModel": solver_model,
+        "solverReasoning": solver_reasoning,
         "sourceDriverStatus": original.get("d3_driver_status", "not_run"),
         "rerunBuildSuccess": bool(rerun.get("d1_build_success")),
         "rerunServiceHealth": rerun.get("d1_service_health"),
@@ -397,6 +410,7 @@ async def main() -> int:
         "solverModel": args.solver_model,
         "solverTemperature": 0.0,
         "solverSeed": 42,
+        "solverReasoning": args.solver_reasoning,
         "maxUtilityTurns": PAPER_MAX_UTILITY_TURNS,
         "utilityOracle": "deterministic_verify_script_only",
         "goVToolProbeCap": PAPER_TOOL_PROBE_CAP,
@@ -455,6 +469,7 @@ async def main() -> int:
                 "methodAqsDenominator": len(all_ids),
                 "paperSolverModel": PAPER_SOLVER_MODEL,
                 "solverModel": args.solver_model,
+                "solverReasoning": args.solver_reasoning,
                 "solverConformance": (
                     "paper"
                     if args.solver_model == PAPER_SOLVER_MODEL
@@ -478,6 +493,7 @@ async def main() -> int:
             if (
                 resumed_protocol.get("benchmarkSha256") != protocol["benchmarkSha256"]
                 or resumed_protocol.get("solverModel") != args.solver_model
+                or resumed_protocol.get("solverReasoning") != args.solver_reasoning
                 or resumed_backfill.get("sourceResultsSha256") != backfill_source_sha256
             ):
                 raise SystemExit("existing D3 backfill result is incompatible with this run")
@@ -494,6 +510,20 @@ async def main() -> int:
         skip_d3=args.skip_d3,
         verify_model="deterministic-only",
     )
+    if args.solver_reasoning == "disabled":
+        completions = runner.openai_client.chat.completions
+        original_create = completions.create
+
+        async def create_without_reasoning(*create_args: Any, **create_kwargs: Any) -> Any:
+            extra_body = dict(create_kwargs.pop("extra_body", {}) or {})
+            extra_body["reasoning"] = {"enabled": False}
+            return await original_create(
+                *create_args,
+                **create_kwargs,
+                extra_body=extra_body,
+            )
+
+        completions.create = create_without_reasoning
     original_agent_loop = runner.run_agent_loop
 
     async def recording_agent_loop(session: Any, task: dict[str, Any], tools: list[Any]) -> dict[str, Any]:
@@ -513,6 +543,8 @@ async def main() -> int:
                 and existing
                 and existing.get("d3_backfill", {}).get("attempted")
                 and existing.get("d3_backfill", {}).get("solverModel") == args.solver_model
+                and existing.get("d3_backfill", {}).get("solverReasoning")
+                == args.solver_reasoning
             )
             if (not backfill_mode and sample_id in completed) or already_backfilled:
                 harness.logger.info("[%d/%d] resume skip %s", index, len(tasks), sample_id)
@@ -535,6 +567,7 @@ async def main() -> int:
                         original,
                         result,
                         solver_model=args.solver_model,
+                        solver_reasoning=args.solver_reasoning,
                         source_solver_model=source_solver_model,
                         driver_status=driver_status,
                         driver_error=driver_error,
@@ -547,6 +580,7 @@ async def main() -> int:
                         "attemptedAt": attempted_at,
                         "sourceSolverModel": source_solver_model,
                         "solverModel": args.solver_model,
+                        "solverReasoning": args.solver_reasoning,
                         "sourceDriverStatus": original.get("d3_driver_status", "not_run"),
                         "rerunBuildSuccess": bool(result.get("d1_build_success")),
                         "rerunServiceHealth": result.get("d1_service_health"),

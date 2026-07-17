@@ -148,6 +148,7 @@ def test_d3_backfill_preserves_d1_d2_and_replaces_only_d3_evidence() -> None:
         original,
         rerun,
         solver_model="qwen/qwen3.7-max",
+        solver_reasoning="disabled",
         source_solver_model="openai/gpt-5.4",
         driver_status="completed",
         driver_error="",
@@ -163,6 +164,7 @@ def test_d3_backfill_preserves_d1_d2_and_replaces_only_d3_evidence() -> None:
     assert merged["d3_driver_status"] == "completed"
     assert "d3_driver_error" not in merged
     assert merged["d3_backfill"]["preservedD1D2"] is True
+    assert merged["d3_backfill"]["solverReasoning"] == "disabled"
     assert merged["aqs_score"] == 0.8
 
 
