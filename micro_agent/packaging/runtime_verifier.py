@@ -129,6 +129,10 @@ class ContainerRuntimeVerifier:
             report.checks["runtimeExitCode"] = runtime.returncode
             detail = _command_output(runtime)
             if runtime.returncode != 0:
+                payload = _parse_probe_payload(detail)
+                if payload is not None:
+                    report.checks.update(payload)
+                    report.checks["functionalVerified"] = False
                 report.errors.append(
                     f"[{_classify_failure(detail, phase='runtime')}] "
                     "容器运行验收失败：\n" + _tail(detail)
@@ -295,22 +299,21 @@ async def verify():
             smoke.append(tool["name"])
         except Exception as exc:
             smoke_failures[tool["name"]] = f"{{type(exc).__name__}}: {{exc}}"
+    payload = {{
+        "registeredTools": registered,
+        "smokeTestsExecuted": smoke,
+        "smokeTestCount": len(smoke),
+        "smokeTestFailures": smoke_failures,
+    }}
+    print(
+        {PROBE_MARKER!r}
+        + json.dumps(payload, sort_keys=True)
+    )
     if smoke_failures:
         raise RuntimeError(
             "smoke test failures: "
             + json.dumps(smoke_failures, sort_keys=True)
         )
-    print(
-        {PROBE_MARKER!r}
-        + json.dumps(
-            {{
-                "registeredTools": registered,
-                "smokeTestsExecuted": smoke,
-                "smokeTestCount": len(smoke),
-            }},
-            sort_keys=True,
-        )
-    )
 
 asyncio.run(verify())
 """.strip()
@@ -364,6 +367,7 @@ def _classify_failure(text: str, *, phase: str) -> str:
     if (
         "validation error" in normalized
         or "smoketest" in normalized
+        or "smoke test" in normalized
         or "smoke output" in normalized
     ):
         return "smoke_test"

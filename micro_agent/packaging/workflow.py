@@ -204,7 +204,7 @@ class AgenticPackagingWorkflow:
         artifact_dir: str | Path,
         plan: PackagingPlan | None = None,
         max_repairs: int = 2,
-        max_runtime_repairs: int = 3,
+        max_runtime_repairs: int = 4,
         runtime_verifier_factory: RuntimeVerifierFactory | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
@@ -682,7 +682,9 @@ def _repair_prompt(
         "若报告来自容器构建/运行阶段，必须依据具体缺包、导入栈、系统库或 smoke test 错误修复，"
         "不得绕过运行验收或吞掉异常。若原仓库在模块导入阶段引用已迁移/删除的第三方符号，"
         "只能在 adapters.py 导入源码模块之前增加最小兼容处理，并且必须能由调用关系证明该符号"
-        "未使用，或使用当前版本的等价 API；禁止重写算法核心。"
+        "未使用，或使用当前版本的等价 API；禁止重写算法核心。遇到第三方 API 缺失时，必须同时"
+        "审计该源码模块和同一映射表中引用的全部同类符号，一次补齐可证明的兼容映射，不能只修日志"
+        "中最先报错的一个属性。"
         "修复后再次调用 verify_artifact。\n"
         + (report.to_json() if report else "无验收报告")
     )

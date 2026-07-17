@@ -1157,7 +1157,49 @@ def test_runtime_probe_is_valid_python_and_checks_smoke_output_schema():
     compile(source, "<runtime-probe>", "exec")
     assert "assert_schema(" in source
     assert "smoke output schema mismatch" in source
+    assert '"smokeTestFailures": smoke_failures' in source
     assert "timeout=17" in source
+
+
+async def test_container_runtime_verifier_preserves_partial_smoke_results(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+
+    def runner(command, **kwargs):
+        if command[:2] == ["docker", "build"]:
+            return subprocess.CompletedProcess(command, 0, stdout="built", stderr="")
+        if command[:2] == ["docker", "run"]:
+            payload = {
+                "registeredTools": sorted(plan.tool_names),
+                "smokeTestsExecuted": ["predict_risk"],
+                "smokeTestCount": 1,
+                "smokeTestFailures": {
+                    "evaluate_risk": "ToolError: missing compatible descriptor",
+                },
+            }
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=PROBE_MARKER + json.dumps(payload) + "\n",
+                stderr="RuntimeError: smoke test failures",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    report = await ContainerRuntimeVerifier(
+        artifact,
+        plan,
+        command_runner=runner,
+    ).verify()
+
+    assert not report.passed
+    assert report.checks["smokeTestCount"] == 1
+    assert report.checks["smokeTestFailures"] == {
+        "evaluate_risk": "ToolError: missing compatible descriptor"
+    }
+    assert report.checks["functionalVerified"] is False
+    assert any("[smoke_test]" in error for error in report.errors)
 
 
 async def test_container_runtime_verifier_classifies_dependency_failure(tmp_path):
