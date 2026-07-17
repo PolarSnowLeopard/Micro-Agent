@@ -265,6 +265,12 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
+            legacy_strategy = tool.pop("adaptationStrategy", None)
+            if (
+                not isinstance(tool.get("adapterStrategy"), str)
+                or not tool["adapterStrategy"].strip()
+            ) and isinstance(legacy_strategy, str) and legacy_strategy.strip():
+                tool["adapterStrategy"] = legacy_strategy
             if (
                 not tool.get("sourceSymbols")
                 and isinstance(service_symbols, list)

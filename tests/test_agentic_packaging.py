@@ -303,6 +303,33 @@ def test_plan_rejects_insufficient_direct_source_parameters(tmp_path):
         raise AssertionError("missing direct source parameters should fail validation")
 
 
+def test_plan_accepts_explicitly_derived_source_parameters(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    tool = raw["services"][0]["tools"][1]
+    tool["sourceSymbols"] = ["core.evaluate"]
+    tool["inputSchema"] = {
+        "type": "object",
+        "properties": {"values_json": {"type": "string"}},
+        "required": ["values_json"],
+    }
+    tool["adapterStrategy"] = "Parse values_json into the required values list, then call core.evaluate."
+    tool["smokeTest"] = {
+        "enabled": False,
+        "rationale": "No repository fixture uses the adapted JSON transport.",
+    }
+
+    plan = PackagingPlan.validate(
+        raw,
+        known_symbols=ir.known_symbols,
+        symbol_required_parameters={
+            symbol.qualifiedName: symbol.requiredParameters for symbol in ir.symbols
+        },
+    )
+
+    assert plan.tools[1]["inputSchema"]["required"] == ["values_json"]
+
+
 def test_plan_rejects_excluding_independent_user_capability(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()
@@ -403,6 +430,8 @@ async def test_save_plan_json_canonicalizes_only_nonsemantic_fields(tmp_path):
     for item in raw["services"][0]["tools"]:
         item.pop("evidence")
         item["smokeTest"]["evidence"] = item["smokeTest"]["evidence"][0]
+    expected_strategy = raw["services"][0]["tools"][0].pop("adapterStrategy")
+    raw["services"][0]["tools"][0]["adaptationStrategy"] = expected_strategy
 
     result = await tool.execute(content=json.dumps(raw, ensure_ascii=False))
 
@@ -410,6 +439,8 @@ async def test_save_plan_json_canonicalizes_only_nonsemantic_fields(tmp_path):
     assert store.plan is not None
     assert store.plan.data["services"][0]["id"] == "risk_scoring"
     assert store.plan.tools[0]["evidence"] == ["core.predict"]
+    assert store.plan.tools[0]["adapterStrategy"] == expected_strategy
+    assert "adaptationStrategy" not in store.plan.tools[0]
     assert isinstance(store.plan.tools[0]["smokeTest"]["evidence"], list)
 
 

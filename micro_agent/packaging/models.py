@@ -183,17 +183,22 @@ class PackagingPlan:
                     and isinstance(symbols, list)
                     and len(symbols) == 1
                     and symbols[0] in symbol_required_parameters
-                    and (
-                        len(properties) < len(symbol_required_parameters[symbols[0]])
-                        or not isinstance(required, list)
-                        or len(required) < len(symbol_required_parameters[symbols[0]])
-                    )
                 ):
-                    errors.append(
-                        f"{prefix}.inputSchema 参数不足以调用 {symbols[0]}："
-                        f"源码必填参数为 {symbol_required_parameters[symbols[0]]}；"
-                        "若参数由适配层派生，必须把足够的用户输入加入 Schema 并标为 required"
+                    strategy_text = str(
+                        tool.get("adapterStrategy") or tool.get("adaptationStrategy") or ""
                     )
+                    missing_parameters = _unmapped_source_parameters(
+                        symbol_required_parameters[symbols[0]],
+                        properties,
+                        required if isinstance(required, list) else [],
+                        strategy_text,
+                    )
+                    if missing_parameters:
+                        errors.append(
+                            f"{prefix}.inputSchema 参数不足以调用 {symbols[0]}："
+                            f"源码必填参数为 {symbol_required_parameters[symbols[0]]}；"
+                            f"未暴露且未说明派生方式的参数为 {missing_parameters}"
+                        )
             output_schema = tool.get("outputSchema")
             if (
                 symbol_is_generator is not None
@@ -446,6 +451,33 @@ _SERVER_PATH_NAMES = {
     "path", "dir", "directory", "save_dir", "data_path", "dataset_path",
     "file_path", "model_path", "output_path", "input_path", "temp_dir",
 }
+
+
+def _unmapped_source_parameters(
+    source_required: list[str],
+    properties: dict[str, Any],
+    schema_required: list[str],
+    strategy: str,
+) -> list[str]:
+    """Require each source argument to be public or explicitly derived.
+
+    Adapter inputs do not need a one-to-one relationship with a lower-level
+    function: for example, one uploaded ZIP can derive both ``wsi_dir`` and
+    ``output_dir``.  The plan must nevertheless name every internally supplied
+    source argument so the builder and reviewer can audit the mapping.
+    """
+    required_names = set(schema_required)
+    missing: list[str] = []
+    for parameter in source_required:
+        schema = properties.get(parameter)
+        if isinstance(schema, dict) and (
+            parameter in required_names or "default" in schema
+        ):
+            continue
+        if re.search(rf"(?<![A-Za-z0-9_]){re.escape(parameter)}(?![A-Za-z0-9_])", strategy):
+            continue
+        missing.append(parameter)
+    return missing
 
 
 def _server_path_fields(schema: dict[str, Any]) -> set[str]:
