@@ -260,12 +260,22 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
         tools = service.get("tools")
         if not isinstance(tools, list):
             continue
+        service_symbols = service.pop("sourceSymbols", None)
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
+            if (
+                not tool.get("sourceSymbols")
+                and isinstance(service_symbols, list)
+                and all(isinstance(symbol, str) for symbol in service_symbols)
+            ):
+                tool["sourceSymbols"] = list(service_symbols)
             if isinstance(tool.get("evidence"), str):
                 tool["evidence"] = [tool["evidence"]]
-            elif not tool.get("evidence") and isinstance(tool.get("sourceSymbols"), list):
+            if (
+                not isinstance(tool.get("evidence"), list)
+                or not any(isinstance(item, str) and item.strip() for item in tool["evidence"])
+            ) and isinstance(tool.get("sourceSymbols"), list):
                 tool["evidence"] = list(tool["sourceSymbols"])
             tool.setdefault("dependsOn", [])
             if not isinstance(tool.get("adapterStrategy"), str) or not tool["adapterStrategy"].strip():

@@ -20,6 +20,7 @@ from micro_agent.packaging.workflow import (
     AgenticPackagingWorkflow,
     AnalysisCache,
     planning_candidate_symbols,
+    _extract_planning_json,
 )
 from api.services.files import extract_zip
 from fastapi import HTTPException
@@ -433,6 +434,34 @@ async def test_save_plan_json_fills_conservative_nonsemantic_defaults(tmp_path):
     assert store.plan.decision == "package"
     assert store.plan.data["schemaVersion"] == "ioeb.agentic-mcp-plan/v1"
     assert all(not item["smokeTest"]["enabled"] for item in store.plan.tools)
+
+
+async def test_save_plan_json_recovers_service_scoped_source_symbols(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(tmp_path / "plan.json", ir.known_symbols)
+    tool = SavePackagingPlanJson(store)
+    raw = _plan(ir).to_dict()
+    for service in raw["services"]:
+        service["sourceSymbols"] = ["core.predict"]
+        for item in service["tools"]:
+            item.pop("sourceSymbols")
+            item["evidence"] = [""]
+
+    result = await tool.execute(content=json.dumps(raw, ensure_ascii=False))
+
+    assert not result.error
+    assert store.plan is not None
+    assert all(item["sourceSymbols"] == ["core.predict"] for item in store.plan.tools)
+    assert all(item["evidence"] == ["core.predict"] for item in store.plan.tools)
+
+
+def test_extract_planning_json_recovers_plain_or_fenced_model_content() -> None:
+    expected = {"decision": "accept", "services": []}
+
+    assert json.loads(_extract_planning_json(json.dumps(expected)) or "null") == expected
+    fenced = "Here is the plan:\n```json\n" + json.dumps(expected) + "\n```"
+    assert json.loads(_extract_planning_json(fenced) or "null") == expected
+    assert _extract_planning_json("I still need to inspect the repository") is None
 
 
 async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path):

@@ -316,6 +316,7 @@ async def _run_planner(
 ) -> AsyncIterator[AgentEvent]:
     step_offset = 0
     for attempt in range(3):
+        text_candidates: list[str] = []
         prompt = _planner_prompt(ir, user_request) if attempt == 0 else (
             "你尚未提交一个有效规划。必须使用 save_packaging_plan_json 重新发送完整严格 JSON；"
             "这不是 PATCH，decision=package 时 services 绝对不能省略或为空。"
@@ -323,17 +324,58 @@ async def _run_planner(
             + ("\n上次校验错误：\n- " + "\n- ".join(store.last_errors) if store.last_errors else "")
         )
         async for event in agent.run(prompt):
+            if event.type == "think" and isinstance(event.data.get("thought"), str):
+                text_candidates.append(event.data["thought"])
+            elif event.type == "done" and isinstance(event.data.get("result"), str):
+                text_candidates.append(event.data["result"])
             if event.type == "done":
                 continue
             yield AgentEvent(type=event.type, step=step_offset + event.step, data=event.data)
         if store.plan is not None:
             return
+        for candidate in reversed(text_candidates):
+            recovered = _extract_planning_json(candidate)
+            if recovered is None:
+                continue
+            result = await SavePackagingPlanJson(store).execute(content=recovered)
+            if store.plan is not None:
+                yield AgentEvent(
+                    type="think",
+                    step=step_offset + agent.max_steps,
+                    data={
+                        "thought": "[规划格式恢复] 模型以普通文本返回了严格 JSON，已通过同一规划质量门禁。"
+                    },
+                )
+                return
+            if result.error:
+                break
         step_offset += agent.max_steps + 1
         yield AgentEvent(
             type="think",
             step=step_offset,
             data={"thought": "[规划质量门禁] 未收到有效结构化规划，要求 Agent 根据校验反馈重试。"},
         )
+
+
+def _extract_planning_json(text: str) -> str | None:
+    candidate = text.strip()
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        candidate = "\n".join(lines).strip()
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    candidate = candidate[start : end + 1]
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return json.dumps(parsed, ensure_ascii=False) if isinstance(parsed, dict) else None
 
 
 def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore) -> Agent:

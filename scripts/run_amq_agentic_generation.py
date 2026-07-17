@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--retry-failed", action="store_true")
     return parser.parse_args()
 
 
@@ -191,6 +192,7 @@ async def generate_one(
     run_dir: Path,
     cache_roots: list[Path],
     resume: bool,
+    retry_failed: bool,
 ) -> dict[str, Any]:
     sample_id = sample["sample_id"]
     output = run_dir / "generation" / sample_id
@@ -200,6 +202,8 @@ async def generate_one(
         previous = json.loads(summary_path.read_text(encoding="utf-8"))
         if is_retryable_provider_failure(previous):
             print(f"[{sample_id}] resume retry: provider infrastructure failure", flush=True)
+        elif retry_failed and previous.get("status") == "failed":
+            print(f"[{sample_id}] resume retry: requested failed sample", flush=True)
         elif previous.get("status") in {"ready", "rejected", "failed"}:
             print(f"[{sample_id}] resume: {previous['status']}", flush=True)
             return previous
@@ -345,6 +349,7 @@ async def main() -> int:
                 run_dir=run_dir,
                 cache_roots=cache_roots,
                 resume=args.resume,
+                retry_failed=args.retry_failed,
             )
 
     results = await asyncio.gather(*(bounded(sample) for sample in samples))
