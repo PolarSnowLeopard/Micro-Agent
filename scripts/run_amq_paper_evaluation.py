@@ -319,6 +319,7 @@ def merge_d3_backfill_result(
 ) -> dict[str, Any]:
     """Replace only D3 fields while preserving the original D1/D2 evidence."""
     merged = dict(original)
+    attempt_history = _backfill_attempt_history(original)
     for key in list(merged):
         if key.startswith("d3_") and key != "d3_backfill":
             merged.pop(key)
@@ -342,6 +343,8 @@ def merge_d3_backfill_result(
         "rerunServiceHealth": rerun.get("d1_service_health"),
         "outcome": driver_status,
         "preservedD1D2": True,
+        "attemptNumber": len(attempt_history) + 1,
+        "attemptHistory": attempt_history,
     }
     d1 = 1.0 if merged.get("d1_service_health") else 0.0
     d2 = float(merged.get("d2_score", 0.0))
@@ -349,6 +352,24 @@ def merge_d3_backfill_result(
     merged["aqs_score"] = round(d1 * (0.4 * d2 + 0.6 * d3), 4)
     merged["meb_score"] = merged["aqs_score"]
     return merged
+
+
+def _backfill_attempt_history(result: dict[str, Any]) -> list[dict[str, Any]]:
+    previous = result.get("d3_backfill")
+    if not isinstance(previous, dict) or not previous.get("attempted"):
+        return []
+    history = [
+        dict(item)
+        for item in previous.get("attemptHistory", [])
+        if isinstance(item, dict)
+    ]
+    snapshot = {
+        key: value
+        for key, value in previous.items()
+        if key not in {"attemptHistory", "attemptNumber"}
+    }
+    history.append(snapshot)
+    return history
 
 
 async def main() -> int:
@@ -545,6 +566,8 @@ async def main() -> int:
                 and existing.get("d3_backfill", {}).get("solverModel") == args.solver_model
                 and existing.get("d3_backfill", {}).get("solverReasoning")
                 == args.solver_reasoning
+                and existing.get("d3_backfill", {}).get("outcome")
+                != "rerun_health_failed"
             )
             if (not backfill_mode and sample_id in completed) or already_backfilled:
                 harness.logger.info("[%d/%d] resume skip %s", index, len(tasks), sample_id)
@@ -575,6 +598,7 @@ async def main() -> int:
                     )
                 else:
                     preserved = dict(original)
+                    attempt_history = _backfill_attempt_history(original)
                     preserved["d3_backfill"] = {
                         "attempted": True,
                         "attemptedAt": attempted_at,
@@ -587,6 +611,8 @@ async def main() -> int:
                         "rerunFailureCategory": result.get("d1_failure_category"),
                         "outcome": "rerun_health_failed",
                         "preservedD1D2": True,
+                        "attemptNumber": len(attempt_history) + 1,
+                        "attemptHistory": attempt_history,
                     }
                     completed[sample_id] = preserved
             else:

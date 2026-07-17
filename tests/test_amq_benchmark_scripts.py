@@ -165,7 +165,50 @@ def test_d3_backfill_preserves_d1_d2_and_replaces_only_d3_evidence() -> None:
     assert "d3_driver_error" not in merged
     assert merged["d3_backfill"]["preservedD1D2"] is True
     assert merged["d3_backfill"]["solverReasoning"] == "disabled"
+    assert merged["d3_backfill"]["attemptNumber"] == 1
+    assert merged["d3_backfill"]["attemptHistory"] == []
     assert merged["aqs_score"] == 0.8
+
+
+def test_d3_backfill_preserves_failed_runtime_attempt_history() -> None:
+    original = {
+        "sample_id": "sample",
+        "d1_service_health": True,
+        "d2_score": 0.5,
+        "d3_driver_status": "provider_error",
+        "d3_backfill": {
+            "attempted": True,
+            "attemptedAt": "2026-07-17T00:00:00+08:00",
+            "solverModel": "qwen/qwen3.7-max",
+            "solverReasoning": "disabled",
+            "outcome": "rerun_health_failed",
+            "preservedD1D2": True,
+            "attemptNumber": 1,
+            "attemptHistory": [],
+        },
+    }
+    rerun = {
+        "d1_service_health": True,
+        "d3_pass": False,
+        "d3_total_calls": 1,
+        "d3_successful_calls": 0,
+    }
+
+    merged = merge_d3_backfill_result(
+        original,
+        rerun,
+        solver_model="qwen/qwen3.7-max",
+        solver_reasoning="disabled",
+        source_solver_model="openai/gpt-5.4",
+        driver_status="completed",
+        driver_error="",
+        attempted_at="2026-07-17T01:00:00+08:00",
+    )
+
+    audit = merged["d3_backfill"]
+    assert audit["attemptNumber"] == 2
+    assert len(audit["attemptHistory"]) == 1
+    assert audit["attemptHistory"][0]["outcome"] == "rerun_health_failed"
 
 
 def test_generation_resume_retries_credit_failure_but_not_algorithm_failure() -> None:
