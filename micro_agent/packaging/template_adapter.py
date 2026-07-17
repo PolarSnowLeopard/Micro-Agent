@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -117,7 +118,9 @@ def validate_algorithm_template(
             if f"{parameter.arg}:" not in docstring and f"{parameter.arg} (" not in docstring:
                 errors.append(f"main_process docstring 未说明参数 {parameter.arg}")
 
-    if any(isinstance(node, (ast.Pass, ast.Yield, ast.YieldFrom)) for node in ast.walk(function)):
+    if _contains_forbidden_pass(function) or any(
+        isinstance(node, (ast.Yield, ast.YieldFrom)) for node in ast.walk(function)
+    ):
         errors.append("main_process 不得包含 pass/yield 占位或流式返回")
     if any(
         (
@@ -144,10 +147,7 @@ def validate_algorithm_template(
             value = node.value
         if value is not None:
             calls = [child for child in ast.walk(value) if isinstance(child, ast.Call)]
-            if any(
-                not isinstance(call.func, ast.Name) or call.func.id not in safe_module_calls
-                for call in calls
-            ):
+            if any(not _is_safe_module_call(call, safe_module_calls) for call in calls):
                 runtime_assignments.append(getattr(node, "lineno", 0))
     if runtime_assignments:
         errors.append(
@@ -177,22 +177,37 @@ def validate_algorithm_template(
             ):
                 local_import_roots.add(candidate.name)
 
+    for package_marker in root.rglob("__init__.py"):
+        if not any(part in {".git", ".venv", "venv", "__pycache__"} for part in package_marker.parts):
+            local_import_roots.add(package_marker.parent.name)
+
+    repository_import_roots = _repository_import_roots(root)
+
     imported_names: set[str] = set()
     local_imported_names: set[str] = set()
+    evidence_imported_names: set[str] = set()
+    imported_modules: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 bound_name = alias.asname or alias.name.split(".")[0]
+                module_root = alias.name.split(".")[0]
                 imported_names.add(bound_name)
-                if alias.name.split(".")[0] in local_import_roots:
+                imported_modules[bound_name] = module_root
+                if module_root in local_import_roots:
                     local_imported_names.add(bound_name)
+                elif module_root in repository_import_roots:
+                    evidence_imported_names.add(bound_name)
         elif isinstance(node, ast.ImportFrom):
             module_root = (node.module or "").split(".")[0]
             for alias in node.names:
                 bound_name = alias.asname or alias.name
                 imported_names.add(bound_name)
+                imported_modules[bound_name] = module_root
                 if node.level or module_root in local_import_roots:
                     local_imported_names.add(bound_name)
+                elif module_root in repository_import_roots:
+                    evidence_imported_names.add(bound_name)
     top_level_functions = {
         node.name: node
         for node in tree.body
@@ -218,7 +233,35 @@ def validate_algorithm_template(
             if helper is not None and target.id not in reachable_functions:
                 reachable_functions[target.id] = helper
                 pending.append(helper)
-    repository_calls = sorted(local_imported_names & call_roots)
+    reachable_names = {
+        node.id
+        for reachable in reachable_functions.values()
+        for node in ast.walk(reachable)
+        if isinstance(node, ast.Name)
+    }
+    indirect_imports: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        bound_globals: set[str] = set()
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                bound_globals.update(
+                    child.id for child in ast.walk(target) if isinstance(child, ast.Name)
+                )
+        elif isinstance(node.target, ast.Name):
+            bound_globals.add(node.target.id)
+        if not (bound_globals & reachable_names) or node.value is None:
+            continue
+        indirect_imports.update(
+            child.id
+            for child in ast.walk(node.value)
+            if isinstance(child, ast.Name) and child.id in imported_names
+        )
+
+    local_repository_calls = sorted(local_imported_names & (call_roots | indirect_imports))
+    external_evidence_calls = sorted(evidence_imported_names & (call_roots | indirect_imports))
+    repository_calls = [*local_repository_calls, *external_evidence_calls]
 
     raises = [node for node in ast.walk(function) if isinstance(node, ast.Raise)]
     explicit_unsupported = bool(raises) and not repository_calls
@@ -228,6 +271,18 @@ def validate_algorithm_template(
         checks["repositoryCallRoots"] = repository_calls
         checks["reachableLocalFunctions"] = sorted(reachable_functions)
         checks["localImportRoots"] = sorted(local_import_roots)
+        checks["repositoryEvidenceImportRoots"] = sorted(repository_import_roots)
+        checks["repositoryEvidenceMode"] = (
+            "local_module_call" if local_repository_calls else "source_declared_dependency_call"
+        )
+        checks["repositoryEvidenceModules"] = sorted(
+            {imported_modules[name] for name in repository_calls if imported_modules.get(name)}
+        )
+        if external_evidence_calls and not local_repository_calls:
+            warnings.append(
+                "入口复用了原仓库源码/Notebook 已声明的外部算法依赖；"
+                "该证据模式将在派生集元数据中单独记录"
+            )
     elif allow_explicit_unsupported and explicit_unsupported:
         warnings.append("L0 负样本仅提供显式 unsupported 入口，不代表算法能力可封装")
     else:
@@ -243,6 +298,62 @@ def validate_algorithm_template(
     if not checks["readmeFile"]:
         errors.append("ZIP 项目缺少 README.md 或 README.ioeb.md")
     return TemplateValidationReport(not errors, errors, warnings, checks)
+
+
+def _contains_forbidden_pass(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    def visit(node: ast.AST, *, inside_except: bool = False) -> bool:
+        if isinstance(node, ast.Pass):
+            return not inside_except
+        for child in ast.iter_child_nodes(node):
+            if visit(child, inside_except=inside_except or isinstance(child, ast.ExceptHandler)):
+                return True
+        return False
+
+    return visit(function)
+
+
+def _is_safe_module_call(call: ast.Call, safe_names: set[str]) -> bool:
+    if isinstance(call.func, ast.Name):
+        return call.func.id in safe_names
+    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+        return (call.func.value.id, call.func.attr) in {("logging", "getLogger")}
+    return False
+
+
+def _repository_import_roots(root: Path) -> set[str]:
+    imports: set[str] = set()
+    ignored_parts = {".git", ".venv", "venv", "__pycache__", "node_modules"}
+    for path in root.rglob("*"):
+        if not path.is_file() or any(part in ignored_parts for part in path.parts):
+            continue
+        if path.name in {"main.py", "template_adaptation.json"}:
+            continue
+        sources: list[str] = []
+        try:
+            if path.suffix == ".py" and path.stat().st_size <= 1_000_000:
+                sources.append(path.read_text(encoding="utf-8", errors="replace"))
+            elif path.suffix == ".ipynb" and path.stat().st_size <= 5_000_000:
+                notebook = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+                sources.extend(
+                    "".join(cell.get("source", []))
+                    if isinstance(cell.get("source"), list)
+                    else str(cell.get("source", ""))
+                    for cell in notebook.get("cells", [])
+                    if cell.get("cell_type") == "code"
+                )
+        except (OSError, ValueError, TypeError):
+            continue
+        for source in sources:
+            try:
+                parsed = ast.parse(source)
+            except SyntaxError:
+                continue
+            for node in ast.walk(parsed):
+                if isinstance(node, ast.Import):
+                    imports.update(alias.name.split(".")[0] for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imports.add(node.module.split(".")[0])
+    return {name for name in imports if name and name not in sys.stdlib_module_names}
 
 
 class WriteTemplateFile(Tool):

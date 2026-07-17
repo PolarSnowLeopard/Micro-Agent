@@ -133,6 +133,99 @@ def main_process(values: tuple[float, ...]) -> dict[str, int]:
     assert validate_algorithm_template(project).passed
 
 
+def test_template_validator_accepts_dependency_proven_by_original_notebook(tmp_path: Path) -> None:
+    notebook = {
+        "cells": [
+            {
+                "cell_type": "code",
+                "source": ["from transformers import AutoTokenizer\n"],
+            }
+        ]
+    }
+    (tmp_path / "tutorial.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
+    project = _project(
+        tmp_path,
+        '''from transformers import AutoTokenizer
+
+def main_process(model_name: str) -> dict[str, str]:
+    """Load a tokenizer declared by the source notebook.
+
+    Args:
+        model_name: Model identifier.
+
+    Returns:
+        Loaded tokenizer class.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    return {"class": type(tokenizer).__name__}
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert report.passed
+    assert report.checks["repositoryEvidenceMode"] == "source_declared_dependency_call"
+    assert report.checks["repositoryEvidenceModules"] == ["transformers"]
+
+
+def test_template_validator_accepts_local_call_via_reachable_module_mapping(tmp_path: Path) -> None:
+    package = tmp_path / "models"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "def build(value: float) -> float:\n    return value\n", encoding="utf-8"
+    )
+    project = _project(
+        tmp_path,
+        '''from models import build
+
+MODEL_MAP = {"default": build}
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the selected local model.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Model output.
+    """
+    factory = MODEL_MAP["default"]
+    return {"result": factory(value)}
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert report.passed
+    assert report.checks["repositoryEvidenceMode"] == "local_module_call"
+
+
+def test_template_validator_allows_pass_only_in_cleanup_exception(tmp_path: Path) -> None:
+    (tmp_path / "algorithm.py").write_text("def run(value):\n    return value\n", encoding="utf-8")
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> float:
+    """Run and clean up.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Output value.
+    """
+    try:
+        result = run(value)
+    except RuntimeError:
+        pass
+    return result
+''',
+    )
+
+    assert validate_algorithm_template(project).passed
+
+
 def test_l0_requires_explicit_negative_control_opt_in(tmp_path: Path) -> None:
     project = _project(
         tmp_path,
