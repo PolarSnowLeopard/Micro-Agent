@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--results-file", type=Path, required=True)
     parser.add_argument("--baseline-id", required=True)
     parser.add_argument("--repo-cache-root", type=Path, required=True)
+    parser.add_argument("--corpus-size", type=int, default=PAPER_CORPUS_SIZE)
     parser.add_argument("--solver-model", default=PAPER_SOLVER_MODEL)
     parser.add_argument("--sample", action="append", default=[])
     parser.add_argument("--resume", action="store_true")
@@ -293,8 +294,10 @@ async def main() -> int:
         for line in benchmark_file.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    if len(samples) != PAPER_CORPUS_SIZE and not args.sample:
-        raise SystemExit(f"paper protocol requires {PAPER_CORPUS_SIZE} samples, got {len(samples)}")
+    if args.corpus_size < 1:
+        raise SystemExit("--corpus-size must be >= 1")
+    if len(samples) != args.corpus_size and not args.sample:
+        raise SystemExit(f"protocol requires {args.corpus_size} samples, got {len(samples)}")
     all_ids = [sample["sample_id"] for sample in samples]
     if len(set(all_ids)) != len(all_ids):
         raise SystemExit("benchmark contains duplicate sample_id values")
@@ -322,6 +325,8 @@ async def main() -> int:
         "releasedHarness": str(args.harness.resolve()),
         "releasedHarnessSha256": source_sha256,
         "sampleCount": len(tasks),
+        "expectedCorpusSize": args.corpus_size,
+        "corpusVariant": "full269" if args.corpus_size == PAPER_CORPUS_SIZE else f"subset{args.corpus_size}",
         "solverModel": args.solver_model,
         "solverTemperature": 0.0,
         "solverSeed": 42,
