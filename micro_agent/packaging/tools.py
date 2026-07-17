@@ -207,6 +207,7 @@ class SavePackagingPlanJson(Tool):
             self.store.last_errors = ["完整规划 JSON 顶层必须是 object"]
             return ToolResult(error=self.store.last_errors[0])
         _canonicalize_nonsemantic_shape(raw)
+        _drop_unknown_exclusions(raw, self.store.known_symbols)
         return await SavePackagingPlan(self.store).execute(**raw)
 
 
@@ -314,6 +315,28 @@ def _merge_excluded_symbols(root: list[Any], nested: list[Any]) -> list[Any]:
             seen_symbols.add(symbol)
         merged.append(item)
     return merged
+
+
+def _drop_unknown_exclusions(raw: dict[str, Any], known_symbols: set[str]) -> None:
+    """Discard hallucinated audit entries without changing exposed capabilities.
+
+    An exclusion only documents why a real repository symbol is not exposed as a
+    tool.  Removing an entry whose symbol does not exist cannot change the service
+    surface; malformed entries remain untouched so the normal validator still
+    rejects them.
+    """
+    exclusions = raw.get("excludedSymbols")
+    if not isinstance(exclusions, list):
+        return
+    raw["excludedSymbols"] = [
+        item
+        for item in exclusions
+        if not (
+            isinstance(item, dict)
+            and isinstance(item.get("symbol"), str)
+            and item["symbol"] not in known_symbols
+        )
+    ]
 
 
 def _snake_identifier(value: str, *, fallback: str) -> str:

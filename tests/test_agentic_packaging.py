@@ -485,6 +485,29 @@ async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path)
     assert "excludedSymbols" not in store.plan.data["services"][0]
 
 
+async def test_save_plan_json_discards_only_unknown_excluded_symbols(tmp_path):
+    """Provider hallucinations in audit-only exclusions must not block a valid plan."""
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(
+        tmp_path / "plan.json",
+        ir.known_symbols,
+        candidate_symbols={"core.predict", "core.evaluate"},
+    )
+    tool = SavePackagingPlanJson(store)
+    raw = _plan(ir).to_dict()
+    raw["excludedSymbols"].append(
+        {"symbol": "core.DoesNotExist", "reason": "Hallucinated provider audit entry."}
+    )
+
+    result = await tool.execute(content=json.dumps(raw, ensure_ascii=False))
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.data["excludedSymbols"] == [
+        {"symbol": "core._normalize", "reason": "internal helper"}
+    ]
+
+
 async def test_save_plan_reports_malformed_service_scoped_exclusions(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     store = PlanStore(tmp_path / "plan.json", ir.known_symbols)
