@@ -1029,6 +1029,8 @@ async def test_packaging_workflow_repairs_then_marks_artifact_ready(tmp_path, mo
     marker = json.loads((artifact / ".ioeb-ready").read_text(encoding="utf-8"))
     assert marker["toolCount"] == 2
     assert marker["repairAttempts"] == 1
+    assert marker["staticRepairAttempts"] == 1
+    assert marker["runtimeRepairAttempts"] == 0
     assert marker["validationMode"] == "static_only"
     assert marker["runtimeVerified"] is False
     assert marker["functionalVerified"] is False
@@ -1258,5 +1260,85 @@ async def test_packaging_workflow_repairs_runtime_failure_before_ready(tmp_path,
     assert marker["validationMode"] == "static_and_container_runtime"
     assert marker["runtimeVerified"] is True
     assert marker["runtimeBackend"] == "fake"
+    assert marker["repairAttempts"] == 1
+    assert marker["staticRepairAttempts"] == 0
+    assert marker["runtimeRepairAttempts"] == 1
     assert marker["functionalVerified"] is False
     assert marker["readinessLevel"] == "structural_runtime"
+
+
+async def test_static_failure_does_not_consume_runtime_repair_budget(tmp_path, monkeypatch):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = tmp_path / "artifact"
+
+    class FakeBuilder:
+        max_steps = 1
+
+        def __init__(self):
+            self.calls = 0
+
+        def cancel(self):
+            pass
+
+        async def run(self, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                (artifact / "server.py").write_text("def broken(:\n", encoding="utf-8")
+            else:
+                (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+            (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+            yield AgentEvent(type="done", step=1, data={"result": "attempt complete"})
+
+    class FakeRuntime:
+        backend = "fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def verify(self):
+            self.calls += 1
+            if self.calls == 1:
+                return VerificationReport(
+                    passed=False,
+                    checks={"runtimeBackend": "fake"},
+                    errors=["[source_import] cannot import name legacy_symbol"],
+                )
+            return VerificationReport(
+                passed=True,
+                checks={
+                    "runtimeBackend": "fake",
+                    "registeredTools": sorted(plan.tool_names),
+                    "smokeTestCount": 2,
+                    "functionalVerified": True,
+                },
+            )
+
+    builder = FakeBuilder()
+    runtime = FakeRuntime()
+    monkeypatch.setattr(
+        "micro_agent.packaging.workflow._build_builder_agent",
+        lambda *args, **kwargs: builder,
+    )
+    workflow = AgenticPackagingWorkflow(
+        project_dir=project,
+        ir=ir,
+        artifact_dir=artifact,
+        plan=plan,
+        max_repairs=1,
+        max_runtime_repairs=1,
+        runtime_verifier_factory=lambda *_: runtime,
+    )
+
+    events = [event async for event in workflow.run("package it")]
+
+    assert events[-1].type == "done"
+    assert builder.calls == 3
+    assert runtime.calls == 2
+    marker = json.loads((artifact / ".ioeb-ready").read_text(encoding="utf-8"))
+    assert marker["repairAttempts"] == 2
+    assert marker["staticRepairAttempts"] == 1
+    assert marker["runtimeRepairAttempts"] == 1
+    assert marker["functionalVerified"] is True
+    assert marker["readinessLevel"] == "functional"

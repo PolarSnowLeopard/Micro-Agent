@@ -201,6 +201,7 @@ class AgenticPackagingWorkflow:
         artifact_dir: str | Path,
         plan: PackagingPlan | None = None,
         max_repairs: int = 2,
+        max_runtime_repairs: int = 2,
         runtime_verifier_factory: RuntimeVerifierFactory | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
@@ -208,6 +209,7 @@ class AgenticPackagingWorkflow:
         self.artifact_dir = Path(artifact_dir).resolve()
         self.plan = plan
         self.max_repairs = max_repairs
+        self.max_runtime_repairs = max_runtime_repairs
         self.runtime_verifier_factory = runtime_verifier_factory
         self._active_agent: Agent | None = None
 
@@ -270,8 +272,11 @@ class AgenticPackagingWorkflow:
         self._active_agent = builder
         report: VerificationReport | None = None
         runtime_report: VerificationReport | None = None
-        for attempt in range(self.max_repairs + 1):
-            prompt = _builder_prompt(plan, self.ir) if attempt == 0 else _repair_prompt(report, attempt)
+        static_repairs = 0
+        runtime_repairs = 0
+        total_repairs = 0
+        prompt = _builder_prompt(plan, self.ir)
+        while True:
             async for event in builder.run(prompt):
                 if event.type == "done":
                     continue
@@ -314,7 +319,9 @@ class AgenticPackagingWorkflow:
                     "repositoryFingerprint": self.ir.fingerprint,
                     "planSha256": hashlib.sha256(plan.to_json(indent=None).encode("utf-8")).hexdigest(),
                     "toolCount": len(plan.tools),
-                    "repairAttempts": attempt,
+                    "repairAttempts": total_repairs,
+                    "staticRepairAttempts": static_repairs,
+                    "runtimeRepairAttempts": runtime_repairs,
                     "validationMode": (
                         "static_and_container_runtime"
                         if self.runtime_verifier_factory is not None
@@ -350,27 +357,46 @@ class AgenticPackagingWorkflow:
                             f"Agent 封装通过"
                             f"{'静态与隔离运行' if runtime_report else '静态'}验收："
                             f"{len(plan.tools)} 个工具，"
-                            f"修复循环 {attempt} 次。"
+                            f"修复循环 {total_repairs} 次"
+                            f"（静态 {static_repairs}，运行时 {runtime_repairs}）。"
                         )
                     },
                 )
                 return
 
-            if attempt < self.max_repairs and _is_repairable_report(report):
-                yield AgentEvent(
-                    type="think",
-                    step=step_offset,
-                    data={
-                        "thought": (
-                            f"[独立验收未通过] 发现 {len(report.errors)} 个问题，"
-                            f"将验收报告退回同一 Agent，进行第 {attempt + 1} 次定向修复。"
-                        ),
-                        "verification_errors": report.errors,
-                    },
-                )
-                step_offset += 1
-            elif not _is_repairable_report(report):
+            if not _is_repairable_report(report):
                 break
+            failure_phase = "runtime" if runtime_report is not None and not runtime_report.passed else "static"
+            if failure_phase == "runtime":
+                if runtime_repairs >= self.max_runtime_repairs:
+                    break
+                runtime_repairs += 1
+                phase_repairs = runtime_repairs
+            else:
+                if static_repairs >= self.max_repairs:
+                    break
+                static_repairs += 1
+                phase_repairs = static_repairs
+            total_repairs += 1
+            yield AgentEvent(
+                type="think",
+                step=step_offset,
+                data={
+                    "thought": (
+                        f"[独立验收未通过] 发现 {len(report.errors)} 个问题，"
+                        f"将验收报告退回同一 Agent，进行第 {phase_repairs} 次"
+                        f"{'运行时' if failure_phase == 'runtime' else '静态'}定向修复。"
+                    ),
+                    "verification_errors": report.errors,
+                },
+            )
+            step_offset += 1
+            prompt = _repair_prompt(
+                report,
+                total_repairs,
+                failure_phase=failure_phase,
+                phase_attempt=phase_repairs,
+            )
 
         assert report is not None
         yield AgentEvent(
@@ -636,13 +662,24 @@ def _builder_prompt(plan: PackagingPlan, ir: RepositoryIR) -> str:
     )
 
 
-def _repair_prompt(report: VerificationReport | None, attempt: int) -> str:
+def _repair_prompt(
+    report: VerificationReport | None,
+    attempt: int,
+    *,
+    failure_phase: str,
+    phase_attempt: int,
+) -> str:
     return (
-        f"这是第 {attempt} 次定向修复。独立验收报告如下。请阅读现有 server.py/adapters.py，"
+        f"这是第 {attempt} 次定向修复（{failure_phase} 阶段第 {phase_attempt} 次）。"
+        "这是执行修复任务，不是分析问答：不得长篇复述报告，必须在前两次工具调用内调用 "
+        "write_artifact_file 落实修复，然后调用 verify_artifact。"
+        "独立验收报告如下。请阅读现有 server.py/adapters.py，"
         "根据错误只修复 adapters.py、requirements.txt、requirements-cpu.txt 或 system-packages.txt；"
         "不得改变 server.py、Dockerfile、packaging_plan.json 或删除计划中的工具。"
         "若报告来自容器构建/运行阶段，必须依据具体缺包、导入栈、系统库或 smoke test 错误修复，"
-        "不得绕过运行验收或吞掉异常。"
+        "不得绕过运行验收或吞掉异常。若原仓库在模块导入阶段引用已迁移/删除的第三方符号，"
+        "只能在 adapters.py 导入源码模块之前增加最小兼容处理，并且必须能由调用关系证明该符号"
+        "未使用，或使用当前版本的等价 API；禁止重写算法核心。"
         "修复后再次调用 verify_artifact。\n"
         + (report.to_json() if report else "无验收报告")
     )
