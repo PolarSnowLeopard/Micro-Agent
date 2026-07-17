@@ -9,8 +9,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from micro_agent.packaging.models import PackagingPlan, PlanValidationError
 from micro_agent.packaging.analyzer import RepositoryAnalyzer, RepositoryIR
+from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
+from micro_agent.packaging.models import PackagingPlan, PlanValidationError
 
 
 REQUIRED_FILES = {
@@ -56,6 +57,7 @@ class ArtifactVerifier:
         self._check_python(report, actual_plan or self.expected_plan)
         self._check_adapter_source_boundary(report)
         self._check_dependencies(report)
+        self._check_import_dependencies(report, actual_plan or self.expected_plan)
         self._check_system_packages(report)
         self._check_container_files(report)
         self._check_manifest(report)
@@ -205,6 +207,36 @@ class ArtifactVerifier:
         missing = [name for name in ("mcp", "starlette", "uvicorn") if name not in text]
         if missing:
             report.errors.append(f"requirements.txt 缺少运行依赖: {', '.join(missing)}")
+
+    def _check_import_dependencies(
+        self,
+        report: VerificationReport,
+        plan: PackagingPlan,
+    ) -> None:
+        modules = {
+            symbol.rsplit(".", 1)[0]
+            for tool in plan.tools
+            for symbol in tool.get("sourceSymbols", [])
+        }
+        unresolved = unresolved_import_dependencies(
+            self.root / "algorithm",
+            source_modules=modules,
+            adapter_path=self.root / "adapters.py",
+            requirement_paths=(
+                self.root / "requirements.txt",
+                self.root / "requirements-cpu.txt",
+            ),
+        )
+        report.checks["unresolvedImportDependencies"] = unresolved
+        if unresolved:
+            details = [
+                f"{name} -> {item['distribution']} ({', '.join(item['files'][:3])})"
+                for name, item in unresolved.items()
+            ]
+            report.errors.append(
+                "受工具源码导入链使用、但依赖清单未声明的第三方模块: "
+                + "; ".join(details)
+            )
 
     def _check_system_packages(self, report: VerificationReport) -> None:
         path = self.root / "system-packages.txt"

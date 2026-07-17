@@ -11,6 +11,7 @@ from pathlib import Path
 
 from micro_agent.core.schema import AgentEvent
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
+from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
 from micro_agent.packaging.scaffold import prepare_artifact
 from micro_agent.packaging.runtime_guardrails import decode_safe_zip
@@ -685,6 +686,49 @@ def test_scaffold_splits_cpu_wheels_and_drops_unsafe_source_requirements(tmp_pat
     assert "torchvision>=0.19" in cpu
     assert "example.test" not in general + cpu
     assert "../local-package" not in general + cpu
+
+
+def test_dependency_inspector_follows_local_import_chain_once(tmp_path):
+    algorithm = tmp_path / "algorithm"
+    package = algorithm / "src" / "localpkg"
+    package.mkdir(parents=True)
+    (algorithm / "main.py").write_text(
+        "import numpy\nfrom localpkg.worker import run\n",
+        encoding="utf-8",
+    )
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "worker.py").write_text(
+        "from PIL import Image\n"
+        "import lmdb\n"
+        "try:\n"
+        "    import optional_accelerator\n"
+        "except ImportError:\n"
+        "    optional_accelerator = None\n"
+        "def run():\n"
+        "    return Image, lmdb\n",
+        encoding="utf-8",
+    )
+    adapters = tmp_path / "adapters.py"
+    adapters.write_text(
+        "from algorithm_loader import ALGORITHM_DIR\nfrom main import run\n",
+        encoding="utf-8",
+    )
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("numpy>=1.26\nPillow>=10\n", encoding="utf-8")
+
+    unresolved = unresolved_import_dependencies(
+        algorithm,
+        source_modules={"main"},
+        adapter_path=adapters,
+        requirement_paths=(requirements,),
+    )
+
+    assert unresolved == {
+        "lmdb": {
+            "distribution": "lmdb",
+            "files": ["src/localpkg/worker.py"],
+        }
+    }
 
 
 def test_verifier_blocks_incomplete_agent_output(tmp_path):

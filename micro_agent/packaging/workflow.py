@@ -73,6 +73,8 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
    requirements.txt 与 requirements-cpu.txt 只允许合法 PEP 508 包依赖，禁止 URL、VCS、本地路径和 pip 参数；
    torch/torchvision/torchaudio 必须写入 requirements-cpu.txt，以固定 CPU wheel 源安装；system-packages.txt 每行只能是一个 Debian 包名。
    根据源码导入和验收日志补齐最小运行依赖，不得盲目复制开发/文档依赖，不得把 CPU 服务解析成不必要的 CUDA 工具链。
+   首轮静态验收会沿 sourceSymbols 和 adapters 的本地 import 链一次性列出未声明第三方模块；
+   必须逐项核对并补齐，避免每次容器构建只修一个缺包。
    不得使用 Bash、直接安装依赖、启动服务、覆盖 server.py、Dockerfile、runtime_guardrails.py 或容器基线。
 6. 写完后必须调用 verify_artifact。外层还会执行隔离容器构建、运行时工具发现和有证据的 smoke test；
    若运行验收失败，完整日志会在下一轮退回，请修复 adapters.py、requirements.txt、requirements-cpu.txt 或 system-packages.txt 后重新验收。
