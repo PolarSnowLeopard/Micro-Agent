@@ -9,7 +9,7 @@ import json
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable, Protocol
 
 from micro_agent.core.agent import Agent
 from micro_agent.core.config import config
@@ -67,9 +67,24 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
 4. 产物内已有只读 algorithm_loader.py。adapters.py 必须先 `from algorithm_loader import ALGORITHM_DIR`，再导入 predictor、api、main 等原仓库模块；所有模型/资源路径必须以 ALGORITHM_DIR 开始，不能使用 adapters.py 所在目录冒充算法目录，也不能依赖进程当前目录。
    源码函数必须用 alias 导入，避免适配函数覆盖同名导入后递归。任何执行异常都必须抛出，禁止返回“失败/错误”字符串伪装为成功。
    若工具接收 Base64/ZIP，必须把原始字符串直接传给只读模块 runtime_guardrails.decode_safe_zip（该函数已经完成 Base64 解码和 ZIP 安全校验），再把返回的 BytesIO 交给原算法；禁止自行先 b64decode，也禁止给 guardrail 写 fallback。
-5. 只能用 write_artifact_file 写 adapters.py 和可选测试。不得使用 Bash、安装依赖、启动服务、覆盖 server.py、runtime_guardrails.py 或容器基线。
-6. 写完后必须调用 verify_artifact。若验收失败，阅读错误和现有文件，修复后重新验收。通过后调用 terminate。
+5. 只能用 write_artifact_file 写 adapters.py、requirements.txt、requirements-cpu.txt、system-packages.txt 和可选测试。
+   requirements.txt 与 requirements-cpu.txt 只允许合法 PEP 508 包依赖，禁止 URL、VCS、本地路径和 pip 参数；
+   torch/torchvision/torchaudio 必须写入 requirements-cpu.txt，以固定 CPU wheel 源安装；system-packages.txt 每行只能是一个 Debian 包名。
+   根据源码导入和验收日志补齐最小运行依赖，不得盲目复制开发/文档依赖，不得把 CPU 服务解析成不必要的 CUDA 工具链。
+   不得使用 Bash、直接安装依赖、启动服务、覆盖 server.py、Dockerfile、runtime_guardrails.py 或容器基线。
+6. 写完后必须调用 verify_artifact。外层还会执行隔离容器构建、运行时工具发现和有证据的 smoke test；
+   若运行验收失败，完整日志会在下一轮退回，请修复 adapters.py、requirements.txt、requirements-cpu.txt 或 system-packages.txt 后重新验收。
 """
+
+
+class RuntimeVerifier(Protocol):
+    backend: str
+
+    async def verify(self) -> VerificationReport:
+        ...
+
+
+RuntimeVerifierFactory = Callable[[Path, PackagingPlan], RuntimeVerifier]
 
 
 class AnalysisCache:
@@ -180,12 +195,14 @@ class AgenticPackagingWorkflow:
         artifact_dir: str | Path,
         plan: PackagingPlan | None = None,
         max_repairs: int = 2,
+        runtime_verifier_factory: RuntimeVerifierFactory | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.ir = ir
         self.artifact_dir = Path(artifact_dir).resolve()
         self.plan = plan
         self.max_repairs = max_repairs
+        self.runtime_verifier_factory = runtime_verifier_factory
         self._active_agent: Agent | None = None
 
     def cancel(self) -> None:
@@ -246,6 +263,7 @@ class AgenticPackagingWorkflow:
         builder = _build_builder_agent(self.project_dir, self.artifact_dir, plan, self.ir)
         self._active_agent = builder
         report: VerificationReport | None = None
+        runtime_report: VerificationReport | None = None
         for attempt in range(self.max_repairs + 1):
             prompt = _builder_prompt(plan, self.ir) if attempt == 0 else _repair_prompt(report, attempt)
             async for event in builder.run(prompt):
@@ -260,13 +278,47 @@ class AgenticPackagingWorkflow:
                 report.to_json() + "\n", encoding="utf-8"
             )
             if report.passed:
+                runtime_report = None
+                if self.runtime_verifier_factory is not None:
+                    yield AgentEvent(
+                        type="think",
+                        step=step_offset,
+                        data={
+                            "thought": (
+                                "[隔离运行验收] 静态契约已通过，开始真实容器构建、"
+                                "MCP 工具发现与可追溯 smoke test。"
+                            )
+                        },
+                    )
+                    step_offset += 1
+                    runtime_verifier = self.runtime_verifier_factory(self.artifact_dir, plan)
+                    runtime_report = await runtime_verifier.verify()
+                    (self.artifact_dir / "runtime_verification_report.json").write_text(
+                        runtime_report.to_json() + "\n", encoding="utf-8"
+                    )
+                    if not runtime_report.passed:
+                        report = runtime_report
+
+            if report.passed and (
+                self.runtime_verifier_factory is None
+                or (runtime_report is not None and runtime_report.passed)
+            ):
                 marker = {
                     "schemaVersion": "ioeb.mcp-artifact-ready/v1",
                     "repositoryFingerprint": self.ir.fingerprint,
                     "planSha256": hashlib.sha256(plan.to_json(indent=None).encode("utf-8")).hexdigest(),
                     "toolCount": len(plan.tools),
                     "repairAttempts": attempt,
+                    "validationMode": (
+                        "static_and_container_runtime"
+                        if self.runtime_verifier_factory is not None
+                        else "static_only"
+                    ),
+                    "runtimeVerified": bool(runtime_report and runtime_report.passed),
                 }
+                if runtime_report is not None:
+                    marker["runtimeBackend"] = runtime_report.checks.get("runtimeBackend")
+                    marker["smokeTestCount"] = runtime_report.checks.get("smokeTestCount", 0)
                 (self.artifact_dir / ".ioeb-ready").write_text(
                     json.dumps(marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
                 )
@@ -275,14 +327,16 @@ class AgenticPackagingWorkflow:
                     step=step_offset,
                     data={
                         "result": (
-                            f"Agent 封装通过验收：{len(plan.tools)} 个工具，"
+                            f"Agent 封装通过"
+                            f"{'静态与隔离运行' if runtime_report else '静态'}验收："
+                            f"{len(plan.tools)} 个工具，"
                             f"修复循环 {attempt} 次。"
                         )
                     },
                 )
                 return
 
-            if attempt < self.max_repairs:
+            if attempt < self.max_repairs and _is_repairable_report(report):
                 yield AgentEvent(
                     type="think",
                     step=step_offset,
@@ -295,6 +349,8 @@ class AgenticPackagingWorkflow:
                     },
                 )
                 step_offset += 1
+            elif not _is_repairable_report(report):
+                break
 
         assert report is not None
         yield AgentEvent(
@@ -536,7 +592,9 @@ def _builder_prompt(plan: PackagingPlan, ir: RepositoryIR) -> str:
         if symbol.qualifiedName in files_by_symbol and symbol.failureReturns:
             files_by_symbol[symbol.qualifiedName]["failureReturns"] = symbol.failureReturns
     return (
-        "请实现以下已审核规划。先阅读所有 sourceSymbols 对应源码及其必要依赖，再只写 adapters.py（server.py 是只读协议边界）。\n"
+        "请实现以下已审核规划。先阅读所有 sourceSymbols 对应源码及其必要依赖，"
+        "再写 adapters.py，并在必要时修订 requirements.txt、requirements-cpu.txt 与 system-packages.txt"
+        "（server.py 和 Dockerfile 是只读边界）。\n"
         "inspect_repository 可查看完整提交清单；read_project_file 的路径相对提交仓库，不能加 algorithm/ 前缀；"
         "read_artifact_file 才用于查看 server.py、algorithm_loader.py 等生成产物。\n"
         "源码导入的标准前缀是 `from algorithm_loader import ALGORITHM_DIR`，它必须出现在 predictor/api/main 等提交模块导入之前。\n"
@@ -560,9 +618,23 @@ def _builder_prompt(plan: PackagingPlan, ir: RepositoryIR) -> str:
 def _repair_prompt(report: VerificationReport | None, attempt: int) -> str:
     return (
         f"这是第 {attempt} 次定向修复。独立验收报告如下。请阅读现有 server.py/adapters.py，"
-        "只修复 adapters.py 中报告指出的问题；不得改变 server.py、packaging_plan.json 或删除计划中的工具。"
+        "根据错误只修复 adapters.py、requirements.txt、requirements-cpu.txt 或 system-packages.txt；"
+        "不得改变 server.py、Dockerfile、packaging_plan.json 或删除计划中的工具。"
+        "若报告来自容器构建/运行阶段，必须依据具体缺包、导入栈、系统库或 smoke test 错误修复，"
+        "不得绕过运行验收或吞掉异常。"
         "修复后再次调用 verify_artifact。\n"
         + (report.to_json() if report else "无验收报告")
+    )
+
+
+def _is_repairable_report(report: VerificationReport) -> bool:
+    non_repairable = (
+        "[runtime_backend_unavailable]",
+        "[runtime_backend_error]",
+    )
+    return not any(
+        error.startswith(non_repairable)
+        for error in report.errors
     )
 
 

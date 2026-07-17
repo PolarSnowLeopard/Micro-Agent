@@ -12,6 +12,7 @@ from pathlib import Path
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.models import PackagingPlan
+from micro_agent.packaging.runtime_verifier import ContainerRuntimeVerifier
 from micro_agent.packaging.workflow import AgenticAnalysisWorkflow, AgenticPackagingWorkflow
 
 
@@ -91,6 +92,7 @@ async def main() -> int:
         ir=ir,
         artifact_dir=artifact,
         plan=plan,
+        runtime_verifier_factory=ContainerRuntimeVerifier,
     )
     packaging_started = time.perf_counter()
     packaging_events = []
@@ -113,6 +115,10 @@ async def main() -> int:
     if (artifact / "verification_report.json").is_file():
         summary["verification"] = json.loads(
             (artifact / "verification_report.json").read_text(encoding="utf-8")
+        )
+    if (artifact / "runtime_verification_report.json").is_file():
+        summary["runtimeVerification"] = json.loads(
+            (artifact / "runtime_verification_report.json").read_text(encoding="utf-8")
         )
     _write_summary(output, summary)
     return 0 if summary["artifactReady"] else 3

@@ -27,6 +27,7 @@ dependencies = [
     "numpy>=1.26.0",
     "aiofiles>=24.0.0",
     "python-dotenv>=1.0.0",
+    "packaging>=24.0",
 ]
 
 [project.optional-dependencies]

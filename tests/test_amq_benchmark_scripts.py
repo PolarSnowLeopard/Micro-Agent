@@ -64,7 +64,11 @@ def test_export_submission_uses_harness_repo_as_algorithm(tmp_path: Path) -> Non
     export_submission(artifact, destination, sample=sample, generation_summary={"status": "ready"})
 
     dockerfile = (destination / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY repo /app/algorithm" in dockerfile
+    assert "COPY --chown=10001:10001 repo /app/algorithm" in dockerfile
+    assert "COPY system-packages.txt /app/system-packages.txt" in dockerfile
+    assert "requirements-cpu.txt" in dockerfile
+    assert "PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu" in dockerfile
+    assert "USER 10001:10001" in dockerfile
     assert "COPY . /app" not in dockerfile
     manifest = json.loads((destination / "generation_manifest.json").read_text(encoding="utf-8"))
     assert manifest["constructionInput"] == "wrap_intent_only"

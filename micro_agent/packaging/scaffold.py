@@ -9,6 +9,8 @@ import keyword
 from pathlib import Path
 from typing import Any
 
+from packaging.requirements import InvalidRequirement, Requirement
+
 from micro_agent.packaging.models import PackagingPlan
 
 
@@ -37,24 +39,53 @@ def prepare_artifact(project_dir: str | Path, artifact_dir: str | Path, plan: Pa
     _copy_project(source_root, algorithm_root)
     (algorithm_root / "__init__.py").touch(exist_ok=True)
 
-    requirements = _read_requirements(source_root)
+    source_requirements = _read_requirements(source_root)
+    cpu_requirements = [
+        requirement
+        for requirement in source_requirements
+        if _requirement_name(requirement) in {"torch", "torchvision", "torchaudio"}
+    ]
     requirements = _merge_requirements(
-        requirements,
+        [
+            requirement
+            for requirement in source_requirements
+            if _requirement_name(requirement) not in {"torch", "torchvision", "torchaudio"}
+        ],
         ["mcp>=1.28.0,<2", "starlette>=0.37.0,<2", "uvicorn[standard]>=0.30.0,<1"],
     )
     (output_root / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
+    (output_root / "requirements-cpu.txt").write_text(
+        "\n".join(cpu_requirements) + ("\n" if cpu_requirements else ""),
+        encoding="utf-8",
+    )
+    (output_root / "system-packages.txt").write_text("", encoding="utf-8")
 
     service_id = plan.data["services"][0]["id"]
     compose_name = re.sub(r"[^a-z0-9_-]", "-", service_id.lower()).strip("-") or "mcp-service"
     (output_root / "Dockerfile").write_text(
-        "FROM python:3.11-slim\n"
+        "FROM python:3.11-slim-bookworm\n"
         "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
-        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
+        "ARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu\n"
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1\n"
         "WORKDIR /app\n"
-        "COPY requirements.txt /app/requirements.txt\n"
+        "COPY system-packages.txt /app/system-packages.txt\n"
+        "RUN set -eux; "
+        "if [ -s /app/system-packages.txt ]; then "
+        "apt-get update; "
+        "xargs -r apt-get install -y --no-install-recommends < /app/system-packages.txt; "
+        "rm -rf /var/lib/apt/lists/*; "
+        "fi\n"
+        "COPY requirements.txt requirements-cpu.txt /app/\n"
+        "RUN set -eux; "
+        "if [ -s /app/requirements-cpu.txt ]; then "
+        "pip install --no-cache-dir --index-url \"${PYTORCH_CPU_INDEX_URL}\" "
+        "--timeout 120 --retries 5 -r /app/requirements-cpu.txt; "
+        "fi\n"
         "RUN pip install --no-cache-dir --index-url \"${PIP_INDEX_URL}\" "
         "--timeout 120 --retries 5 -r /app/requirements.txt\n"
-        "COPY . /app\n"
+        "RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin ioeb\n"
+        "COPY --chown=10001:10001 . /app\n"
+        "USER 10001:10001\n"
         "EXPOSE 8000\n"
         "CMD [\"python\", \"server.py\"]\n",
         encoding="utf-8",
@@ -103,8 +134,14 @@ def prepare_artifact(project_dir: str | Path, artifact_dir: str | Path, plan: Pa
         "import sys\n"
         "\n"
         "ALGORITHM_DIR = Path(__file__).resolve().parent / \"algorithm\"\n"
-        "if str(ALGORITHM_DIR) not in sys.path:\n"
-        "    sys.path.insert(0, str(ALGORITHM_DIR))\n",
+        "ALGORITHM_IMPORT_DIRS = tuple(\n"
+        "    path for path in (ALGORITHM_DIR, ALGORITHM_DIR / \"src\") if path.is_dir()\n"
+        ")\n"
+        "# Append after site-packages so an incomplete source checkout cannot shadow\n"
+        "# an installed runtime dependency with the same package name (for example rdkit).\n"
+        "for path in ALGORITHM_IMPORT_DIRS:\n"
+        "    if str(path) not in sys.path:\n"
+        "        sys.path.append(str(path))\n",
         encoding="utf-8",
     )
     shutil.copy2(Path(__file__).with_name("runtime_guardrails.py"), output_root / "runtime_guardrails.py")
@@ -130,7 +167,19 @@ def _read_requirements(root: Path) -> list[str]:
     path = root / "requirements.txt"
     if not path.is_file():
         return []
-    return [line.rstrip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines()]
+    requirements: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        try:
+            requirement = Requirement(line)
+        except InvalidRequirement:
+            continue
+        if requirement.url:
+            continue
+        requirements.append(line)
+    return requirements
 
 
 def _merge_requirements(original: list[str], required: list[str]) -> list[str]:
@@ -155,7 +204,10 @@ def _merge_requirements(original: list[str], required: list[str]) -> list[str]:
 def _requirement_name(line: str) -> str:
     if not line.strip() or line.lstrip().startswith(("#", "-")):
         return ""
-    return re.split(r"[<>=!~\[\s]", line.strip(), maxsplit=1)[0].lower().replace("_", "-")
+    try:
+        return Requirement(line).name.lower().replace("_", "-")
+    except InvalidRequirement:
+        return ""
 
 
 def _render_server(plan: PackagingPlan) -> str:

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from packaging.requirements import InvalidRequirement, Requirement
+
 from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.models import (
     PLAN_JSON_SCHEMA,
@@ -383,7 +385,12 @@ def _parse_structured_string(value: str) -> Any | None:
 
 class WriteArtifactFile(Tool):
     name = "write_artifact_file"
-    description = "写入 Agent 负责的语义适配实现。只能写 adapters.py、README.generated.md 或 tests/ 下文本文件；server.py 由已审核规划确定性生成。"
+    description = (
+        "写入 Agent 负责的语义适配实现和受控依赖清单。允许 adapters.py、"
+        "requirements.txt、requirements-cpu.txt、system-packages.txt、"
+        "README.generated.md 或 tests/ 下文本文件；"
+        "server.py 与 Dockerfile 由已审核规划确定性生成。"
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -401,17 +408,70 @@ class WriteArtifactFile(Tool):
     async def execute(self, **kwargs: Any) -> ToolResult:
         relative = str(kwargs.get("path", ""))
         content = str(kwargs.get("content", ""))
-        allowed = relative in {"adapters.py", "README.generated.md"} or (
+        allowed = relative in {
+            "adapters.py",
+            "requirements.txt",
+            "requirements-cpu.txt",
+            "system-packages.txt",
+            "README.generated.md",
+        } or (
             relative.startswith("tests/") and relative.endswith((".py", ".json", ".md"))
         )
         if not allowed:
             return ToolResult(error=f"不允许 Agent 写入该路径: {relative}")
         if len(content) > self.max_chars:
             return ToolResult(error=f"文件内容超过限制: {len(content)} > {self.max_chars}")
+        validation_error = _validate_agent_dependency_file(relative, content)
+        if validation_error:
+            return ToolResult(error=validation_error)
         path = _contained_path(self.root, relative)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return ToolResult(output=f"已写入 {relative} ({len(content)} chars)")
+
+
+def _validate_agent_dependency_file(relative: str, content: str) -> str:
+    lines = [
+        line.strip()
+        for line in content.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if relative in {"requirements.txt", "requirements-cpu.txt"}:
+        if len(lines) > 300:
+            return f"{relative} 依赖条目超过 300 个"
+        for line in lines:
+            if line.startswith("-"):
+                return f"{relative} 禁止 pip 命令行选项: {line}"
+            try:
+                requirement = Requirement(line)
+            except InvalidRequirement as exc:
+                return f"{relative} 包含无效 PEP 508 依赖 {line!r}: {exc}"
+            if requirement.url:
+                return f"{relative} 禁止 URL/VCS/本地路径依赖: {line}"
+            if (
+                relative == "requirements-cpu.txt"
+                and requirement.name.lower().replace("_", "-")
+                not in {"torch", "torchvision", "torchaudio"}
+            ):
+                return (
+                    "requirements-cpu.txt 只允许 torch、torchvision、torchaudio，"
+                    f"其他依赖请写入 requirements.txt: {line}"
+                )
+        return ""
+    if relative == "system-packages.txt":
+        if len(lines) > 100:
+            return "system-packages.txt 系统包超过 100 个"
+        invalid = [
+            line
+            for line in lines
+            if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?", line)
+        ]
+        if invalid:
+            return (
+                "system-packages.txt 只允许 Debian 包名，禁止参数、命令和 URL: "
+                + ", ".join(invalid[:10])
+            )
+    return ""
 
 
 class ReadArtifactFile(Tool):

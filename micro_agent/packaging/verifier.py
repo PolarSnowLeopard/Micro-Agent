@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,8 +16,10 @@ from micro_agent.packaging.analyzer import RepositoryAnalyzer, RepositoryIR
 REQUIRED_FILES = {
     "server.py", "adapters.py", "requirements.txt", "Dockerfile",
     "docker-compose.yml", "packaging_plan.json", "ioeb-service.json",
-    "algorithm_loader.py", "runtime_guardrails.py",
+    "algorithm_loader.py", "runtime_guardrails.py", "system-packages.txt",
+    "requirements-cpu.txt",
 }
+SYSTEM_PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?$")
 
 
 @dataclass
@@ -53,6 +56,7 @@ class ArtifactVerifier:
         self._check_python(report, actual_plan or self.expected_plan)
         self._check_adapter_source_boundary(report)
         self._check_dependencies(report)
+        self._check_system_packages(report)
         self._check_container_files(report)
         self._check_manifest(report)
         self._check_source_copy(report)
@@ -202,6 +206,23 @@ class ArtifactVerifier:
         if missing:
             report.errors.append(f"requirements.txt 缺少运行依赖: {', '.join(missing)}")
 
+    def _check_system_packages(self, report: VerificationReport) -> None:
+        path = self.root / "system-packages.txt"
+        if not path.is_file():
+            return
+        packages = [
+            line.strip()
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        invalid = [package for package in packages if not SYSTEM_PACKAGE_RE.fullmatch(package)]
+        report.checks["systemPackages"] = packages
+        if invalid:
+            report.errors.append(
+                "system-packages.txt 只允许 Debian 包名，禁止参数、命令和 URL: "
+                + ", ".join(invalid[:10])
+            )
+
     def _check_source_failure_sentinels(
         self,
         report: VerificationReport,
@@ -331,8 +352,14 @@ class ArtifactVerifier:
             text = dockerfile.read_text(encoding="utf-8", errors="replace")
             if "CMD" not in text or "server.py" not in text:
                 report.errors.append("Dockerfile 未以 server.py 作为启动入口")
-            if "COPY ." not in text:
+            if "COPY ." not in text and "COPY --chown=10001:10001 . " not in text:
                 report.errors.append("Dockerfile 未复制完整产物")
+            if "system-packages.txt" not in text or "apt-get install" not in text:
+                report.errors.append("Dockerfile 未接入受控系统依赖清单")
+            if "requirements-cpu.txt" not in text or "PYTORCH_CPU_INDEX_URL" not in text:
+                report.errors.append("Dockerfile 未接入标准容器的 CPU 推理依赖清单")
+            if "USER 10001:10001" not in text:
+                report.errors.append("Dockerfile 未使用固定非 root 运行用户")
         compose = self.root / "docker-compose.yml"
         if compose.is_file():
             text = compose.read_text(encoding="utf-8", errors="replace")

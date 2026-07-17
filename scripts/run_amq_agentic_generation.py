@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
+from micro_agent.packaging.runtime_verifier import ContainerRuntimeVerifier
 from micro_agent.packaging.workflow import AgenticAnalysisWorkflow, AgenticPackagingWorkflow
 
 
@@ -28,6 +29,8 @@ EXPORT_FILES = (
     "algorithm_loader.py",
     "runtime_guardrails.py",
     "requirements.txt",
+    "requirements-cpu.txt",
+    "system-packages.txt",
     "packaging_plan.json",
     "ioeb-service.json",
 )
@@ -112,16 +115,32 @@ def prepare_source(
 
 def _submission_dockerfile() -> str:
     return (
-        "FROM python:3.11-slim\n"
+        "FROM python:3.11-slim-bookworm\n"
         "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
-        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
+        "ARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu\n"
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1\n"
         "WORKDIR /app\n"
-        "COPY requirements.txt /app/requirements.txt\n"
+        "COPY system-packages.txt /app/system-packages.txt\n"
+        "RUN set -eux; "
+        "if [ -s /app/system-packages.txt ]; then "
+        "apt-get update; "
+        "xargs -r apt-get install -y --no-install-recommends < /app/system-packages.txt; "
+        "rm -rf /var/lib/apt/lists/*; "
+        "fi\n"
+        "COPY requirements.txt requirements-cpu.txt /app/\n"
+        "RUN set -eux; "
+        "if [ -s /app/requirements-cpu.txt ]; then "
+        "pip install --no-cache-dir --index-url \"${PYTORCH_CPU_INDEX_URL}\" "
+        "--timeout 120 --retries 5 -r /app/requirements-cpu.txt; "
+        "fi\n"
         "RUN pip install --no-cache-dir --index-url \"${PIP_INDEX_URL}\" "
         "--timeout 120 --retries 5 -r /app/requirements.txt\n"
-        "COPY repo /app/algorithm\n"
-        "COPY server.py adapters.py algorithm_loader.py runtime_guardrails.py /app/\n"
+        "RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin ioeb\n"
+        "COPY --chown=10001:10001 repo /app/algorithm\n"
+        "COPY --chown=10001:10001 server.py adapters.py algorithm_loader.py "
+        "runtime_guardrails.py packaging_plan.json /app/\n"
         "RUN touch /app/algorithm/__init__.py\n"
+        "USER 10001:10001\n"
         "EXPOSE 8000\n"
         "CMD [\"python\", \"server.py\"]\n"
     )
@@ -276,7 +295,11 @@ async def generate_one(
 
             artifact = output / "artifact"
             workflow = AgenticPackagingWorkflow(
-                project_dir=project, ir=ir, artifact_dir=artifact, plan=plan
+                project_dir=project,
+                ir=ir,
+                artifact_dir=artifact,
+                plan=plan,
+                runtime_verifier_factory=ContainerRuntimeVerifier,
             )
             packaging_started = time.perf_counter()
             packaging_errors: list[str] = []
@@ -295,6 +318,10 @@ async def generate_one(
             if (artifact / "verification_report.json").is_file():
                 result["verification"] = json.loads(
                     (artifact / "verification_report.json").read_text(encoding="utf-8")
+                )
+            if (artifact / "runtime_verification_report.json").is_file():
+                result["runtimeVerification"] = json.loads(
+                    (artifact / "runtime_verification_report.json").read_text(encoding="utf-8")
                 )
             export_submission(artifact, submission, sample=sample, generation_summary=result)
             shutil.rmtree(artifact / "algorithm", ignore_errors=True)

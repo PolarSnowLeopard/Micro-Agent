@@ -54,6 +54,7 @@ from micro_agent.core.llm import LLM
 from micro_agent.core.mcp_agent import MCPAgent
 from micro_agent.core.schema import AgentEvent
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
+from micro_agent.packaging.runtime_verifier import ContainerRuntimeVerifier
 from micro_agent.packaging.workflow import (
     AgenticAnalysisWorkflow,
     AgenticPackagingWorkflow,
@@ -117,11 +118,20 @@ async def service_packaging(
     output_dir = job_root / "artifact"
     cached_plan = analysis_cache.get(ir.fingerprint)
     response_session_id = session_id or uuid.uuid4().hex
+    runtime_mode = os.getenv("IOEB_PACKAGING_RUNTIME_VERIFY", "static").strip().lower()
+    if runtime_mode not in {"static", "docker"}:
+        raise HTTPException(
+            status_code=500,
+            detail="IOEB_PACKAGING_RUNTIME_VERIFY 必须是 static 或 docker",
+        )
     workflow = AgenticPackagingWorkflow(
         project_dir=project_dir,
         ir=ir,
         artifact_dir=output_dir,
         plan=cached_plan,
+        runtime_verifier_factory=(
+            ContainerRuntimeVerifier if runtime_mode == "docker" else None
+        ),
     )
     ctx = await task_manager.submit(workflow, file.filename or "uploaded repository")
 
@@ -141,6 +151,7 @@ async def service_packaging(
             "session_id": response_session_id,
             "max_repair_attempts": workflow.max_repairs,
             "host_bash_enabled": False,
+            "runtime_verification": runtime_mode,
         },
     )
 

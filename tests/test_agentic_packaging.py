@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import base64
 import io
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -13,8 +14,18 @@ from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
 from micro_agent.packaging.scaffold import prepare_artifact
 from micro_agent.packaging.runtime_guardrails import decode_safe_zip
-from micro_agent.packaging.tools import PlanStore, SavePackagingPlan, SavePackagingPlanJson
-from micro_agent.packaging.verifier import ArtifactVerifier
+from micro_agent.packaging.runtime_verifier import (
+    ContainerRuntimeVerifier,
+    PROBE_MARKER,
+    _runtime_probe_source,
+)
+from micro_agent.packaging.tools import (
+    PlanStore,
+    SavePackagingPlan,
+    SavePackagingPlanJson,
+    WriteArtifactFile,
+)
+from micro_agent.packaging.verifier import ArtifactVerifier, VerificationReport
 from micro_agent.packaging.workflow import (
     AgenticAnalysisWorkflow,
     AgenticPackagingWorkflow,
@@ -582,6 +593,39 @@ def test_scaffold_and_verifier_accept_exact_multi_tool_contract(tmp_path):
     assert '"FROM' not in dockerfile
     assert "PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple" in dockerfile
     assert '--index-url "${PIP_INDEX_URL}" --timeout 120 --retries 5' in dockerfile
+    assert "PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu" in dockerfile
+    assert "requirements-cpu.txt" in dockerfile
+    assert "system-packages.txt" in dockerfile
+    assert "USER 10001:10001" in dockerfile
+    loader = (artifact / "algorithm_loader.py").read_text(encoding="utf-8")
+    assert 'ALGORITHM_DIR / "src"' in loader
+    assert "sys.path.append" in loader
+    assert "sys.path.insert" not in loader
+
+
+def test_scaffold_splits_cpu_wheels_and_drops_unsafe_source_requirements(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "requirements.txt").write_text(
+        "numpy>=1.26\n"
+        "torch==2.4.1\n"
+        "torchvision>=0.19\n"
+        "--extra-index-url https://example.test/simple\n"
+        "demo @ https://example.test/demo.whl\n"
+        "-e ../local-package\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    artifact = prepare_artifact(project, tmp_path / "artifact", _plan(ir))
+
+    general = (artifact / "requirements.txt").read_text(encoding="utf-8")
+    cpu = (artifact / "requirements-cpu.txt").read_text(encoding="utf-8")
+    assert "numpy>=1.26" in general
+    assert "torch" not in general
+    assert "torch==2.4.1" in cpu
+    assert "torchvision>=0.19" in cpu
+    assert "example.test" not in general + cpu
+    assert "../local-package" not in general + cpu
 
 
 def test_verifier_blocks_incomplete_agent_output(tmp_path):
@@ -863,3 +907,199 @@ async def test_packaging_workflow_repairs_then_marks_artifact_ready(tmp_path, mo
     marker = json.loads((artifact / ".ioeb-ready").read_text(encoding="utf-8"))
     assert marker["toolCount"] == 2
     assert marker["repairAttempts"] == 1
+    assert marker["validationMode"] == "static_only"
+    assert marker["runtimeVerified"] is False
+
+
+async def test_dependency_writer_allows_only_safe_package_manifests(tmp_path):
+    writer = WriteArtifactFile(tmp_path)
+
+    valid_requirements = await writer.execute(
+        path="requirements.txt",
+        content="numpy>=1.26\nmcp>=1.28.0,<2\n",
+    )
+    assert not valid_requirements.error
+    assert (tmp_path / "requirements.txt").is_file()
+
+    valid_cpu_requirements = await writer.execute(
+        path="requirements-cpu.txt",
+        content="torch>=2.4\ntorchvision>=0.19\n",
+    )
+    assert not valid_cpu_requirements.error
+
+    invalid_cpu_requirement = await writer.execute(
+        path="requirements-cpu.txt",
+        content="numpy>=1.26\n",
+    )
+    assert invalid_cpu_requirement.error
+    assert "只允许 torch" in invalid_cpu_requirement.error
+
+    vcs_requirement = await writer.execute(
+        path="requirements.txt",
+        content="demo @ https://example.test/demo.whl\n",
+    )
+    assert vcs_requirement.error
+    assert "URL/VCS" in vcs_requirement.error
+
+    valid_system = await writer.execute(
+        path="system-packages.txt",
+        content="libgomp1\nlibexpat1\n",
+    )
+    assert not valid_system.error
+
+    command_injection = await writer.execute(
+        path="system-packages.txt",
+        content="libgomp1\n$(touch /tmp/escaped)\n",
+    )
+    assert command_injection.error
+    assert "Debian 包名" in command_injection.error
+
+    immutable = await writer.execute(path="Dockerfile", content="FROM busybox\n")
+    assert immutable.error
+
+
+async def test_container_runtime_verifier_builds_and_discovers_tools(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+    commands = []
+
+    def runner(command, **kwargs):
+        commands.append((command, kwargs))
+        if command[:2] == ["docker", "build"]:
+            return subprocess.CompletedProcess(command, 0, stdout="built", stderr="")
+        if command[:2] == ["docker", "run"]:
+            payload = {
+                "registeredTools": sorted(plan.tool_names),
+                "smokeTestsExecuted": sorted(plan.tool_names),
+                "smokeTestCount": 2,
+            }
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=PROBE_MARKER + json.dumps(payload) + "\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    report = await ContainerRuntimeVerifier(
+        artifact,
+        plan,
+        command_runner=runner,
+    ).verify()
+
+    assert report.passed, report.to_json()
+    assert report.checks["runtimeBackend"] == "docker"
+    assert report.checks["smokeTestCount"] == 2
+    run_command = next(command for command, _ in commands if command[:2] == ["docker", "run"])
+    assert "--network" in run_command
+    assert "none" in run_command
+    assert "--read-only" in run_command
+    assert ["docker", "image", "rm"] == next(
+        command[:3] for command, _ in commands if command[:3] == ["docker", "image", "rm"]
+    )
+
+
+def test_runtime_probe_is_valid_python_and_checks_smoke_output_schema():
+    source = _runtime_probe_source(17)
+
+    compile(source, "<runtime-probe>", "exec")
+    assert "assert_schema(" in source
+    assert "smoke output schema mismatch" in source
+    assert "timeout=17" in source
+
+
+async def test_container_runtime_verifier_classifies_dependency_failure(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="ERROR: No matching distribution found for impossible==9",
+        )
+
+    report = await ContainerRuntimeVerifier(
+        artifact,
+        plan,
+        command_runner=runner,
+    ).verify()
+
+    assert not report.passed
+    assert report.checks["buildExitCode"] == 1
+    assert any("[dependency_resolution]" in error for error in report.errors)
+
+
+async def test_packaging_workflow_repairs_runtime_failure_before_ready(tmp_path, monkeypatch):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = tmp_path / "artifact"
+
+    class FakeBuilder:
+        max_steps = 1
+
+        def __init__(self):
+            self.calls = 0
+
+        def cancel(self):
+            pass
+
+        async def run(self, prompt):
+            self.calls += 1
+            (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+            yield AgentEvent(type="done", step=1, data={"result": "attempt complete"})
+
+    class FakeRuntime:
+        backend = "fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def verify(self):
+            self.calls += 1
+            if self.calls == 1:
+                return VerificationReport(
+                    passed=False,
+                    checks={"runtimeBackend": "fake"},
+                    errors=["[python_dependency_or_import] No module named scipy"],
+                )
+            return VerificationReport(
+                passed=True,
+                checks={
+                    "runtimeBackend": "fake",
+                    "registeredTools": sorted(plan.tool_names),
+                    "smokeTestCount": 2,
+                },
+            )
+
+    builder = FakeBuilder()
+    runtime = FakeRuntime()
+    monkeypatch.setattr(
+        "micro_agent.packaging.workflow._build_builder_agent",
+        lambda *args, **kwargs: builder,
+    )
+    workflow = AgenticPackagingWorkflow(
+        project_dir=project,
+        ir=ir,
+        artifact_dir=artifact,
+        plan=plan,
+        max_repairs=2,
+        runtime_verifier_factory=lambda *_: runtime,
+    )
+
+    events = [event async for event in workflow.run("package it")]
+
+    assert events[-1].type == "done"
+    assert builder.calls == 2
+    assert runtime.calls == 2
+    marker = json.loads((artifact / ".ioeb-ready").read_text(encoding="utf-8"))
+    assert marker["validationMode"] == "static_and_container_runtime"
+    assert marker["runtimeVerified"] is True
+    assert marker["runtimeBackend"] == "fake"
