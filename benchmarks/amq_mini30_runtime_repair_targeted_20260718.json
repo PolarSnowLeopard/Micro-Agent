@@ -1,0 +1,158 @@
+{
+  "schemaVersion": "ioeb.amq-mini30-runtime-repair-targeted/v1",
+  "evaluatedAt": "2026-07-18T02:40:00+08:00",
+  "status": "validated_with_branch_coverage_caveat",
+  "branch": "feature/agentic-runtime-repair",
+  "implementationCommit": "589880d",
+  "scope": {
+    "type": "targeted_regression",
+    "sampleCount": 3,
+    "selection": "Three AMQ-Bench mini30 samples whose original D1 service health failed for distinct packaging causes: undeclared transitive dependency, package-relative/local import handling, and installed-package shadowing plus dependency API drift.",
+    "notAFullMini30Rescore": true
+  },
+  "sources": {
+    "strictMini30": {
+      "path": "/mnt/vdb500/work/amq_ioeb_mini30_20260717/results/mini30_strict.json",
+      "sha256": "646355ed9057b19be411ec8ca44470b949ee44b07100eeb1e243d4a9b46772bc"
+    },
+    "eomtSummary": {
+      "path": "/mnt/vdb500/work/amq_ioeb_mini30_20260717/runtime_repair_planreuse/eomt/summary.json",
+      "sha256": "1bca5633302393e180a00d1921010f580ef8443f0b412b95cd520db6918857b5"
+    },
+    "mopadiSummary": {
+      "path": "/mnt/vdb500/work/amq_ioeb_mini30_20260717/runtime_repair_planreuse/mopadi_preflight/summary.json",
+      "sha256": "ed33482ed6219c43efde332a134daba744bd475355a6148152f81bf960ec6a57"
+    },
+    "rdkitSummary": {
+      "path": "/mnt/vdb500/work/amq_ioeb_mini30_20260717/runtime_repair_planreuse/rdkit_functional_v5/summary.json",
+      "sha256": "e4441eb6d9352233b7503b6b91ed1fe2d72e6eb58897bc16e3a060626ee65780"
+    },
+    "rdkitReviewedPlan": {
+      "path": "/mnt/vdb500/work/amq_ioeb_mini30_20260717/runtime_repair_rdkit_smoke/run/generation/meb_rdkit_001/packaging_plan.json",
+      "sha256": "1bb7fc076f7f580b59682582d4ab4f30afd15e43691af340ba56fd88ca8b291c"
+    }
+  },
+  "samples": [
+    {
+      "sampleId": "meb_eomt_001",
+      "baseline": {
+        "buildSuccess": true,
+        "serviceHealth": false,
+        "failureCategory": "import_error",
+        "failure": "ModuleNotFoundError: No module named 'transformers'",
+        "imageSizeMiB": 5533.23
+      },
+      "repaired": {
+        "artifactReady": true,
+        "runtimeVerified": true,
+        "functionalVerified": false,
+        "readinessLevel": "structural_runtime",
+        "registeredTools": [
+          "segment_image"
+        ],
+        "smokeTestCount": 0,
+        "buildSeconds": 145.498,
+        "runtimeSeconds": 6.081,
+        "packagingSeconds": 320.578,
+        "imageSizeMiB": 1474.6,
+        "imageReductionPercent": 73.3501
+      }
+    },
+    {
+      "sampleId": "meb_mopadi_generate_counterfactuals_001",
+      "baseline": {
+        "buildSuccess": true,
+        "serviceHealth": false,
+        "failureCategory": "import_error",
+        "failure": "ModuleNotFoundError: No module named 'mopadi'",
+        "imageSizeMiB": 5291.14
+      },
+      "repaired": {
+        "artifactReady": true,
+        "runtimeVerified": true,
+        "functionalVerified": false,
+        "readinessLevel": "structural_runtime",
+        "registeredTools": [
+          "generate_counterfactual_tiles"
+        ],
+        "smokeTestCount": 0,
+        "buildSeconds": 158.321,
+        "runtimeSeconds": 7.535,
+        "packagingSeconds": 454.391,
+        "imageSizeMiB": 1659.74,
+        "imageReductionPercent": 68.6317
+      }
+    },
+    {
+      "sampleId": "meb_rdkit_001",
+      "baseline": {
+        "buildSuccess": true,
+        "serviceHealth": false,
+        "failureCategory": "import_error",
+        "failure": "The submitted rdkit source directory shadowed the installed rdkit distribution and could not import rdBase.",
+        "imageSizeMiB": 609.43,
+        "toolCount": 1
+      },
+      "repaired": {
+        "artifactReady": true,
+        "runtimeVerified": true,
+        "functionalVerified": true,
+        "readinessLevel": "functional",
+        "registeredTools": [
+          "calculate_properties",
+          "calculate_similarity",
+          "generate_fingerprint",
+          "parse_molecule",
+          "search_substructure"
+        ],
+        "smokeTestCount": 5,
+        "smokeCoverage": 1.0,
+        "staticRepairAttempts": 1,
+        "runtimeRepairAttempts": 4,
+        "buildSeconds": 65.521,
+        "runtimeSeconds": 3.509,
+        "packagingSeconds": 485.85,
+        "imageSizeMiB": 594.4106,
+        "imageReductionPercent": 2.4645
+      },
+      "extendedBranchChecks": {
+        "invalidSmilesRaises": true,
+        "rdkitFingerprintBranch": {
+          "passed": true,
+          "fingerprintLength": 128,
+          "setBitCount": 6
+        },
+        "allDeclaredProperties": {
+          "passedWithoutException": true,
+          "requestedPropertyCount": 14,
+          "nonNullPropertyCount": 13,
+          "failure": "formal_charge returned null because the generated compatibility shim called a non-existent molecule method and the submitted algorithm converted that exception to None."
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "baselineHealthy": 0,
+    "runtimeVerified": 3,
+    "functionalVerified": 1,
+    "fullyCoveredToolSmokePassed": 5,
+    "fullyCoveredToolSmokeTotal": 5,
+    "extendedParameterBranchDefects": 1
+  },
+  "implementedGates": [
+    "Separate static and runtime repair budgets with audited attempt counters.",
+    "Transitive import dependency preflight across reachable local modules.",
+    "Low-priority algorithm import paths to prevent submitted source directories from shadowing installed distributions.",
+    "Isolated Docker build, MCP registry discovery, per-tool smoke execution, output-schema validation, and partial smoke result preservation.",
+    "Runtime dependency API capability preflight that reports all missing imported attributes in one repair round.",
+    "Structured success=false failure-contract detection requiring adapters to raise MCP errors.",
+    "CPU-only dependency split, non-root runtime, no-network probe, read-only filesystem, capability drop, and resource limits."
+  ],
+  "conclusion": {
+    "engineeringRecovery": "The targeted runtime gate converted all three selected baseline health failures into container-startable MCP artifacts.",
+    "functionalEvidence": "RDKit moved from one mechanically exposed tool and failed startup to five registered tools with five successful primary-path smoke tests.",
+    "remainingLimitation": "Per-tool smoke coverage is not parameter-branch coverage. The extended RDKit check found one silent null result, so this targeted result must not be presented as proof that arbitrary template-compliant repositories are fully production-ready.",
+    "nextGate": "Support multiple evidence-backed smoke cases and semantic assertions per tool, then rerun the full mini30 set before claiming production readiness."
+  },
+  "relatedD3Result": "benchmarks/amq_mini30_qwen37max_d3_20260717.json"
+}
