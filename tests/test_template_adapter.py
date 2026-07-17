@@ -10,6 +10,7 @@ from scripts.prepare_amq_template_subset import (
     _is_l0,
     ensure_output_outside_source_repo,
     load_mini30,
+    recover_last_template_writes,
 )
 
 
@@ -284,3 +285,28 @@ def test_output_guard_refuses_writing_inside_source_git_repository(tmp_path: Pat
 
     with pytest.raises(ValueError, match="outside"):
         ensure_output_outside_source_repo(benchmark, source / "derived")
+
+
+def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) -> None:
+    events = [
+        {
+            "type": "tool_call",
+            "data": {
+                "tool": "write_template_file",
+                "arguments": {"path": "main.py", "content": "first"},
+            },
+        },
+        {"type": "think", "data": {"thought": "ignore"}},
+        {
+            "type": "tool_call",
+            "data": {
+                "tool": "write_template_file",
+                "arguments": {"path": "main.py", "content": "second"},
+            },
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
+    )
+
+    assert recover_last_template_writes(tmp_path) == {"main.py": "second\n"}

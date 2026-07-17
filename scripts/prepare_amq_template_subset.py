@@ -220,6 +220,26 @@ def _protected_digest(sample: dict[str, Any]) -> str:
     )
 
 
+def recover_last_template_writes(run_dir: Path) -> dict[str, str]:
+    event_path = run_dir / "events.jsonl"
+    recovered: dict[str, str] = {}
+    if not event_path.is_file():
+        return recovered
+    for line in event_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "tool_call" or event.get("data", {}).get("tool") != "write_template_file":
+            continue
+        arguments = event.get("data", {}).get("arguments", {})
+        path = arguments.get("path")
+        content = arguments.get("content")
+        if path in {"main.py", "requirements.txt"} and isinstance(content, str) and content.strip():
+            recovered[path] = content.rstrip() + "\n"
+    return recovered
+
+
 async def adapt_one(
     sample: dict[str, Any],
     *,
@@ -239,6 +259,7 @@ async def adapt_one(
             print(f"[{sample_id}] resume: ready", flush=True)
             return json.loads(derived_path.read_text(encoding="utf-8"))
 
+    recovered_writes = recover_last_template_writes(run_dir) if resume else {}
     shutil.rmtree(run_dir, ignore_errors=True)
     shutil.rmtree(repo_dir, ignore_errors=True)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -282,8 +303,18 @@ async def adapt_one(
             if is_l0:
                 _write_l0_entrypoint(staged, sample["wrap_intent"])
             else:
+                for relative, content in recovered_writes.items():
+                    (staged / relative).write_text(content, encoding="utf-8")
+                recovered_report = validate_algorithm_template(staged)
+                if recovered_writes:
+                    _write_json_atomic(run_dir / "validation_recovered.json", recovered_report.to_dict())
+                    summary["recoveredFromPriorRun"] = True
+                if recovered_report.passed:
+                    summary["adaptationAttempts"] = 0
+                else:
+                    errors = recovered_report.errors
                 event_path = run_dir / "events.jsonl"
-                for attempt in range(1, max_attempts + 1):
+                for attempt in range(1, max_attempts + 1) if errors else ():
                     ir = await asyncio.to_thread(RepositoryAnalyzer().analyze, staged)
                     agent = build_template_adapter_agent(staged, ir)
                     prompt = template_adapter_prompt(ir, sample["wrap_intent"], original_main)
