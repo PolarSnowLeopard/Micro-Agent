@@ -1,0 +1,227 @@
+{
+  "schemaVersion": "ioeb.amq-mini30-evaluation/v1",
+  "evaluatedAt": "2026-07-17T17:11:23.200063+08:00",
+  "status": "validated",
+  "baselineId": "ioeb-agentic-qwen36-flash-mini30-template-20260717",
+  "corpus": {
+    "name": "AMQ-Bench mini30 template-adapted subset",
+    "sampleCount": 30,
+    "officialMini30Sha256": "2ca6d23cba9239ae05c9a832d119a987b804ad6f069d9737cc8bb56c6d8be588",
+    "adaptedBenchmarkSha256": "0bed7e623e2234333fff9a3e62e1ad3a219f9d2a4ea97ae505b555d390eb9776",
+    "adaptationPolicy": "The 30 source samples were copied to a separate derived file and only template-adaptation metadata was added; the official AMQ-Bench samples were not overwritten."
+  },
+  "protocol": {
+    "schemaVersion": "amq-bench-paper-metrics-solver-substitution/v1",
+    "releasedHarnessSha256": "93d2b86cb47a7e5264f192924e6aaedd6b4f5d79d1d6f9e67dbea6eb25d16998",
+    "paperSolverModel": "openai/gpt-5.4",
+    "solverModel": "qwen/qwen3.7-max",
+    "solverConformance": "solver_substitution",
+    "solverSubstitutionReason": "OpenRouter blocks GPT-5.4 with a provider Terms of Service 403 response.",
+    "solverReasoning": "disabled",
+    "solverTemperature": 0.0,
+    "solverSeed": 42,
+    "maxUtilityTurns": 8,
+    "utilityOracle": "deterministic_verify_script_only",
+    "goVToolProbeCap": 5,
+    "aqsFormula": "D1 * (0.4 * D2 + 0.6 * D3)",
+    "aqsDenominator": 30,
+    "d3BackfillSourceSha256": "646355ed9057b19be411ec8ca44470b949ee44b07100eeb1e243d4a9b46772bc",
+    "d3CandidateCount": 16,
+    "preservedD1D2": true
+  },
+  "generation": {
+    "submitted": 30,
+    "ready": 29,
+    "rejected": 1,
+    "services": 31,
+    "tools": 41,
+    "staticVerificationPassed": 29
+  },
+  "metrics": {
+    "build": {
+      "count": 27,
+      "rate": 0.9
+    },
+    "serviceHealth": {
+      "count": 16,
+      "rate": 0.5333333333333333
+    },
+    "goeHealthyMean": 0.37245,
+    "govHealthyMean": 0.63,
+    "usabilityHealthyMean": 0.5012375,
+    "utility": {
+      "count": 5,
+      "allSampleRate": 0.16666666666666666,
+      "healthySampleRate": 0.3125
+    },
+    "aqs": 0.20694,
+    "tcsrPaperMacro": 0.23809285714285713,
+    "tcsrMicro": 0.15217391304347827,
+    "activeCallSamples": 14,
+    "successfulToolCalls": 7,
+    "totalToolCalls": 46,
+    "driverStatusCounts": {
+      "completed": 13,
+      "max_turns": 3,
+      "not_run": 14
+    },
+    "engineeringFailureCounts": {
+      "dependency_error": 2,
+      "healthy": 16,
+      "import_error": 11,
+      "missing_submission": 1
+    }
+  },
+  "comparisonToBlockedPaperSolverRun": {
+    "originalUtility": 0,
+    "originalAqs": 0.10694,
+    "aqsAbsoluteChange": 0.1,
+    "note": "The original D3 requests were blocked by the GPT-5.4 provider before any tool call. The comparison isolates recovered D3 evidence; it is not a same-solver quality comparison."
+  },
+  "d3Results": [
+    {
+      "sampleId": "meb_abrsp_vote_predictor_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 0,
+      "driverStatus": "completed",
+      "attempts": 2
+    },
+    {
+      "sampleId": "meb_astropy_001",
+      "pass": true,
+      "successfulCalls": 1,
+      "totalCalls": 2,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_biopsykit_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 8,
+      "driverStatus": "max_turns",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_cogsci_jnmf_001",
+      "pass": true,
+      "successfulCalls": 2,
+      "totalCalls": 6,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_eeg2eeg_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 0,
+      "driverStatus": "completed",
+      "attempts": 2
+    },
+    {
+      "sampleId": "meb_esm_001",
+      "pass": true,
+      "successfulCalls": 1,
+      "totalCalls": 2,
+      "driverStatus": "completed",
+      "attempts": 2
+    },
+    {
+      "sampleId": "meb_hyla_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 1,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_linezolid_repo_001",
+      "pass": true,
+      "successfulCalls": 1,
+      "totalCalls": 1,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_mne_python_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 8,
+      "driverStatus": "max_turns",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_modernbert_predict_masked_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 3,
+      "driverStatus": "completed",
+      "attempts": 2
+    },
+    {
+      "sampleId": "meb_mpmath_001",
+      "pass": true,
+      "successfulCalls": 2,
+      "totalCalls": 2,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_neurokit_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 8,
+      "driverStatus": "max_turns",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_oggm_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 1,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_prophet_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 1,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_rasterio_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 1,
+      "driverStatus": "completed",
+      "attempts": 1
+    },
+    {
+      "sampleId": "meb_scanpy_tutorials_001",
+      "pass": false,
+      "successfulCalls": 0,
+      "totalCalls": 2,
+      "driverStatus": "completed",
+      "attempts": 1
+    }
+  ],
+  "validation": {
+    "uniqueSampleIds": true,
+    "completeThirtySampleDenominator": true,
+    "d1D2FieldsUnchangedFromSource": true,
+    "aqsRecomputedExactly": true,
+    "tcsrMacroRecomputedExactly": true,
+    "tcsrMicroRecomputedExactly": true,
+    "remainingProviderErrors": 0,
+    "runtimeRetrySampleCount": 4,
+    "resultSha256": "2c40ffbc7268fb4eba4a3c8e5b129dbadafa9611946214b1f0ff74f06b43df93"
+  },
+  "caveats": [
+    "This is the paper metric formula on the template-adapted mini30 subset, not the full 269-sample corpus.",
+    "D3 uses Qwen3.7 Max with reasoning disabled because OpenRouter blocked the paper solver. Therefore this result is a solver-substitution variant, not a strict fixed-solver reproduction.",
+    "Four cold builds exceeded the harness 600-second limit because generic PyPI resolution installed multi-gigabyte CUDA dependencies. Their unchanged images were prebuilt and then rerun through the original 600-second harness gate; both attempts are recorded."
+  ]
+}
