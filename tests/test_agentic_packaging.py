@@ -654,11 +654,32 @@ def test_scaffold_and_verifier_accept_exact_multi_tool_contract(tmp_path):
     assert "PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu" in dockerfile
     assert "requirements-cpu.txt" in dockerfile
     assert "system-packages.txt" in dockerfile
+    assert "sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d'" in dockerfile
     assert "USER 10001:10001" in dockerfile
     loader = (artifact / "algorithm_loader.py").read_text(encoding="utf-8")
     assert 'ALGORITHM_DIR / "src"' in loader
     assert "sys.path.append" in loader
     assert "sys.path.insert" not in loader
+
+
+def test_verifier_rejects_adapter_sys_path_mutation(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    (artifact / "adapters.py").write_text(
+        "import sys\n"
+        "from algorithm_loader import ALGORITHM_DIR\n"
+        "sys.path.insert(0, str(ALGORITHM_DIR))\n"
+        + _valid_adapters(),
+        encoding="utf-8",
+    )
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert any("不允许修改 sys.path" in error for error in report.errors)
 
 
 def test_scaffold_splits_cpu_wheels_and_drops_unsafe_source_requirements(tmp_path):

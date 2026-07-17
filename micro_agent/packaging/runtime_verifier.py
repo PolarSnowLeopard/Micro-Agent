@@ -278,19 +278,28 @@ async def verify():
             + json.dumps({{"expected": expected, "actual": registered}})
         )
     smoke = []
+    smoke_failures = {{}}
     for tool in planned:
         case = tool.get("smokeTest", {{}})
         if not case.get("enabled"):
             continue
-        result = await asyncio.wait_for(
-            server.mcp.call_tool(tool["name"], case.get("input", {{}})),
-            timeout={int(smoke_timeout_seconds)},
+        try:
+            result = await asyncio.wait_for(
+                server.mcp.call_tool(tool["name"], case.get("input", {{}})),
+                timeout={int(smoke_timeout_seconds)},
+            )
+            assert_schema(
+                structured_value(result, tool.get("outputSchema", {{}})),
+                tool.get("outputSchema", {{}}),
+            )
+            smoke.append(tool["name"])
+        except Exception as exc:
+            smoke_failures[tool["name"]] = f"{{type(exc).__name__}}: {{exc}}"
+    if smoke_failures:
+        raise RuntimeError(
+            "smoke test failures: "
+            + json.dumps(smoke_failures, sort_keys=True)
         )
-        assert_schema(
-            structured_value(result, tool.get("outputSchema", {{}})),
-            tool.get("outputSchema", {{}}),
-        )
-        smoke.append(tool["name"])
     print(
         {PROBE_MARKER!r}
         + json.dumps(

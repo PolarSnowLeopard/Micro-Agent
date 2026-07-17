@@ -323,6 +323,13 @@ class ArtifactVerifier:
             report.errors.append(
                 "runtime_guardrails 是只读必备模块，不允许捕获 ImportError 后提供占位/降级实现"
             )
+        sys_path_lines = _sys_path_mutation_lines(tree)
+        if sys_path_lines:
+            report.errors.append(
+                "adapters.py 不允许修改 sys.path；algorithm_loader 已按低优先级接入算法目录，"
+                "自行插入会让提交仓库中的同名目录遮蔽已安装依赖。违规行: "
+                + ", ".join(str(line) for line in sys_path_lines)
+            )
         zip_inputs = _zip_input_names(self.expected_plan)
         for tool_name, input_names in zip_inputs.items():
             function = _top_level_functions(tree).get(tool_name)
@@ -430,6 +437,32 @@ def _mcp_tool_functions(tree: ast.Module) -> dict[str, ast.FunctionDef | ast.Asy
         if any(_is_mcp_tool_decorator(decorator) for decorator in node.decorator_list):
             result[node.name] = node
     return result
+
+
+def _sys_path_mutation_lines(tree: ast.Module) -> list[int]:
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            target = node.func.value
+            if (
+                node.func.attr in {"append", "extend", "insert", "remove", "pop", "clear"}
+                and isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "sys"
+                and target.attr == "path"
+            ):
+                lines.add(node.lineno)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "sys"
+                and target.attr == "path"
+                for target in targets
+            ):
+                lines.add(node.lineno)
+    return sorted(lines)
 
 
 def _top_level_functions(

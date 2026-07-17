@@ -74,10 +74,13 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
 5. 只能用 write_artifact_file 写 adapters.py、requirements.txt、requirements-cpu.txt、system-packages.txt 和可选测试。
    requirements.txt 与 requirements-cpu.txt 只允许合法 PEP 508 包依赖，禁止 URL、VCS、本地路径和 pip 参数；
    torch/torchvision/torchaudio 必须写入 requirements-cpu.txt，以固定 CPU wheel 源安装；system-packages.txt 每行只能是一个 Debian 包名。
+   不需要某类依赖时必须将对应清单写成真正的空文件，不能写解释性注释。
    根据源码导入和验收日志补齐最小运行依赖，不得盲目复制开发/文档依赖，不得把 CPU 服务解析成不必要的 CUDA 工具链。
    首轮静态验收会沿 sourceSymbols 和 adapters 的本地 import 链一次性列出未声明第三方模块；
    必须逐项核对并补齐，避免每次容器构建只修一个缺包。
    不得使用 Bash、直接安装依赖、启动服务、覆盖 server.py、Dockerfile、runtime_guardrails.py 或容器基线。
+   不得在 adapters.py 中插入、追加或覆盖 sys.path；algorithm_loader 已以低优先级接入 algorithm/ 与 algorithm/src，
+   自行修改搜索路径会使提交源码中的同名目录遮蔽已安装依赖。需要隔离加载单文件时使用 importlib 的显式文件 spec。
 6. 写完后必须调用 verify_artifact。外层还会执行隔离容器构建、运行时工具发现和有证据的 smoke test；
    若运行验收失败，完整日志会在下一轮退回，请修复 adapters.py、requirements.txt、requirements-cpu.txt 或 system-packages.txt 后重新验收。
 """
@@ -201,7 +204,7 @@ class AgenticPackagingWorkflow:
         artifact_dir: str | Path,
         plan: PackagingPlan | None = None,
         max_repairs: int = 2,
-        max_runtime_repairs: int = 2,
+        max_runtime_repairs: int = 3,
         runtime_verifier_factory: RuntimeVerifierFactory | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
