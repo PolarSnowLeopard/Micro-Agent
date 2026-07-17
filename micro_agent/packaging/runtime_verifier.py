@@ -57,7 +57,7 @@ class ContainerRuntimeVerifier:
         build_started = time.perf_counter()
         try:
             build = self._run(
-                ["docker", "build", "--progress=plain", "-t", image_tag, "."],
+                ["docker", "build", "-t", image_tag, "."],
                 cwd=self.root,
                 timeout=self.build_timeout_seconds,
             )

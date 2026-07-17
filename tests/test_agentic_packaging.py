@@ -993,6 +993,8 @@ async def test_container_runtime_verifier_builds_and_discovers_tools(tmp_path):
     assert report.passed, report.to_json()
     assert report.checks["runtimeBackend"] == "docker"
     assert report.checks["smokeTestCount"] == 2
+    build_command = next(command for command, _ in commands if command[:2] == ["docker", "build"])
+    assert not any(part.startswith("--progress") for part in build_command)
     run_command = next(command for command, _ in commands if command[:2] == ["docker", "run"])
     assert "--network" in run_command
     assert "none" in run_command
