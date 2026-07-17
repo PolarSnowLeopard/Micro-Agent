@@ -124,13 +124,22 @@ async def service_packaging(
             status_code=500,
             detail="IOEB_PACKAGING_RUNTIME_VERIFY 必须是 static 或 docker",
         )
+    require_functional = (
+        os.getenv("IOEB_PACKAGING_REQUIRE_FUNCTIONAL_VERIFY", "true").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     workflow = AgenticPackagingWorkflow(
         project_dir=project_dir,
         ir=ir,
         artifact_dir=output_dir,
         plan=cached_plan,
         runtime_verifier_factory=(
-            ContainerRuntimeVerifier if runtime_mode == "docker" else None
+            partial(
+                ContainerRuntimeVerifier,
+                require_full_smoke_coverage=require_functional,
+            )
+            if runtime_mode == "docker"
+            else None
         ),
     )
     ctx = await task_manager.submit(workflow, file.filename or "uploaded repository")
@@ -152,6 +161,7 @@ async def service_packaging(
             "max_repair_attempts": workflow.max_repairs,
             "host_bash_enabled": False,
             "runtime_verification": runtime_mode,
+            "functional_verification_required": require_functional,
         },
     )
 

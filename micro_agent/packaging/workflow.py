@@ -50,6 +50,8 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 6. 如果仓库没有可调用算法、源码无法解析、关键实现/依赖/模型资产缺失，decision=reject 并给出可操作原因。
 7. schemaVersion 必须逐字填写 ioeb.agentic-mcp-plan/v1。dependsOn 只能填写本规划中其他 Tool 的 name；不要填写服务 id、源码模块、模型或文件名，无依赖时填 []。
 8. smokeTest 只能使用仓库中真实存在、可执行的 fixture，或从源码中明确的字段约束机械选择输入；enabled=true 时 evidence 必须引用对应仓库文件/行号。没有可追溯输入时必须 enabled=false 并写 rationale，绝不能编造 Base64、文件路径或预期输出。
+   每个工具都必须显式提供 smokeTest，不能省略后让系统默认跳过。纯 JSON/标量输入且仓库已有示例时必须 enabled=true；
+   只有确实缺少可执行 fixture 的复杂文件/模型输入才允许 enabled=false。
 9. 普通仓库中每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
    独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
    excludedSymbols 必须位于规划 JSON 根节点，和 services 同级；绝不能写入 services[i] 内。
@@ -319,10 +321,24 @@ class AgenticPackagingWorkflow:
                         else "static_only"
                     ),
                     "runtimeVerified": bool(runtime_report and runtime_report.passed),
+                    "functionalVerified": bool(
+                        runtime_report
+                        and runtime_report.checks.get("functionalVerified")
+                    ),
                 }
                 if runtime_report is not None:
                     marker["runtimeBackend"] = runtime_report.checks.get("runtimeBackend")
                     marker["smokeTestCount"] = runtime_report.checks.get("smokeTestCount", 0)
+                    marker["smokeCoverage"] = runtime_report.checks.get("smokeCoverage", 0.0)
+                marker["readinessLevel"] = (
+                    "functional"
+                    if marker["functionalVerified"]
+                    else (
+                        "structural_runtime"
+                        if marker["runtimeVerified"]
+                        else "static_contract"
+                    )
+                )
                 (self.artifact_dir / ".ioeb-ready").write_text(
                     json.dumps(marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
                 )
@@ -382,6 +398,7 @@ async def _run_planner(
             "你尚未提交一个有效规划。必须使用 save_packaging_plan_json 重新发送完整严格 JSON；"
             "这不是 PATCH，decision=package 时 services 绝对不能省略或为空。"
             "excludedSymbols 必须位于 JSON 根节点并与 services 同级，不能放进任一 service。"
+            "每个工具都必须显式提交 smokeTest；仓库已有可追溯示例时不能省略或关闭。"
             + ("\n上次校验错误：\n- " + "\n- ".join(store.last_errors) if store.last_errors else "")
         )
         async for event in agent.run(prompt):
@@ -635,6 +652,7 @@ def _is_repairable_report(report: VerificationReport) -> bool:
     non_repairable = (
         "[runtime_backend_unavailable]",
         "[runtime_backend_error]",
+        "[smoke_coverage]",
     )
     return not any(
         error.startswith(non_repairable)

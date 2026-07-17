@@ -515,7 +515,7 @@ async def test_save_plan_json_canonicalizes_only_nonsemantic_fields(tmp_path):
     assert isinstance(store.plan.tools[0]["smokeTest"]["evidence"], list)
 
 
-async def test_save_plan_json_fills_conservative_nonsemantic_defaults(tmp_path):
+async def test_save_plan_json_does_not_hide_missing_smoke_contract(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     store = PlanStore(tmp_path / "plan.json", ir.known_symbols)
     tool = SavePackagingPlanJson(store)
@@ -531,11 +531,9 @@ async def test_save_plan_json_fills_conservative_nonsemantic_defaults(tmp_path):
 
     result = await tool.execute(content=json.dumps(raw, ensure_ascii=False))
 
-    assert not result.error
-    assert store.plan is not None
-    assert store.plan.decision == "package"
-    assert store.plan.data["schemaVersion"] == "ioeb.agentic-mcp-plan/v1"
-    assert all(not item["smokeTest"]["enabled"] for item in store.plan.tools)
+    assert result.error
+    assert "smokeTest" in result.error
+    assert store.plan is None
 
 
 async def test_save_plan_json_recovers_service_scoped_source_symbols(tmp_path):
@@ -1015,6 +1013,8 @@ async def test_packaging_workflow_repairs_then_marks_artifact_ready(tmp_path, mo
     assert marker["repairAttempts"] == 1
     assert marker["validationMode"] == "static_only"
     assert marker["runtimeVerified"] is False
+    assert marker["functionalVerified"] is False
+    assert marker["readinessLevel"] == "static_contract"
 
 
 async def test_dependency_writer_allows_only_safe_package_manifests(tmp_path):
@@ -1144,6 +1144,35 @@ async def test_container_runtime_verifier_classifies_dependency_failure(tmp_path
     assert any("[dependency_resolution]" in error for error in report.errors)
 
 
+async def test_container_runtime_verifier_can_require_full_smoke_coverage(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"][1]["smokeTest"] = {
+        "enabled": False,
+        "rationale": "No fixture available.",
+    }
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    commands = []
+
+    def runner(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    report = await ContainerRuntimeVerifier(
+        artifact,
+        plan,
+        require_full_smoke_coverage=True,
+        command_runner=runner,
+    ).verify()
+
+    assert not report.passed
+    assert any("[smoke_coverage]" in error for error in report.errors)
+    assert report.checks["smokeCoverage"] == 0.5
+    assert commands == []
+
+
 async def test_packaging_workflow_repairs_runtime_failure_before_ready(tmp_path, monkeypatch):
     project = _sample_project(tmp_path)
     ir = RepositoryAnalyzer().analyze(project)
@@ -1211,3 +1240,5 @@ async def test_packaging_workflow_repairs_runtime_failure_before_ready(tmp_path,
     assert marker["validationMode"] == "static_and_container_runtime"
     assert marker["runtimeVerified"] is True
     assert marker["runtimeBackend"] == "fake"
+    assert marker["functionalVerified"] is False
+    assert marker["readinessLevel"] == "structural_runtime"

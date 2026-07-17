@@ -36,6 +36,7 @@ class ContainerRuntimeVerifier:
         build_timeout_seconds: int = 1200,
         runtime_timeout_seconds: int = 180,
         smoke_timeout_seconds: int = 60,
+        require_full_smoke_coverage: bool = False,
         command_runner: CommandRunner = subprocess.run,
     ) -> None:
         self.root = Path(artifact_dir).resolve()
@@ -43,6 +44,7 @@ class ContainerRuntimeVerifier:
         self.build_timeout_seconds = build_timeout_seconds
         self.runtime_timeout_seconds = runtime_timeout_seconds
         self.smoke_timeout_seconds = smoke_timeout_seconds
+        self.require_full_smoke_coverage = require_full_smoke_coverage
         self.command_runner = command_runner
 
     async def verify(self) -> VerificationReport:
@@ -52,6 +54,24 @@ class ContainerRuntimeVerifier:
         report = VerificationReport(passed=False)
         report.checks["runtimeBackend"] = self.backend
         report.checks["networkDuringProbe"] = False
+        smoke_planned = [
+            tool["name"]
+            for tool in self.plan.tools
+            if tool.get("smokeTest", {}).get("enabled")
+        ]
+        report.checks["plannedToolCount"] = len(self.plan.tools)
+        report.checks["smokeTestsPlanned"] = smoke_planned
+        report.checks["smokeCoverage"] = round(
+            len(smoke_planned) / len(self.plan.tools),
+            4,
+        ) if self.plan.tools else 0.0
+        if self.require_full_smoke_coverage and len(smoke_planned) != len(self.plan.tools):
+            missing = sorted(set(self.plan.tool_names) - set(smoke_planned))
+            report.errors.append(
+                "[smoke_coverage] 生产发布要求每个 MCP 工具都有仓库证据支持的"
+                "可执行 smokeTest，缺少: " + ", ".join(missing)
+            )
+            return report
         image_tag = f"ioeb-runtime-verify:{uuid.uuid4().hex[:12]}"
         built = False
         build_started = time.perf_counter()
@@ -122,6 +142,9 @@ class ContainerRuntimeVerifier:
                 )
                 return report
             report.checks.update(payload)
+            report.checks["functionalVerified"] = (
+                payload.get("smokeTestCount") == len(self.plan.tools)
+            )
             expected = sorted(self.plan.tool_names)
             actual = sorted(payload.get("registeredTools", []))
             if actual != expected:

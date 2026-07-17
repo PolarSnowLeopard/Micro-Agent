@@ -293,12 +293,6 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
                     f"Validate the public JSON inputs, call {symbols}, and serialize its result."
                 )
             smoke = tool.get("smokeTest")
-            if not isinstance(smoke, dict):
-                smoke = {
-                    "enabled": False,
-                    "rationale": "The planner did not identify a repository-backed executable fixture.",
-                }
-                tool["smokeTest"] = smoke
             if isinstance(smoke, dict) and isinstance(smoke.get("evidence"), str):
                 smoke["evidence"] = [smoke["evidence"]]
 
