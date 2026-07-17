@@ -27,6 +27,7 @@ PAPER_CORPUS_SIZE = 269
 PAPER_TOOL_PROBE_CAP = 5
 PAPER_MAX_UTILITY_TURNS = 8
 PAPER_SOLVER_MODEL = "openai/gpt-5.4"
+BACKFILL_RETRY_STATUS = "provider_error"
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +43,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample", action="append", default=[])
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--skip-d3", action="store_true")
+    parser.add_argument(
+        "--backfill-d3-from",
+        type=Path,
+        help=(
+            "Preserve D1/D2 from a complete prior result and rerun only healthy "
+            "samples whose D3 driver status is provider_error."
+        ),
+    )
+    parser.add_argument(
+        "--solver-substitution-reason",
+        help="Required audit reason when D3 backfill uses a solver other than the paper solver.",
+    )
     return parser.parse_args()
 
 
@@ -282,9 +295,62 @@ def driver_diagnostic(agent_result: dict[str, Any] | None) -> tuple[str, str]:
     return "completed", ""
 
 
+def merge_d3_backfill_result(
+    original: dict[str, Any],
+    rerun: dict[str, Any],
+    *,
+    solver_model: str,
+    source_solver_model: str,
+    driver_status: str,
+    driver_error: str,
+    attempted_at: str,
+) -> dict[str, Any]:
+    """Replace only D3 fields while preserving the original D1/D2 evidence."""
+    merged = dict(original)
+    for key in list(merged):
+        if key.startswith("d3_") and key != "d3_backfill":
+            merged.pop(key)
+    for key, value in rerun.items():
+        if key.startswith("d3_"):
+            merged[key] = value
+    merged["d3_driver_status"] = driver_status
+    if driver_error:
+        merged["d3_driver_error"] = driver_error
+    else:
+        merged.pop("d3_driver_error", None)
+    merged["d3_solver_model"] = solver_model
+    merged["d3_backfill"] = {
+        "attempted": True,
+        "attemptedAt": attempted_at,
+        "sourceSolverModel": source_solver_model,
+        "solverModel": solver_model,
+        "sourceDriverStatus": original.get("d3_driver_status", "not_run"),
+        "rerunBuildSuccess": bool(rerun.get("d1_build_success")),
+        "rerunServiceHealth": rerun.get("d1_service_health"),
+        "outcome": driver_status,
+        "preservedD1D2": True,
+    }
+    d1 = 1.0 if merged.get("d1_service_health") else 0.0
+    d2 = float(merged.get("d2_score", 0.0))
+    d3 = 1.0 if merged.get("d3_pass") else 0.0
+    merged["aqs_score"] = round(d1 * (0.4 * d2 + 0.6 * d3), 4)
+    merged["meb_score"] = merged["aqs_score"]
+    return merged
+
+
 async def main() -> int:
     args = parse_args()
-    if args.solver_model != PAPER_SOLVER_MODEL and not args.skip_d3:
+    if args.backfill_d3_from:
+        if args.skip_d3:
+            raise SystemExit("--backfill-d3-from cannot be combined with --skip-d3")
+        if (
+            args.solver_model != PAPER_SOLVER_MODEL
+            and not args.solver_substitution_reason
+        ):
+            raise SystemExit(
+                "non-paper D3 backfill requires --solver-substitution-reason"
+            )
+    elif args.solver_model != PAPER_SOLVER_MODEL and not args.skip_d3:
         raise SystemExit(f"paper protocol requires --solver-model {PAPER_SOLVER_MODEL}")
 
     harness, source_sha256 = load_strict_harness(args.harness.resolve())
@@ -302,10 +368,11 @@ async def main() -> int:
     if len(set(all_ids)) != len(all_ids):
         raise SystemExit("benchmark contains duplicate sample_id values")
     selected = set(args.sample)
+    unknown_selected = selected - set(all_ids)
+    if unknown_selected:
+        raise SystemExit(f"unknown sample ids: {sorted(unknown_selected)}")
     tasks = [sample for sample in samples if not selected or sample["sample_id"] in selected]
     expected_ids = [sample["sample_id"] for sample in tasks]
-    if selected and len(tasks) != len(selected):
-        raise SystemExit(f"unknown sample ids: {sorted(selected - set(expected_ids))}")
     if any(not sample.get("evaluation_criteria", {}).get("verify_script") for sample in tasks):
         raise SystemExit("every evaluated sample must provide a deterministic verify_script")
 
@@ -316,7 +383,7 @@ async def main() -> int:
     harness.LOGS_DIR = str(args.results_file.resolve().parent / "logs")
     os.makedirs(harness.LOGS_DIR, exist_ok=True)
 
-    protocol = {
+    protocol: dict[str, Any] = {
         "schemaVersion": "amq-bench-paper-protocol/v1",
         "asOf": datetime.now().astimezone().isoformat(),
         "baselineId": args.baseline_id,
@@ -339,7 +406,85 @@ async def main() -> int:
 
     results_file = args.results_file.resolve()
     completed: dict[str, dict[str, Any]] = {}
-    if args.resume and results_file.is_file():
+    backfill_mode = args.backfill_d3_from is not None
+    source_solver_model = PAPER_SOLVER_MODEL
+    backfill_source_sha256 = ""
+    if backfill_mode:
+        backfill_source = args.backfill_d3_from.resolve()
+        if backfill_source == results_file:
+            raise SystemExit("D3 backfill must write to a new results file")
+        if not backfill_source.is_file():
+            raise SystemExit(f"D3 backfill source does not exist: {backfill_source}")
+        backfill_source_sha256 = hashlib.sha256(backfill_source.read_bytes()).hexdigest()
+        prior = json.loads(backfill_source.read_text(encoding="utf-8"))
+        prior_protocol = prior.get("protocol", {})
+        if prior_protocol.get("benchmarkSha256") != protocol["benchmarkSha256"]:
+            raise SystemExit("D3 backfill source benchmark hash does not match")
+        if prior_protocol.get("baselineId") != args.baseline_id:
+            raise SystemExit("D3 backfill source baseline does not match")
+        prior_results = prior.get("results", [])
+        prior_by_id = {result["sample_id"]: result for result in prior_results}
+        if (
+            len(prior_results) != len(all_ids)
+            or len(prior_by_id) != len(all_ids)
+            or set(prior_by_id) != set(all_ids)
+        ):
+            raise SystemExit("D3 backfill source must contain exactly the complete benchmark")
+        source_solver_model = prior_protocol.get("solverModel", PAPER_SOLVER_MODEL)
+        candidate_ids = {
+            sample_id
+            for sample_id, result in prior_by_id.items()
+            if result.get("d1_service_health") is True
+            and result.get("d3_driver_status") == BACKFILL_RETRY_STATUS
+        }
+        if selected:
+            invalid_candidates = selected - candidate_ids
+            if invalid_candidates:
+                raise SystemExit(
+                    "selected samples are not healthy provider_error candidates: "
+                    f"{sorted(invalid_candidates)}"
+                )
+            candidate_ids &= selected
+        tasks = [sample for sample in samples if sample["sample_id"] in candidate_ids]
+        expected_ids = all_ids
+        completed = prior_by_id
+        protocol.update(
+            {
+                "schemaVersion": "amq-bench-paper-metrics-solver-substitution/v1",
+                "sampleCount": len(samples),
+                "methodAqsDenominator": len(all_ids),
+                "paperSolverModel": PAPER_SOLVER_MODEL,
+                "solverModel": args.solver_model,
+                "solverConformance": (
+                    "paper"
+                    if args.solver_model == PAPER_SOLVER_MODEL
+                    else "solver_substitution"
+                ),
+                "solverSubstitutionReason": args.solver_substitution_reason or "",
+                "d3Backfill": {
+                    "sourceResultsFile": str(backfill_source),
+                    "sourceResultsSha256": backfill_source_sha256,
+                    "sourceSolverModel": source_solver_model,
+                    "retryDriverStatus": BACKFILL_RETRY_STATUS,
+                    "candidateSampleCount": len(tasks),
+                    "preservedD1D2": True,
+                },
+            }
+        )
+        if args.resume and results_file.is_file():
+            resumed = json.loads(results_file.read_text(encoding="utf-8"))
+            resumed_protocol = resumed.get("protocol", {})
+            resumed_backfill = resumed_protocol.get("d3Backfill", {})
+            if (
+                resumed_protocol.get("benchmarkSha256") != protocol["benchmarkSha256"]
+                or resumed_protocol.get("solverModel") != args.solver_model
+                or resumed_backfill.get("sourceResultsSha256") != backfill_source_sha256
+            ):
+                raise SystemExit("existing D3 backfill result is incompatible with this run")
+            completed = {
+                result["sample_id"]: result for result in resumed.get("results", [])
+            }
+    elif args.resume and results_file.is_file():
         prior = json.loads(results_file.read_text(encoding="utf-8"))
         completed = {result["sample_id"]: result for result in prior.get("results", [])}
 
@@ -362,21 +507,60 @@ async def main() -> int:
     try:
         for index, task in enumerate(tasks, start=1):
             sample_id = task["sample_id"]
-            if sample_id in completed:
+            existing = completed.get(sample_id)
+            already_backfilled = bool(
+                backfill_mode
+                and existing
+                and existing.get("d3_backfill", {}).get("attempted")
+                and existing.get("d3_backfill", {}).get("solverModel") == args.solver_model
+            )
+            if (not backfill_mode and sample_id in completed) or already_backfilled:
                 harness.logger.info("[%d/%d] resume skip %s", index, len(tasks), sample_id)
                 continue
-            harness.logger.info("[%d/%d] strict paper evaluation", index, len(tasks))
+            if backfill_mode:
+                harness.logger.info("[%d/%d] D3 solver-substitution backfill", index, len(tasks))
+            else:
+                harness.logger.info("[%d/%d] strict paper evaluation", index, len(tasks))
             runner._paper_last_agent_result = None
             result = await runner.run_task(task)
             driver_status, driver_error = driver_diagnostic(runner._paper_last_agent_result)
             result["d3_driver_status"] = driver_status
             if driver_error:
                 result["d3_driver_error"] = driver_error
-            d1 = 1.0 if result.get("d1_service_health") else 0.0
-            d2 = float(result.get("d2_score", 0.0))
-            d3 = 1.0 if result.get("d3_pass") else 0.0
-            result["aqs_score"] = round(d1 * (0.4 * d2 + 0.6 * d3), 4)
-            completed[sample_id] = result
+            if backfill_mode:
+                original = completed[sample_id]
+                attempted_at = datetime.now().astimezone().isoformat()
+                if result.get("d1_service_health") is True:
+                    completed[sample_id] = merge_d3_backfill_result(
+                        original,
+                        result,
+                        solver_model=args.solver_model,
+                        source_solver_model=source_solver_model,
+                        driver_status=driver_status,
+                        driver_error=driver_error,
+                        attempted_at=attempted_at,
+                    )
+                else:
+                    preserved = dict(original)
+                    preserved["d3_backfill"] = {
+                        "attempted": True,
+                        "attemptedAt": attempted_at,
+                        "sourceSolverModel": source_solver_model,
+                        "solverModel": args.solver_model,
+                        "sourceDriverStatus": original.get("d3_driver_status", "not_run"),
+                        "rerunBuildSuccess": bool(result.get("d1_build_success")),
+                        "rerunServiceHealth": result.get("d1_service_health"),
+                        "rerunFailureCategory": result.get("d1_failure_category"),
+                        "outcome": "rerun_health_failed",
+                        "preservedD1D2": True,
+                    }
+                    completed[sample_id] = preserved
+            else:
+                d1 = 1.0 if result.get("d1_service_health") else 0.0
+                d2 = float(result.get("d2_score", 0.0))
+                d3 = 1.0 if result.get("d3_pass") else 0.0
+                result["aqs_score"] = round(d1 * (0.4 * d2 + 0.6 * d3), 4)
+                completed[sample_id] = result
             ordered = [completed[sid] for sid in expected_ids if sid in completed]
             payload = {
                 "protocol": protocol,

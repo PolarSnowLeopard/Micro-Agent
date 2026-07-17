@@ -9,7 +9,12 @@ from scripts.run_amq_agentic_generation import (
     export_submission,
     is_retryable_provider_failure,
 )
-from scripts.run_amq_paper_evaluation import aggregate, driver_diagnostic, paper_goe
+from scripts.run_amq_paper_evaluation import (
+    aggregate,
+    driver_diagnostic,
+    merge_d3_backfill_result,
+    paper_goe,
+)
 
 
 def _tool(description: str, properties: dict | None = None) -> SimpleNamespace:
@@ -107,6 +112,58 @@ def test_driver_diagnostic_separates_provider_refusal_from_utility_failure() -> 
 
     assert status == "provider_error"
     assert "403" in detail
+
+
+def test_d3_backfill_preserves_d1_d2_and_replaces_only_d3_evidence() -> None:
+    original = {
+        "sample_id": "sample",
+        "d1_build_success": True,
+        "d1_service_health": True,
+        "d1_image_size_mb": 123.0,
+        "d2_score": 0.5,
+        "goe_score": 0.4,
+        "gov_score": 0.6,
+        "d3_pass": False,
+        "d3_driver_status": "provider_error",
+        "d3_driver_error": "403",
+        "d3_total_calls": 0,
+        "aqs_score": 0.2,
+    }
+    rerun = {
+        "sample_id": "sample",
+        "d1_build_success": True,
+        "d1_service_health": True,
+        "d1_image_size_mb": 999.0,
+        "d2_score": 0.1,
+        "goe_score": 0.1,
+        "gov_score": 0.1,
+        "d3_pass": True,
+        "d3_method": "verify_script",
+        "d3_total_calls": 2,
+        "d3_successful_calls": 2,
+        "d3_tool_call_success_rate": 1.0,
+    }
+
+    merged = merge_d3_backfill_result(
+        original,
+        rerun,
+        solver_model="qwen/qwen3.7-max",
+        source_solver_model="openai/gpt-5.4",
+        driver_status="completed",
+        driver_error="",
+        attempted_at="2026-07-17T00:00:00+08:00",
+    )
+
+    assert merged["d1_image_size_mb"] == 123.0
+    assert merged["d2_score"] == 0.5
+    assert merged["goe_score"] == 0.4
+    assert merged["gov_score"] == 0.6
+    assert merged["d3_pass"] is True
+    assert merged["d3_total_calls"] == 2
+    assert merged["d3_driver_status"] == "completed"
+    assert "d3_driver_error" not in merged
+    assert merged["d3_backfill"]["preservedD1D2"] is True
+    assert merged["aqs_score"] == 0.8
 
 
 def test_generation_resume_retries_credit_failure_but_not_algorithm_failure() -> None:
