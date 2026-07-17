@@ -341,6 +341,65 @@ def test_plan_accepts_explicitly_derived_source_parameters(tmp_path):
     assert plan.tools[1]["inputSchema"]["required"] == ["values_json"]
 
 
+def test_plan_accepts_fixed_literal_positional_source_parameter(tmp_path):
+    project = tmp_path / "dispatch"
+    project.mkdir()
+    (project / "main.py").write_text(
+        "def main_process(smiles: str, operation: str) -> dict:\n"
+        "    return {'smiles': smiles, 'operation': operation}\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = {
+        "schemaVersion": "ioeb.agentic-mcp-plan/v1",
+        "decision": "package",
+        "analysisSummary": "将稳定的分子相似度分支抽象为单独工具。",
+        "services": [
+            {
+                "id": "molecule",
+                "name": "Molecule",
+                "description": "Molecular operations.",
+                "rationale": "One cohesive algorithm boundary.",
+                "tools": [
+                    {
+                        "name": "parse_molecule",
+                        "description": "Parse a molecule from a SMILES string.",
+                        "sourceSymbols": ["main.main_process"],
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {"smiles": {"type": "string"}},
+                            "required": ["smiles"],
+                        },
+                        "outputSchema": {"type": "object"},
+                        "adapterStrategy": (
+                            "Call main_process(smiles, 'parse') and serialize its result."
+                        ),
+                        "dependsOn": [],
+                        "smokeTest": {
+                            "enabled": False,
+                            "rationale": "No repository fixture is available.",
+                        },
+                        "evidence": ["main.py:1"],
+                    }
+                ],
+            }
+        ],
+        "excludedSymbols": [],
+        "assumptions": [],
+        "riskNotes": [],
+    }
+
+    plan = PackagingPlan.validate(
+        raw,
+        known_symbols=ir.known_symbols,
+        symbol_required_parameters={
+            symbol.qualifiedName: symbol.requiredParameters for symbol in ir.symbols
+        },
+    )
+
+    assert plan.tool_names == ["parse_molecule"]
+
+
 def test_plan_rejects_excluding_independent_user_capability(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()

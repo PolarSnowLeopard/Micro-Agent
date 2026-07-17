@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import base64
 import binascii
@@ -192,6 +193,7 @@ class PackagingPlan:
                         properties,
                         required if isinstance(required, list) else [],
                         strategy_text,
+                        source_symbol=symbols[0],
                     )
                     if missing_parameters:
                         errors.append(
@@ -458,6 +460,8 @@ def _unmapped_source_parameters(
     properties: dict[str, Any],
     schema_required: list[str],
     strategy: str,
+    *,
+    source_symbol: str,
 ) -> list[str]:
     """Require each source argument to be public or explicitly derived.
 
@@ -468,7 +472,7 @@ def _unmapped_source_parameters(
     """
     required_names = set(schema_required)
     missing: list[str] = []
-    for parameter in source_required:
+    for index, parameter in enumerate(source_required):
         schema = properties.get(parameter)
         if isinstance(schema, dict) and (
             parameter in required_names or "default" in schema
@@ -476,8 +480,72 @@ def _unmapped_source_parameters(
             continue
         if re.search(rf"(?<![A-Za-z0-9_]){re.escape(parameter)}(?![A-Za-z0-9_])", strategy):
             continue
+        if _strategy_passes_literal_position(
+            strategy,
+            function_name=source_symbol.rsplit(".", 1)[-1],
+            position=index,
+        ):
+            continue
         missing.append(parameter)
     return missing
+
+
+def _strategy_passes_literal_position(
+    strategy: str,
+    *,
+    function_name: str,
+    position: int,
+) -> bool:
+    """Recognize an explicitly fixed positional argument in a strategy.
+
+    A plan such as ``main_process(smiles, 'similarity', options)`` has supplied
+    the source ``operation`` parameter even though the prose does not repeat its
+    name. Only literal arguments on calls to the exact source function count.
+    """
+    call_start = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(function_name)}\s*\(")
+    for match in call_start.finditer(strategy):
+        candidate = _balanced_call(strategy, match.start())
+        if not candidate:
+            continue
+        try:
+            expression = ast.parse(candidate, mode="eval").body
+        except SyntaxError:
+            continue
+        if (
+            isinstance(expression, ast.Call)
+            and len(expression.args) > position
+            and isinstance(expression.args[position], ast.Constant)
+        ):
+            return True
+    return False
+
+
+def _balanced_call(text: str, start: int) -> str:
+    open_index = text.find("(", start)
+    if open_index < 0:
+        return ""
+    depth = 0
+    quote = ""
+    escaped = False
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char in {"'", '"'}:
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return ""
 
 
 def _server_path_fields(schema: dict[str, Any]) -> set[str]:

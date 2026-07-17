@@ -42,6 +42,8 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
    MCP 调用者无法访问容器文件系统，public schema 严禁暴露 data_path、save_dir、model_path 等服务端路径；上传、解压、预处理、推理等内部阶段必须组合成端到端用户能力。
    这条限制同样适用于 wsi_dir、feature_dir、labels_csv 等“名称未含 path 但文档语义是文件/目录”的参数。目录输入必须重构为带 contentEncoding=base64 的 ZIP 内容字段，文本表格应重构为 CSV/JSON 内容字段；适配层再安全解压或写入临时目录后调用源码。不得保留原路径参数，也不得要求调用者预先把数据放进容器。
    同一组源码和相同输入输出只能形成一个工具，严禁仅换名字制造重复能力。直接封装单个源码函数时，Schema 必须提供调用它所需的全部必填信息。
+   当公开字段被重构/改名或由其他字段派生时，adapterStrategy 必须逐字写出每个源码参数的映射，
+   例如 `images_zip -> images_dir`；当分支参数由工具固定时，应写成 `operation='similarity'`，不能只笼统写“解压后调用”。
    inputSchema.required 必须覆盖执行所需的用户输入，不能为了绕过校验把源码必填参数标成可选；object 输出声明了 properties 时，outputSchema.required 必须标明稳定返回字段。
    源码函数含 yield/YieldFrom 时是多结果生成器，面向 MCP 的 outputSchema 必须是 array（由适配层收集为可序列化列表），不能伪装成单个 object。
 5. 不得使用隐藏样例答案、文件名特判、伪实现或硬编码返回值。
