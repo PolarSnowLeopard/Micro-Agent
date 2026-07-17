@@ -21,7 +21,7 @@ from micro_agent.tool.terminate import Terminate
 TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent。你的任务是给现有仓库增加一个最薄的、真实可调用的模板入口，而不是重写算法或生成演示实现。
 
 必须遵守：
-1. 先 inspect_repository，再阅读 README、依赖文件、与用户封装意图相关的入口、测试和核心源码。
+1. 先且只调用一次 inspect_repository，再阅读 README、依赖文件、与用户封装意图相关的入口、测试和核心源码。每轮最多调用 12 次 read_project_file；证据足够后立即写入口，不得漫无目的遍历仓库。
 2. 只允许写根目录 main.py，以及在确有必要时写 requirements.txt。不得修改原算法源码。
 3. main.py 必须提供顶层同步函数 main_process(...)；所有参数和返回值有类型注解，docstring 使用 Google 风格并包含 Args: 与 Returns:。
 4. main_process 必须 import 并调用仓库中真实存在的算法能力；可以做输入校验、对象构造、数据转换和结果序列化，但不得复制/重写算法核心、返回伪结果或硬编码 benchmark 答案。
@@ -29,7 +29,7 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 6. 面向调用者的输入输出应为 JSON 可表达的标量、list、dict；不得要求调用者访问容器内路径。若原算法确实需要文件，可接受 Base64/文本/结构化内容并在函数内部创建临时资源。
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
-9. 写完后必须调用 verify_template。若失败，根据错误修复；通过后调用 terminate。
+9. 写完 main.py 与 requirements.txt 后必须调用 verify_template；该调用会结束本轮，外层流程会把确定性错误反馈给下一轮修复。
 """
 
 
@@ -147,14 +147,18 @@ def validate_algorithm_template(
             continue
         if candidate.is_file() and candidate.suffix == ".py":
             local_import_roots.add(candidate.stem)
-        elif candidate.is_dir() and (candidate / "__init__.py").is_file():
+        elif candidate.is_dir() and (
+            (candidate / "__init__.py").is_file() or any(candidate.glob("*.py"))
+        ):
             local_import_roots.add(candidate.name)
     src_dir = root / "src"
     if src_dir.is_dir():
         for candidate in src_dir.iterdir():
             if candidate.is_file() and candidate.suffix == ".py":
                 local_import_roots.add(candidate.stem)
-            elif candidate.is_dir() and (candidate / "__init__.py").is_file():
+            elif candidate.is_dir() and (
+                (candidate / "__init__.py").is_file() or any(candidate.glob("*.py"))
+            ):
                 local_import_roots.add(candidate.name)
 
     imported_names: set[str] = set()
@@ -173,15 +177,31 @@ def validate_algorithm_template(
                 imported_names.add(bound_name)
                 if node.level or module_root in local_import_roots:
                     local_imported_names.add(bound_name)
+    top_level_functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    reachable_functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {
+        "main_process": function
+    }
+    pending = [function]
     call_roots: set[str] = set()
-    for node in ast.walk(function):
-        if not isinstance(node, ast.Call):
-            continue
-        target = node.func
-        while isinstance(target, ast.Attribute):
-            target = target.value
-        if isinstance(target, ast.Name):
+    while pending:
+        current = pending.pop()
+        for node in ast.walk(current):
+            if not isinstance(node, ast.Call):
+                continue
+            target = node.func
+            while isinstance(target, ast.Attribute):
+                target = target.value
+            if not isinstance(target, ast.Name):
+                continue
             call_roots.add(target.id)
+            helper = top_level_functions.get(target.id)
+            if helper is not None and target.id not in reachable_functions:
+                reachable_functions[target.id] = helper
+                pending.append(helper)
     repository_calls = sorted(local_imported_names & call_roots)
 
     raises = [node for node in ast.walk(function) if isinstance(node, ast.Raise)]
@@ -190,6 +210,7 @@ def validate_algorithm_template(
     if repository_calls:
         checks["callsRepositoryCode"] = True
         checks["repositoryCallRoots"] = repository_calls
+        checks["reachableLocalFunctions"] = sorted(reachable_functions)
         checks["localImportRoots"] = sorted(local_import_roots)
     elif allow_explicit_unsupported and explicit_unsupported:
         warnings.append("L0 负样本仅提供显式 unsupported 入口，不代表算法能力可封装")
@@ -261,8 +282,9 @@ def build_template_adapter_agent(project_dir: Path, ir: RepositoryIR) -> Agent:
         llm=LLM(config.get_llm("reasoning")),
         tools=tools,
         system_prompt=TEMPLATE_ADAPTER_SYSTEM_PROMPT,
-        max_steps=28,
+        max_steps=32,
         max_observe=50_000,
+        terminal_tools={"verify_template", "terminate"},
     )
 
 
@@ -286,8 +308,8 @@ def template_adapter_prompt(ir: RepositoryIR, wrap_intent: str, original_main: s
         "请把当前仓库适配为 IOEB ZIP 算法模板。\n"
         f"wrap_intent（唯一业务需求来源）：{wrap_intent}\n"
         f"{original_note}\n"
-        "先检查仓库证据，随后写 main.py；确保 requirements.txt 足以运行该入口。"
-        "不要读取或推断任何 benchmark 答案。完成后调用 verify_template，通过后 terminate。\n"
+        "只调用一次 inspect_repository，最多读取 12 个最相关文件，随后写 main.py 与 requirements.txt。"
+        "不要读取或推断任何 benchmark 答案。完成后调用 verify_template；不要在校验后继续操作。\n"
         "仓库索引摘要：\n"
         + json.dumps(summary, ensure_ascii=False, indent=2)
     )

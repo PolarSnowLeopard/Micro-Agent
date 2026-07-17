@@ -28,6 +28,9 @@ def test_template_validator_requires_real_local_repository_call(tmp_path: Path) 
         tmp_path,
         '''from algorithm import predict
 
+def _predict(value: float) -> float:
+    return predict(value)
+
 def main_process(value: float) -> dict[str, float]:
     """Run the real algorithm.
 
@@ -37,7 +40,7 @@ def main_process(value: float) -> dict[str, float]:
     Returns:
         A JSON-compatible prediction.
     """
-    return {"prediction": predict(value)}
+    return {"prediction": _predict(value)}
 ''',
     )
 
@@ -45,6 +48,7 @@ def main_process(value: float) -> dict[str, float]:
 
     assert report.passed
     assert report.checks["repositoryCallRoots"] == ["predict"]
+    assert report.checks["reachableLocalFunctions"] == ["_predict", "main_process"]
 
 
 def test_template_validator_rejects_stdlib_only_facade(tmp_path: Path) -> None:
