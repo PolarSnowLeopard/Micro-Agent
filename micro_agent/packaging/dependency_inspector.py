@@ -135,7 +135,12 @@ def _imports_from_file(path: Path, *, module_name: str) -> list[str]:
         if isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
             continue
-        base = _resolve_from_base(module_name, node.module or "", node.level)
+        base = _resolve_from_base(
+            module_name,
+            node.module or "",
+            node.level,
+            is_package=path.name == "__init__.py",
+        )
         if base:
             imports.append(base)
         for alias in node.names:
@@ -144,10 +149,16 @@ def _imports_from_file(path: Path, *, module_name: str) -> list[str]:
     return sorted(set(imports))
 
 
-def _resolve_from_base(module_name: str, imported: str, level: int) -> str:
+def _resolve_from_base(
+    module_name: str,
+    imported: str,
+    level: int,
+    *,
+    is_package: bool,
+) -> str:
     if level == 0:
         return imported
-    package = module_name.rpartition(".")[0]
+    package = module_name if is_package else module_name.rpartition(".")[0]
     parts = package.split(".") if package else []
     keep = max(0, len(parts) - level + 1)
     base = parts[:keep]

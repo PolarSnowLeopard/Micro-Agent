@@ -696,7 +696,10 @@ def test_dependency_inspector_follows_local_import_chain_once(tmp_path):
         "import numpy\nfrom localpkg.worker import run\n",
         encoding="utf-8",
     )
-    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text(
+        "from .worker import run\n",
+        encoding="utf-8",
+    )
     (package / "worker.py").write_text(
         "from PIL import Image\n"
         "import lmdb\n"
