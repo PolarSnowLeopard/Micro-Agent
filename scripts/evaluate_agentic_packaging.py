@@ -13,7 +13,11 @@ from pathlib import Path
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.models import PackagingPlan
 from micro_agent.packaging.runtime_verifier import ContainerRuntimeVerifier
-from micro_agent.packaging.workflow import AgenticAnalysisWorkflow, AgenticPackagingWorkflow
+from micro_agent.packaging.workflow import (
+    AgenticAnalysisWorkflow,
+    AgenticPackagingWorkflow,
+    planning_candidate_symbols,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,7 +51,7 @@ async def main() -> int:
             },
             symbol_calls={symbol.qualifiedName: symbol.calls for symbol in ir.symbols},
             symbol_is_generator={symbol.qualifiedName: symbol.isGenerator for symbol in ir.symbols},
-            candidate_symbols=ir.public_callable_symbols,
+            candidate_symbols=planning_candidate_symbols(ir),
         )
         analysis_seconds = 0.0
         (output / "function.json").write_text(
