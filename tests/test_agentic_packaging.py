@@ -34,6 +34,7 @@ from micro_agent.packaging.tools import (
     SavePackagingPlan,
     SavePackagingPlanJson,
     WriteArtifactFile,
+    _smoke_string_candidates,
 )
 from micro_agent.packaging.verifier import ArtifactVerifier, VerificationReport
 from micro_agent.packaging.workflow import (
@@ -1239,6 +1240,8 @@ async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_
     assert rejected.error
     assert "未在所引测试/doctest/示例中出现" in rejected.error
     assert "invented placeholder" in rejected.error
+    assert "documented risk fixture" in rejected.error
+    assert "仍须核对调用上下文" in rejected.error
 
     predict_tool["smokeTest"]["input"]["scenario"] = "documented risk fixture"
     accepted_store = PlanStore(
@@ -1254,6 +1257,27 @@ async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_
 
     assert not accepted.error
     assert accepted_store.plan is not None
+
+
+def test_smoke_fixture_suggestions_preserve_reaction_syntax_family():
+    corpus = '''
+def test_reactions():
+    assert Reaction.from_string("H2O -> H+ + OH-; 1e-4")
+    assert Equilibrium.from_string("H2O = H+ + OH-; 1e-14")
+
+def documented():
+    """
+    >>> line = '2 H2O -> 2 H2 + O2 ; 3e-4'
+    """
+'''
+
+    equilibrium = _smoke_string_candidates(corpus, "A <-> B; K=3")
+    kinetics = _smoke_string_candidates(corpus, "A -> B; k=0.2")
+
+    assert equilibrium[0] == "H2O = H+ + OH-; 1e-14"
+    assert all("->" not in candidate for candidate in equilibrium)
+    assert "H2O -> H+ + OH-; 1e-4" in kinetics
+    assert "2 H2O -> 2 H2 + O2 ; 3e-4" in kinetics
 
 
 async def test_save_plan_json_discards_only_unknown_excluded_symbols(tmp_path):

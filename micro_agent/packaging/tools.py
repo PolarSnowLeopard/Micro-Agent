@@ -466,10 +466,25 @@ def _independent_smoke_evidence_errors(
         )
         if ungrounded:
             rendered = ", ".join(repr(value[:120]) for value in ungrounded[:5])
+            suggestions = {
+                value: _smoke_string_candidates(corpus, value)
+                for value in ungrounded[:5]
+            }
+            rendered_suggestions = "; ".join(
+                f"{value[:80]!r} -> {candidates!r}"
+                for value, candidates in suggestions.items()
+                if candidates
+            )
             errors.append(
                 f"{tool.get('name', '<unnamed>')}.smokeTest.input 包含未在所引测试/"
                 f"doctest/示例中出现的自由文本值: {rendered}；"
                 "必须改用被引用文件中的真实可执行 fixture，不能依据模板注释编造"
+                + (
+                    "；所引文件中的接近字符串候选（仍须核对调用上下文）: "
+                    + rendered_suggestions
+                    if rendered_suggestions
+                    else ""
+                )
             )
     return errors
 
@@ -527,6 +542,62 @@ def _ungrounded_smoke_strings(value: Any, schema: Any, corpus: str) -> list[str]
     normalized_value = " ".join(value.split())
     normalized_corpus = " ".join(corpus.split())
     return [] if normalized_value in normalized_corpus else [value]
+
+
+def _smoke_string_candidates(corpus: str, target: str) -> list[str]:
+    literals: list[str] = []
+    try:
+        token_stream = tokenize.generate_tokens(io.StringIO(corpus).readline)
+        for token in token_stream:
+            if token.type != tokenize.STRING:
+                continue
+            try:
+                value = ast.literal_eval(token.string)
+            except (SyntaxError, ValueError):
+                continue
+            if not isinstance(value, str):
+                continue
+            if 4 <= len(value.strip()) <= 240 and "\n" not in value.strip():
+                literals.append(value.strip())
+            if len(value) > 240 or "\n" in value:
+                for match in re.finditer(
+                    r"(?P<quote>['\"])(?P<value>[^'\"\\n]{4,240})(?P=quote)",
+                    value,
+                ):
+                    literals.append(match.group("value").strip())
+    except (IndentationError, SyntaxError, tokenize.TokenError):
+        pass
+
+    equilibrium_like = "<->" in target or ("=" in target and "->" not in target)
+    kinetics_like = "->" in target and "<->" not in target
+    ranked: list[tuple[float, str]] = []
+    target_tokens = set(re.findall(r"[A-Za-z][A-Za-z0-9+_-]*", target.lower()))
+    for candidate in dict.fromkeys(literals):
+        if equilibrium_like and ("=" not in candidate or "->" in candidate):
+            continue
+        if kinetics_like and "->" not in candidate:
+            continue
+        candidate_tokens = set(
+            re.findall(r"[A-Za-z][A-Za-z0-9+_-]*", candidate.lower())
+        )
+        overlap = (
+            len(target_tokens & candidate_tokens) / len(target_tokens | candidate_tokens)
+            if target_tokens or candidate_tokens
+            else 0.0
+        )
+        similarity = difflib.SequenceMatcher(
+            None,
+            " ".join(target.split()).lower(),
+            " ".join(candidate.split()).lower(),
+        ).ratio()
+        shape_bonus = 0.0
+        if ";" in target and ";" in candidate:
+            shape_bonus += 0.15
+        if re.search(r"\d", target) and re.search(r"\d", candidate):
+            shape_bonus += 0.35
+        ranked.append((similarity + overlap + shape_bonus, candidate))
+    ranked.sort(key=lambda item: (-item[0], len(item[1]), item[1]))
+    return [candidate for _, candidate in ranked[:5]]
 
 
 def _merge_excluded_symbols(root: list[Any], nested: list[Any]) -> list[Any]:
