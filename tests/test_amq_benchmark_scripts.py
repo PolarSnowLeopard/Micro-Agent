@@ -12,6 +12,7 @@ from scripts.run_amq_agentic_generation import (
 from scripts.run_amq_paper_evaluation import (
     aggregate,
     driver_diagnostic,
+    fresh_solver_substitution_metadata,
     merge_d3_backfill_result,
     paper_goe,
 )
@@ -116,6 +117,32 @@ def test_driver_diagnostic_separates_provider_refusal_from_utility_failure() -> 
 
     assert status == "provider_error"
     assert "403" in detail
+
+
+def test_fresh_d3_solver_substitution_is_explicitly_audited() -> None:
+    metadata = fresh_solver_substitution_metadata(
+        solver_model="qwen/qwen3.7-max",
+        solver_reasoning="disabled",
+        substitution_reason="The paper solver is unavailable from the configured provider.",
+        skip_d3=False,
+    )
+
+    assert metadata["paperSolverModel"] == "openai/gpt-5.4"
+    assert metadata["solverConformance"] == "solver_substitution"
+    assert metadata["solverReasoning"] == "disabled"
+    assert "unavailable" in metadata["solverSubstitutionReason"]
+    assert fresh_solver_substitution_metadata(
+        solver_model="openai/gpt-5.4",
+        solver_reasoning="provider_default",
+        substitution_reason=None,
+        skip_d3=False,
+    ) == {}
+    assert fresh_solver_substitution_metadata(
+        solver_model="qwen/qwen3.7-max",
+        solver_reasoning="disabled",
+        substitution_reason="unused",
+        skip_d3=True,
+    ) == {}
 
 
 def test_d3_backfill_preserves_d1_d2_and_replaces_only_d3_evidence() -> None:

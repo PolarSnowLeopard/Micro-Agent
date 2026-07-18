@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--solver-substitution-reason",
-        help="Required audit reason when D3 backfill uses a solver other than the paper solver.",
+        help="Required audit reason whenever D3 uses a solver other than the paper solver.",
     )
     parser.add_argument(
         "--solver-reasoning",
@@ -306,6 +306,24 @@ def driver_diagnostic(agent_result: dict[str, Any] | None) -> tuple[str, str]:
     return "completed", ""
 
 
+def fresh_solver_substitution_metadata(
+    *,
+    solver_model: str,
+    solver_reasoning: str,
+    substitution_reason: str | None,
+    skip_d3: bool,
+) -> dict[str, Any]:
+    if skip_d3 or solver_model == PAPER_SOLVER_MODEL:
+        return {}
+    return {
+        "schemaVersion": "amq-bench-paper-metrics-solver-substitution/v1",
+        "paperSolverModel": PAPER_SOLVER_MODEL,
+        "solverConformance": "solver_substitution",
+        "solverSubstitutionReason": substitution_reason or "",
+        "solverReasoning": solver_reasoning,
+    }
+
+
 def merge_d3_backfill_result(
     original: dict[str, Any],
     rerun: dict[str, Any],
@@ -377,15 +395,12 @@ async def main() -> int:
     if args.backfill_d3_from:
         if args.skip_d3:
             raise SystemExit("--backfill-d3-from cannot be combined with --skip-d3")
-        if (
-            args.solver_model != PAPER_SOLVER_MODEL
-            and not args.solver_substitution_reason
-        ):
-            raise SystemExit(
-                "non-paper D3 backfill requires --solver-substitution-reason"
-            )
-    elif args.solver_model != PAPER_SOLVER_MODEL and not args.skip_d3:
-        raise SystemExit(f"paper protocol requires --solver-model {PAPER_SOLVER_MODEL}")
+    if (
+        not args.skip_d3
+        and args.solver_model != PAPER_SOLVER_MODEL
+        and not args.solver_substitution_reason
+    ):
+        raise SystemExit("non-paper D3 evaluation requires --solver-substitution-reason")
 
     harness, source_sha256 = load_strict_harness(args.harness.resolve())
     benchmark_file = args.benchmark_file.resolve()
@@ -438,6 +453,14 @@ async def main() -> int:
         "aqsFormula": "d1 * (0.4 * d2 + 0.6 * d3)",
         "methodAqsDenominator": len(expected_ids),
     }
+    protocol.update(
+        fresh_solver_substitution_metadata(
+            solver_model=args.solver_model,
+            solver_reasoning=args.solver_reasoning,
+            substitution_reason=args.solver_substitution_reason,
+            skip_d3=args.skip_d3,
+        )
+    )
 
     results_file = args.results_file.resolve()
     completed: dict[str, dict[str, Any]] = {}
@@ -580,6 +603,9 @@ async def main() -> int:
             result = await runner.run_task(task)
             driver_status, driver_error = driver_diagnostic(runner._paper_last_agent_result)
             result["d3_driver_status"] = driver_status
+            if not args.skip_d3:
+                result["d3_solver_model"] = args.solver_model
+                result["d3_solver_reasoning"] = args.solver_reasoning
             if driver_error:
                 result["d3_driver_error"] = driver_error
             if backfill_mode:
