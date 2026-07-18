@@ -1227,6 +1227,36 @@ async def test_save_plan_requires_independent_smoke_evidence_for_adapted_templat
     assert all("只引用了生成的 main.py" in error for error in store.last_errors)
 
 
+async def test_save_plan_requires_enabled_smoke_for_every_adapted_template_tool(
+    tmp_path,
+):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(
+        tmp_path / "plan.json",
+        ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        require_independent_smoke_evidence=True,
+    )
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"][0]["smokeTest"]["enabled"] = False
+    raw["services"][0]["tools"][0]["smokeTest"]["rationale"] = (
+        "No fixture was selected."
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert result.error
+    assert "smoke 证据门禁失败" in result.error
+    assert store.plan is None
+    assert store.last_errors is not None
+    assert any(
+        "predict_risk.smokeTest.enabled=false" in error
+        for error in store.last_errors
+    )
+
+
 async def test_plan_store_keeps_most_advanced_rejected_candidate(tmp_path):
     project = _sample_project(tmp_path)
     ir = RepositoryAnalyzer().analyze(project)

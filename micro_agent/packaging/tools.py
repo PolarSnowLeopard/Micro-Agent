@@ -499,6 +499,12 @@ def _independent_smoke_evidence_errors(
     for tool in plan.tools:
         smoke = tool.get("smokeTest", {})
         if not smoke.get("enabled"):
+            errors.append(
+                f"{tool.get('name', '<unnamed>')}.smokeTest.enabled=false；"
+                "生产封装要求每个 MCP Tool 都有原仓库测试、doctest 或示例支持的"
+                "可执行 smokeTest。请为该工具选择真实 fixture 并设 enabled=true；"
+                "若仓库完全没有可执行证据，则该能力不能进入本次生产封装"
+            )
             continue
         evidence = smoke.get("evidence", [])
         cited_files = {
@@ -510,7 +516,8 @@ def _independent_smoke_evidence_errors(
             errors.append(
                 f"{tool.get('name', '<unnamed>')}.smokeTest.evidence "
                 "只引用了生成的 main.py/README.ioeb.md/template_adaptation.json；"
-                "请从原仓库可执行测试、doctest 或示例核对输入，找不到时应设 enabled=false"
+                "请从原仓库可执行测试、doctest 或示例核对输入；"
+                "找不到独立可执行证据时，该能力不能进入本次生产封装"
             )
             continue
         if evidence_root is None:
