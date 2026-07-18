@@ -1736,7 +1736,8 @@ async def test_packaging_workflow_repairs_then_marks_artifact_ready(tmp_path, mo
     class FakeBuilder:
         max_steps = 2
 
-        def __init__(self):
+        def __init__(self, attempt):
+            self.attempt = attempt
             self.calls = 0
 
         def cancel(self):
@@ -1744,17 +1745,23 @@ async def test_packaging_workflow_repairs_then_marks_artifact_ready(tmp_path, mo
 
         async def run(self, prompt):
             self.calls += 1
-            if self.calls == 1:
+            if self.attempt == 0:
                 (artifact / "server.py").write_text("def broken(:\n", encoding="utf-8")
                 (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
             else:
                 (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
             yield AgentEvent(type="done", step=1, data={"result": "attempt complete"})
 
-    fake_builder = FakeBuilder()
+    fake_builders = []
+
+    def build_fresh_agent(*args, **kwargs):
+        builder = FakeBuilder(len(fake_builders))
+        fake_builders.append(builder)
+        return builder
+
     monkeypatch.setattr(
         "micro_agent.packaging.workflow._build_builder_agent",
-        lambda *args, **kwargs: fake_builder,
+        build_fresh_agent,
     )
     workflow = AgenticPackagingWorkflow(
         project_dir=project,
@@ -1766,7 +1773,8 @@ async def test_packaging_workflow_repairs_then_marks_artifact_ready(tmp_path, mo
 
     events = [event async for event in workflow.run("package it")]
 
-    assert fake_builder.calls == 2
+    assert len(fake_builders) == 2
+    assert [builder.calls for builder in fake_builders] == [1, 1]
     assert events[-1].type == "done"
     marker = json.loads((artifact / ".ioeb-ready").read_text(encoding="utf-8"))
     assert marker["toolCount"] == 2

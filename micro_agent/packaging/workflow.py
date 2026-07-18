@@ -457,6 +457,14 @@ class AgenticPackagingWorkflow:
                 phase_attempt=phase_repairs,
                 artifact_snapshot=_repair_artifact_snapshot(self.artifact_dir),
             )
+            builder = _build_builder_agent(
+                self.project_dir,
+                self.artifact_dir,
+                plan,
+                self.ir,
+            )
+            _lock_builder_overwrites(builder)
+            self._active_agent = builder
 
         assert report is not None
         yield AgentEvent(
