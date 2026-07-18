@@ -460,7 +460,7 @@ async def _run_planner(
     user_request: str,
 ) -> AsyncIterator[AgentEvent]:
     step_offset = 0
-    for attempt in range(3):
+    for attempt in range(5):
         text_candidates: list[str] = []
         prompt = _planner_prompt(ir, user_request) if attempt == 0 else (
             "你尚未提交一个有效规划。必须使用 save_packaging_plan_json 重新发送完整严格 JSON；"

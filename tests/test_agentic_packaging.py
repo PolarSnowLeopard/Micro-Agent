@@ -40,6 +40,7 @@ from micro_agent.packaging.workflow import (
     AnalysisCache,
     _repair_artifact_snapshot,
     _repair_prompt,
+    _run_planner,
     planning_candidate_symbols,
     _extract_planning_json,
 )
@@ -873,6 +874,49 @@ def test_extract_planning_json_recovers_plain_or_fenced_model_content() -> None:
     fenced = "Here is the plan:\n```json\n" + json.dumps(expected) + "\n```"
     assert json.loads(_extract_planning_json(fenced) or "null") == expected
     assert _extract_planning_json("I still need to inspect the repository") is None
+
+
+async def test_planner_can_repair_multiple_quality_gate_failures(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+    )
+
+    class FakePlanner:
+        max_steps = 1
+
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, prompt):
+            self.calls += 1
+            if self.calls == 4:
+                await SavePackagingPlanJson(store).execute(
+                    content=_plan(ir).to_json(indent=None)
+                )
+            yield AgentEvent(
+                type="done",
+                step=1,
+                data={"result": "attempt complete"},
+            )
+
+    planner = FakePlanner()
+    events = [
+        event
+        async for event in _run_planner(
+            planner,
+            store,
+            ir,
+            "package it",
+        )
+    ]
+
+    assert planner.calls == 4
+    assert store.plan is not None
+    assert len([event for event in events if event.type == "think"]) == 3
 
 
 async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path):
