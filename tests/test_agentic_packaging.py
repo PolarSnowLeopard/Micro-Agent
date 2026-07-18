@@ -1922,6 +1922,7 @@ def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
     assert sum(len(value) for value in snapshot.values()) <= 40
     assert "第一项产物修改必须是 patch_artifact_file" in prompt
     assert "初始化快照中明确为空的目标文件" in prompt
+    assert "可选导入或纯 Python fallback" in prompt
     assert "不得先调用 inspect_repository 或 read_project_file" in prompt
     assert "[runtime] failure" in prompt
 
