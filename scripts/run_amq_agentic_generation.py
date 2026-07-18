@@ -13,10 +13,17 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+# Always benchmark the checked-out implementation, even when an older
+# ``micro_agent`` distribution is installed in the server environment.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.runtime_verifier import ContainerRuntimeVerifier
