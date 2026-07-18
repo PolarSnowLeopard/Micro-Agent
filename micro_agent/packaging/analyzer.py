@@ -11,6 +11,7 @@ import ast
 import hashlib
 import json
 import os
+import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -182,7 +183,9 @@ class RepositoryAnalyzer:
             digest.update(source.encode("utf-8", errors="replace"))
             module = _module_name(rel)
             try:
-                tree = ast.parse(source, filename=rel)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", SyntaxWarning)
+                    tree = ast.parse(source, filename=rel)
             except SyntaxError as exc:
                 parse_errors[rel] = f"{exc.msg} (line {exc.lineno})"
                 continue

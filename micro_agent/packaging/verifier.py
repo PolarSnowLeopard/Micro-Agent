@@ -546,6 +546,26 @@ def _guards_failure_return_from_calls(
             helper = adapter_functions.get(call_name.rsplit(".", 1)[-1])
             if helper is None or helper.name in seen:
                 continue
+            positional_parameters = [
+                *helper.args.posonlyargs,
+                *helper.args.args,
+            ]
+            guarded_helper_parameters = {
+                parameter.arg
+                for argument, parameter in zip(node.args, positional_parameters)
+                if isinstance(argument, ast.Name) and argument.id in risky_results
+            }
+            guarded_helper_parameters.update(
+                keyword.arg
+                for keyword in node.keywords
+                if keyword.arg
+                and isinstance(keyword.value, ast.Name)
+                and keyword.value.id in risky_results
+            )
+            if guarded_helper_parameters and _raises_from_tested_parameters(
+                helper, guarded_helper_parameters
+            ):
+                return True
             if _guards_failure_return_from_calls(
                 helper,
                 risky_call_names,
@@ -553,6 +573,27 @@ def _guards_failure_return_from_calls(
                 visited=seen,
             ):
                 return True
+    return False
+
+
+def _raises_from_tested_parameters(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    parameter_names: set[str],
+) -> bool:
+    for node in ast.walk(function):
+        if not isinstance(node, ast.If):
+            continue
+        tested_names = {
+            child.id for child in ast.walk(node.test) if isinstance(child, ast.Name)
+        }
+        if not tested_names & parameter_names:
+            continue
+        if any(
+            isinstance(child, ast.Raise)
+            for statement in node.body
+            for child in ast.walk(statement)
+        ):
+            return True
     return False
 
 

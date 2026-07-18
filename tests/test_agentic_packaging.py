@@ -307,6 +307,15 @@ def test_analyzer_extracts_literal_dispatch_branches_and_gate_requires_split_too
     assert not assess_dispatch_coverage(
         split_plan, {"main.main_process": entry.dispatchBranches}
     )
+    assert not assess_dispatch_coverage(
+        generic_plan,
+        {
+            "main.main_process": [
+                {"parameter": "model_name", "value": "small", "line": 1, "calls": []},
+                {"parameter": "model_name", "value": "large", "line": 2, "calls": []},
+            ]
+        },
+    )
 
 
 async def test_plan_store_applies_dispatch_coverage_gate(tmp_path):
@@ -1169,6 +1178,25 @@ def test_verifier_requires_guard_on_source_failure_sentinel(tmp_path):
     fixed_report = ArtifactVerifier(artifact, plan).verify()
 
     assert fixed_report.passed, fixed_report.to_json()
+
+    guarded_by_result_helper = unguarded.replace(
+        "    return algorithm_predict(float(value))",
+        "    result = algorithm_predict(float(value))\n"
+        "    _raise_on_failure(result)\n"
+        "    return result",
+    )
+    guarded_by_result_helper += (
+        "\n\ndef _raise_on_failure(result: dict) -> None:\n"
+        '    if result.get("success") is False:\n'
+        '        raise RuntimeError(result.get("error", "algorithm failed"))\n'
+    )
+    (artifact / "adapters.py").write_text(
+        guarded_by_result_helper, encoding="utf-8"
+    )
+
+    helper_report = ArtifactVerifier(artifact, plan).verify()
+
+    assert helper_report.passed, helper_report.to_json()
 
     guarded_by_helper = unguarded.replace(
         "    return algorithm_predict(float(value))",

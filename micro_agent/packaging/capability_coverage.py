@@ -37,6 +37,8 @@ def assess_dispatch_coverage(
         for parameter, by_value in sorted(groups.items()):
             if len(by_value) < 2:
                 continue
+            if not _is_semantic_dispatch_parameter(parameter):
+                continue
             relevant_tools = [
                 tool for tool in plan.tools if symbol in tool.get("sourceSymbols", [])
             ]
@@ -88,6 +90,25 @@ def assess_dispatch_coverage(
                     + detail
                 )
     return errors
+
+
+def _is_semantic_dispatch_parameter(parameter: str) -> bool:
+    normalized = parameter.lower()
+    return (
+        normalized in {"operation", "action", "task", "task_type", "mode"}
+        or normalized.endswith("_operation")
+        or normalized.endswith("_action")
+        or normalized.endswith("_task")
+        or normalized
+        in {
+            "analysis_type",
+            "calculation_type",
+            "chart_type",
+            "output_type",
+            "task_type",
+            "workflow_type",
+        }
+    )
 
 
 def _strategy_fixes_value(strategy: str, parameter: str, value: str) -> bool:
