@@ -1211,6 +1211,42 @@ async def test_save_plan_requires_independent_smoke_evidence_for_adapted_templat
     assert all("只引用了生成的 main.py" in error for error in store.last_errors)
 
 
+async def test_plan_store_keeps_most_advanced_rejected_candidate(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    store = PlanStore(
+        tmp_path / "plan.json",
+        ir.known_symbols,
+        known_files={file.path for file in ir.files} | {"main.py"},
+        require_independent_smoke_evidence=True,
+        smoke_evidence_root=project,
+    )
+    advanced = _plan(ir).to_dict()
+    advanced["analysisSummary"] = "advanced smoke checkpoint"
+    for tool in advanced["services"][0]["tools"]:
+        tool["smokeTest"]["evidence"] = ["main.py: generated example"]
+    regressed = _plan(ir).to_dict()
+    regressed["analysisSummary"] = "later structural regression"
+    regressed["services"] = []
+
+    advanced_result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(advanced, ensure_ascii=False)
+    )
+    regressed_result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(regressed, ensure_ascii=False)
+    )
+
+    assert advanced_result.error and "smoke 证据门禁失败" in advanced_result.error
+    assert regressed_result.error and "规划校验失败" in regressed_result.error
+    assert store.last_candidate is not None
+    assert store.last_candidate["analysisSummary"] == "later structural regression"
+    assert store.best_candidate is not None
+    assert store.best_candidate["analysisSummary"] == "advanced smoke checkpoint"
+    assert store.best_score is not None and store.best_score[0] == 3
+    assert store.best_errors is not None
+    assert all("只引用了生成的 main.py" in error for error in store.best_errors)
+
+
 async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_path):
     project = _sample_project(tmp_path)
     examples = project / "examples"
@@ -1262,6 +1298,8 @@ async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_
 
 def test_smoke_fixture_suggestions_preserve_reaction_syntax_family():
     corpus = '''
+UNRELATED_ASSIGNMENT = "not a reaction"
+
 def test_reactions():
     assert Reaction.from_string("H2O -> H+ + OH-; 1e-4")
     assert Equilibrium.from_string("H2O = H+ + OH-; 1e-14")
@@ -1277,6 +1315,7 @@ def documented():
 
     assert equilibrium[0] == "H2O = H+ + OH-; 1e-14"
     assert all("->" not in candidate for candidate in equilibrium)
+    assert all(";" in candidate for candidate in equilibrium)
     assert "H2O -> H+ + OH-; 1e-4" in kinetics
     assert "2 H2O -> 2 H2 + O2 ; 3e-4" in kinetics
 

@@ -127,6 +127,9 @@ class PlanStore:
     plan: PackagingPlan | None = None
     last_candidate: dict[str, Any] | None = None
     last_errors: list[str] | None = None
+    best_candidate: dict[str, Any] | None = None
+    best_errors: list[str] | None = None
+    best_score: tuple[int, int] | None = None
     interface_quality: InterfaceQualityReport | None = None
 
 
@@ -155,12 +158,17 @@ class SavePackagingPlan(Tool):
                     if re.sub(r"^\s*(?:[-*]|\d+[.)、])\s*", "", line).strip()
                 ]
         if isinstance(normalized.get("services"), str):
-            self.store.last_candidate = normalized
             self.store.plan = None
-            self.store.last_errors = [
+            errors = [
                 "services 被模型序列化成了无法解析的字符串；请改用 save_packaging_plan_json 提交整份严格 JSON"
             ]
-            return ToolResult(error=self.store.last_errors[0])
+            _record_rejected_candidate(
+                self.store,
+                normalized,
+                errors,
+                stage="shape",
+            )
+            return ToolResult(error=errors[0])
         self.store.last_candidate = json.loads(
             json.dumps(normalized, ensure_ascii=False)
         )
@@ -176,16 +184,22 @@ class SavePackagingPlan(Tool):
             )
         except PlanValidationError as exc:
             self.store.plan = None
-            self.store.last_errors = _augment_unknown_symbol_errors(
+            errors = _augment_unknown_symbol_errors(
                 exc.errors,
                 self.store.known_symbols,
+            )
+            _record_rejected_candidate(
+                self.store,
+                normalized,
+                errors,
+                stage="structure",
             )
             self.store.interface_quality = None
             return ToolResult(
                 error=(
                     "规划校验失败。save_packaging_plan 不是 PATCH；下一次必须重新提交包含 "
                     "schemaVersion、decision、analysisSummary、services 在内的完整规划:\n- "
-                    + "\n- ".join(self.store.last_errors)
+                    + "\n- ".join(errors)
                 )
             )
         if self.store.enforce_interface_quality and plan.decision == "package":
@@ -193,7 +207,12 @@ class SavePackagingPlan(Tool):
             self.store.interface_quality = quality
             if not quality.passed:
                 self.store.plan = None
-                self.store.last_errors = quality.errors
+                _record_rejected_candidate(
+                    self.store,
+                    normalized,
+                    quality.errors,
+                    stage="interface",
+                )
                 return ToolResult(
                     error=(
                         "Agent-facing MCP 接口质量门禁失败。不得删除工具或编造约束；"
@@ -210,7 +229,12 @@ class SavePackagingPlan(Tool):
             )
             if smoke_errors:
                 self.store.plan = None
-                self.store.last_errors = smoke_errors
+                _record_rejected_candidate(
+                    self.store,
+                    normalized,
+                    smoke_errors,
+                    stage="smoke",
+                )
                 return ToolResult(
                     error=(
                         "模板适配仓库的 smoke 证据门禁失败。main.py 是后加的薄适配层，"
@@ -225,7 +249,12 @@ class SavePackagingPlan(Tool):
             )
             if dispatch_errors:
                 self.store.plan = None
-                self.store.last_errors = dispatch_errors
+                _record_rejected_candidate(
+                    self.store,
+                    normalized,
+                    dispatch_errors,
+                    stage="dispatch",
+                )
                 return ToolResult(
                     error=(
                         "分支能力覆盖门禁失败。必须依据静态分派分支拆分 Agent 可选择的 Tool，"
@@ -238,6 +267,9 @@ class SavePackagingPlan(Tool):
         self.store.plan = plan
         self.store.last_candidate = plan.to_dict()
         self.store.last_errors = None
+        self.store.best_candidate = plan.to_dict()
+        self.store.best_errors = None
+        self.store.best_score = (5, 0)
         return ToolResult(
             output=(
                 f"规划已保存：decision={plan.decision}, "
@@ -249,6 +281,31 @@ class SavePackagingPlan(Tool):
                 )
             )
         )
+
+
+def _record_rejected_candidate(
+    store: PlanStore,
+    candidate: dict[str, Any],
+    errors: list[str],
+    *,
+    stage: str,
+) -> None:
+    cloned = json.loads(json.dumps(candidate, ensure_ascii=False))
+    cloned_errors = list(errors)
+    store.last_candidate = cloned
+    store.last_errors = cloned_errors
+    stage_rank = {
+        "shape": 0,
+        "structure": 1,
+        "interface": 2,
+        "smoke": 3,
+        "dispatch": 4,
+    }[stage]
+    score = (stage_rank, -len(cloned_errors))
+    if store.best_score is None or score > store.best_score:
+        store.best_candidate = cloned
+        store.best_errors = cloned_errors
+        store.best_score = score
 
 
 class SavePackagingPlanJson(Tool):
@@ -596,6 +653,8 @@ def _smoke_string_candidates(corpus: str, target: str) -> list[str]:
     ranked: list[tuple[float, str]] = []
     target_tokens = set(re.findall(r"[A-Za-z][A-Za-z0-9+_-]*", target.lower()))
     for candidate in dict.fromkeys(literals):
+        if ";" in target and ";" not in candidate:
+            continue
         if equilibrium_like and ("=" not in candidate or "->" in candidate):
             continue
         if kinetics_like and "->" not in candidate:

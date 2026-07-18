@@ -529,13 +529,15 @@ async def _run_planner(
         if attempt == 0:
             prompt = initial_prompt
         else:
+            selected_candidate = store.best_candidate or store.last_candidate
+            selected_errors = store.best_errors or store.last_errors
             previous_candidate = (
                 json.dumps(
-                    store.last_candidate,
+                    selected_candidate,
                     ensure_ascii=False,
                     indent=2,
                 )
-                if store.last_candidate is not None
+                if selected_candidate is not None
                 else "未捕获到可恢复的上一版规划"
             )
             prompt = (
@@ -550,8 +552,8 @@ async def _run_planner(
                 "上一版完整候选工件：\n"
                 + previous_candidate
                 + (
-                    "\n上次校验错误：\n- " + "\n- ".join(store.last_errors)
-                    if store.last_errors
+                    "\n当前最佳候选的校验错误：\n- " + "\n- ".join(selected_errors)
+                    if selected_errors
                     else ""
                 )
             )
@@ -896,6 +898,7 @@ def _is_repairable_report(report: VerificationReport) -> bool:
 
 
 def _plan_failure(store: PlanStore) -> str:
-    if store.last_errors:
-        return "Agent 未能提交有效封装规划：\n- " + "\n- ".join(store.last_errors)
+    errors = store.best_errors or store.last_errors
+    if errors:
+        return "Agent 未能提交有效封装规划：\n- " + "\n- ".join(errors)
     return "Agent 在有限步骤内未调用 save_packaging_plan，已终止任务。"
