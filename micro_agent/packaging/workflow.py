@@ -111,7 +111,7 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
    若工具接收 Base64/ZIP，必须把原始字符串直接传给只读模块 runtime_guardrails.decode_safe_zip（该函数已经完成 Base64 解码和 ZIP 安全校验），再把返回的 BytesIO 交给原算法；禁止自行先 b64decode，也禁止给 guardrail 写 fallback。
 5. 首轮生成可用 write_artifact_file 完整写入 adapters.py、requirements.txt、requirements-cpu.txt、system-packages.txt 和可选测试。
    验收后的定向修复应优先用 patch_artifact_file 对现有文件做精确局部替换，保留已经通过验收的实现；
-   只有目标文件为空，或修改确实涉及文件大部分内容时，才可再次完整写入。
+   只有目标文件当前为空时，才可再次用 write_artifact_file 初始化；非空文件必须用 patch_artifact_file。
    requirements.txt 与 requirements-cpu.txt 只允许合法 PEP 508 包依赖，禁止 URL、VCS、本地路径和 pip 参数；
    torch/torchvision/torchaudio 必须写入 requirements-cpu.txt，以固定 CPU wheel 源安装；system-packages.txt 每行只能是一个 Debian 包名。
    scaffold 已写入 mcp>=1.28.0,<2、starlette>=0.37.0,<2 与 uvicorn[standard]>=0.30.0,<1；
@@ -742,8 +742,9 @@ def _repair_prompt(
     return (
         f"这是第 {attempt} 次定向修复（{failure_phase} 阶段第 {phase_attempt} 次）。"
         "这是执行修复任务，不是分析问答：不得长篇复述报告。下面已经给出全部可写产物的当前快照；"
-        "第一项工具操作必须是 patch_artifact_file（精确局部替换），"
-        "仅当目标文件为空或修改确实覆盖文件大部分内容时才使用 write_artifact_file。"
+        "第一项产物修改必须是 patch_artifact_file（精确局部替换）；"
+        "仅当报告要求初始化快照中明确为空的目标文件时，才可直接以 write_artifact_file 作为"
+        "第一项产物修改。非空文件即使修改涉及大部分内容也必须使用 patch_artifact_file。"
         "完成修改后立即调用 verify_artifact。不得先调用 inspect_repository 或 read_project_file；"
         "只有验收报告明确指向尚未提供的算法源码行、且当前快照无法确定修复时，才可补读该单个源码文件。"
         "独立验收报告如下。"

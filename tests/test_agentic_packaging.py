@@ -1920,7 +1920,8 @@ def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
     assert snapshot["adapters.py"] == "aaaaa\n...(truncated)"
     assert '"requirements.txt": "numpy\\n"' in prompt
     assert sum(len(value) for value in snapshot.values()) <= 40
-    assert "第一项工具操作必须是 patch_artifact_file" in prompt
+    assert "第一项产物修改必须是 patch_artifact_file" in prompt
+    assert "初始化快照中明确为空的目标文件" in prompt
     assert "不得先调用 inspect_repository 或 read_project_file" in prompt
     assert "[runtime] failure" in prompt
 
