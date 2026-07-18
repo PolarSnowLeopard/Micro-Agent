@@ -176,6 +176,20 @@ class ArtifactVerifier:
                 report.errors.append(
                     f"适配函数 {name} 在 except 中返回普通结果，会把执行失败伪装成成功；必须抛出异常"
                 )
+            source_call_names = _source_call_names(
+                trees.get("adapters.py"),
+                set(tool_by_name[name].get("sourceSymbols", [])),
+            ) - set(adapter_functions)
+            if not _calls_source_capability(
+                function,
+                source_call_names,
+                adapter_functions,
+            ):
+                report.errors.append(
+                    f"适配函数 {name} 未调用规划中的任何源码能力 "
+                    f"{tool_by_name[name].get('sourceSymbols', [])}；"
+                    "禁止用另一个库重写算法、返回常量或绕过用户提交实现"
+                )
 
         self._check_source_failure_sentinels(
             report,
@@ -735,6 +749,85 @@ def _import_aliases_for_names(tree: ast.Module | None, names: set[str]) -> set[s
             if alias.name in names:
                 result.add(alias.asname or alias.name)
     return result
+
+
+def _source_call_names(
+    tree: ast.Module | None,
+    source_symbols: set[str],
+) -> set[str]:
+    """Resolve the callable bindings that can invoke reviewed source symbols."""
+
+    if tree is None:
+        return set()
+    by_module: dict[str, set[str]] = {}
+    for symbol in source_symbols:
+        if "." not in symbol:
+            continue
+        module, name = symbol.rsplit(".", 1)
+        by_module.setdefault(module, set()).add(name)
+
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            imported_module = node.module or ""
+            for source_module, source_names in by_module.items():
+                if not (
+                    imported_module == source_module
+                    or imported_module.endswith("." + source_module)
+                ):
+                    continue
+                for alias in node.names:
+                    if alias.name in source_names:
+                        names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                imported_module = alias.name
+                for source_module, source_names in by_module.items():
+                    if (
+                        imported_module == source_module
+                        or imported_module.endswith("." + source_module)
+                    ):
+                        # Calls appear as module.symbol; matching the final
+                        # attribute is sufficient after the module import has
+                        # been tied to the reviewed source module here.
+                        names.update(source_names)
+    return names
+
+
+def _calls_source_capability(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    source_call_names: set[str],
+    adapter_functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: set[str] | None = None,
+) -> bool:
+    if not source_call_names:
+        return False
+    seen = set(visited or ())
+    if function.name in seen:
+        return False
+    seen.add(function.name)
+    helpers: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _call_name(node.func)
+        if not call_name:
+            continue
+        tail = call_name.rsplit(".", 1)[-1]
+        if call_name in source_call_names or tail in source_call_names:
+            return True
+        helper = adapter_functions.get(tail)
+        if helper is not None and helper.name not in seen:
+            helpers.append(helper)
+    return any(
+        _calls_source_capability(
+            helper,
+            source_call_names,
+            adapter_functions,
+            visited=seen,
+        )
+        for helper in helpers
+    )
 
 
 def _reachable_failure_sentinels(

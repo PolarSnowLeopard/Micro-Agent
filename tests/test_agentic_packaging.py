@@ -1295,6 +1295,28 @@ def test_verifier_rejects_unbounded_protocol_dependencies(tmp_path):
     assert any("必须保留平台已验证的 MCP 协议依赖范围" in error for error in report.errors)
 
 
+def test_verifier_rejects_reimplementing_source_with_another_library(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    (artifact / "adapters.py").write_text(
+        "import statistics\n\n"
+        "def predict_risk(value: float) -> dict[str, float]:\n"
+        "    return {'score': float(value)}\n\n"
+        "def evaluate_risk(values: list[float]) -> dict[str, float]:\n"
+        "    return {'mean_score': statistics.mean(values)}\n",
+        encoding="utf-8",
+    )
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert sum("未调用规划中的任何源码能力" in error for error in report.errors) == 2
+    assert any("禁止用另一个库重写算法" in error for error in report.errors)
+
+
 def test_scaffold_splits_cpu_wheels_and_drops_unsafe_source_requirements(tmp_path):
     project = _sample_project(tmp_path)
     (project / "requirements.txt").write_text(
