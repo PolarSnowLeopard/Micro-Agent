@@ -30,6 +30,7 @@ from micro_agent.packaging.runtime_verifier import (
 from micro_agent.packaging.tools import (
     PatchArtifactFile,
     PlanStore,
+    ReadProjectFile,
     SavePackagingPlan,
     SavePackagingPlanJson,
     WriteArtifactFile,
@@ -39,6 +40,8 @@ from micro_agent.packaging.workflow import (
     AgenticAnalysisWorkflow,
     AgenticPackagingWorkflow,
     AnalysisCache,
+    _build_builder_agent,
+    _configure_repair_builder,
     _repair_artifact_snapshot,
     _repair_prompt,
     _run_planner,
@@ -427,6 +430,28 @@ def main_process(operation: str, value: float) -> dict[str, float]:
     )
     assert packaging.max_repairs == 4
     assert packaging.max_runtime_repairs == 6
+
+
+def test_repair_builder_has_bounded_evidence_and_patch_only_tools(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    builder = _build_builder_agent(project, tmp_path / "artifact", plan, ir)
+
+    _configure_repair_builder(builder)
+
+    assert builder.tools.get("inspect_repository") is None
+    assert builder.tools.get("read_project_file").max_reads == 1
+    assert builder.tools.get("write_artifact_file").allow_nonempty_overwrite is False
+
+
+async def test_project_reader_corrects_artifact_prefixed_source_path(tmp_path):
+    project = _sample_project(tmp_path)
+
+    result = await ReadProjectFile(project).execute(path="algorithm/core.py")
+
+    assert result.error
+    assert "请改用 core.py" in result.error
 
 
 def test_non_template_repository_retains_full_public_symbol_audit(tmp_path):

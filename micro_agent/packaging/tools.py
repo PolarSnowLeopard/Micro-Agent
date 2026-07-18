@@ -93,6 +93,14 @@ class ReadProjectFile(Tool):
             )
         path = _contained_path(self.root, str(kwargs.get("path", "")))
         if not path.is_file() or path.is_symlink():
+            requested = str(kwargs.get("path", ""))
+            if requested.startswith("algorithm/"):
+                return ToolResult(
+                    error=(
+                        "read_project_file 的路径相对用户提交根目录，不能带 algorithm/ 前缀；"
+                        f"请改用 {requested.removeprefix('algorithm/')}"
+                    )
+                )
             return ToolResult(error=f"文件不存在或不可读: {kwargs.get('path', '')}")
         start = max(1, int(kwargs.get("start_line", 1)))
         end = max(start, min(start + 999, int(kwargs.get("end_line", 400))))

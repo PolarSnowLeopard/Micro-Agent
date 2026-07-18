@@ -494,7 +494,7 @@ class AgenticPackagingWorkflow:
                 plan,
                 self.ir,
             )
-            _lock_builder_overwrites(builder)
+            _configure_repair_builder(builder)
             self._active_agent = builder
 
         assert report is not None
@@ -623,7 +623,7 @@ def _build_builder_agent(
 ) -> Agent:
     tools = ToolRegistry()
     tools.register(InspectRepository(ir))
-    tools.register(ReadProjectFile(project_dir))
+    tools.register(ReadProjectFile(project_dir, max_reads=12))
     tools.register(ReadArtifactFile(artifact_dir))
     tools.register(WriteArtifactFile(artifact_dir))
     tools.register(PatchArtifactFile(artifact_dir))
@@ -647,6 +647,18 @@ def _lock_builder_overwrites(builder: Agent) -> None:
     writer = tools.get("write_artifact_file") if tools is not None else None
     if isinstance(writer, WriteArtifactFile):
         writer.lock_nonempty_overwrites()
+
+
+def _configure_repair_builder(builder: Agent) -> None:
+    """Give repair turns a narrow patch surface and one evidence escape hatch."""
+    _lock_builder_overwrites(builder)
+    tools = getattr(builder, "tools", None)
+    if tools is None:
+        return
+    tools.unregister("inspect_repository")
+    reader = tools.get("read_project_file")
+    if isinstance(reader, ReadProjectFile):
+        reader.max_reads = 1
 
 
 def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
