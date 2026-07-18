@@ -312,12 +312,14 @@ def schema_variants(tool, base_input):
     variants = []
     properties = tool.get("inputSchema", {{}}).get("properties", {{}})
     for name, schema in properties.items():
-        if name not in base_input or not isinstance(schema, dict):
+        if not isinstance(schema, dict):
             continue
+        present = name in base_input
+        base_value = base_input.get(name)
         direct_values = schema.get("enum")
         if isinstance(direct_values, list):
             for value in direct_values[:3]:
-                if value == base_input[name]:
+                if present and value == base_value:
                     continue
                 case = copy.deepcopy(base_input)
                 case[name] = value
@@ -335,11 +337,36 @@ def schema_variants(tool, base_input):
             minimum = max(1, int(schema.get("minItems", 1)))
             for value in selected:
                 candidate = [value] * minimum
-                if candidate == base_input[name]:
+                if present and candidate == base_value:
                     continue
                 case = copy.deepcopy(base_input)
                 case[name] = candidate
                 variants.append((f"{{name}}[]={{value!r}}", case))
+        expected_type = schema.get("type")
+        if expected_type == "boolean":
+            for value in (False, True):
+                if present and value == base_value:
+                    continue
+                case = copy.deepcopy(base_input)
+                case[name] = value
+                variants.append((f"{{name}}={{value!r}}", case))
+        nullable = (
+            expected_type == "null"
+            or (isinstance(expected_type, list) and "null" in expected_type)
+            or any(
+                isinstance(branch, dict) and branch.get("type") == "null"
+                for keyword in ("anyOf", "oneOf")
+                for branch in (
+                    schema.get(keyword)
+                    if isinstance(schema.get(keyword), list)
+                    else []
+                )
+            )
+        )
+        if nullable and (not present or base_value is not None):
+            case = copy.deepcopy(base_input)
+            case[name] = None
+            variants.append((f"{{name}}=None", case))
     unique = []
     seen = set()
     for label, case in variants:

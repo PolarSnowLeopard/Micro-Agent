@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import base64
@@ -1871,6 +1872,54 @@ def test_runtime_probe_is_valid_python_and_checks_smoke_output_schema():
     assert '"schemaVariantsExecuted": schema_variants_executed' in source
     assert 'schema.get("additionalProperties")' in source
     assert "timeout=17" in source
+
+
+def test_runtime_probe_varies_optional_enum_array_boolean_and_nullable_fields():
+    source = _runtime_probe_source(17)
+    tree = ast.parse(source)
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "schema_variants"
+    )
+    namespace: dict[str, object] = {}
+    executable = ast.Module(
+        body=[
+            ast.Import(names=[ast.alias(name="copy")]),
+            ast.Import(names=[ast.alias(name="json")]),
+            function,
+        ],
+        type_ignores=[],
+    )
+    ast.fix_missing_locations(executable)
+    exec(compile(executable, "<schema-variants>", "exec"), namespace)
+    schema_variants = namespace["schema_variants"]
+    assert callable(schema_variants)
+
+    tool = {
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["fast", "exact"]},
+                "metrics": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["score", "confidence"]},
+                    "minItems": 1,
+                },
+                "normalize": {"type": "boolean"},
+                "threshold": {"type": ["number", "null"]},
+            },
+        }
+    }
+    variants = dict(schema_variants(tool, {}))
+
+    assert variants["mode='fast'"] == {"mode": "fast"}
+    assert variants["mode='exact'"] == {"mode": "exact"}
+    assert variants["metrics[]='score'"] == {"metrics": ["score"]}
+    assert variants["metrics[]='confidence'"] == {"metrics": ["confidence"]}
+    assert variants["normalize=False"] == {"normalize": False}
+    assert variants["normalize=True"] == {"normalize": True}
+    assert variants["threshold=None"] == {"threshold": None}
 
 
 async def test_container_runtime_verifier_preserves_partial_smoke_results(tmp_path):
