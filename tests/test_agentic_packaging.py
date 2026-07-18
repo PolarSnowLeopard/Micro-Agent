@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import base64
 import io
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 from micro_agent.core.schema import AgentEvent
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
+from micro_agent.packaging.interface_quality import assess_interface_quality
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
 from micro_agent.packaging.scaffold import prepare_artifact
 from micro_agent.packaging.runtime_guardrails import decode_safe_zip
@@ -259,6 +262,53 @@ def test_plan_generates_multi_tool_legacy_graph(tmp_path):
         "toolCount": 2,
         "analysisSummary": "仓库提供单条预测与批量评估两种稳定的用户能力。",
     }
+
+
+def test_reference_free_interface_quality_gate_rejects_lossy_contract(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+
+    report = assess_interface_quality(_plan(ir))
+
+    assert not report.passed
+    assert report.metrics["parameterDescriptionCoverage"] == 0
+    assert report.metrics["outputDescriptionCoverage"] == 0
+    assert any("MCP 参数缺少" in error for error in report.errors)
+    assert any("输出字段缺少" in error for error in report.errors)
+
+
+def test_reference_free_interface_quality_gate_accepts_evidence_rich_contract(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    descriptions = {
+        "predict_risk": (
+            "Predict a normalized risk score for one observation when an agent "
+            "needs a bounded value for downstream comparison and decision making."
+        ),
+        "evaluate_risk": (
+            "Evaluate the mean normalized risk across multiple observations when "
+            "an agent needs an aggregate batch assessment instead of one prediction."
+        ),
+    }
+    for tool in raw["services"][0]["tools"]:
+        tool["description"] = descriptions[tool["name"]]
+        for name, schema in tool["inputSchema"]["properties"].items():
+            schema["description"] = f"Validated {name} input documented by the algorithm contract."
+        for name, schema in tool["outputSchema"]["properties"].items():
+            schema["description"] = f"Structured {name} result produced by the algorithm."
+    raw["services"][0]["tools"][0]["inputSchema"]["properties"]["value"].update(
+        {"minimum": 0, "maximum": 1}
+    )
+    raw["services"][0]["tools"][1]["inputSchema"]["properties"]["values"].update(
+        {"minItems": 1}
+    )
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+
+    report = assess_interface_quality(plan)
+
+    assert report.passed, report.to_json()
+    assert report.metrics["parameterDescriptionCoverage"] == 1
+    assert report.metrics["outputDescriptionCoverage"] == 1
+    assert report.metrics["referenceFreeGoE"] >= 0.72
 
 
 def test_plan_rejects_unknown_source_symbol(tmp_path):
@@ -585,6 +635,25 @@ async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path)
     assert "excludedSymbols" not in store.plan.data["services"][0]
 
 
+async def test_save_plan_enforces_reference_free_interface_quality_when_enabled(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(
+        tmp_path / "plan.json",
+        ir.known_symbols,
+        enforce_interface_quality=True,
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=_plan(ir).to_json(indent=None)
+    )
+
+    assert result.error
+    assert "接口质量门禁失败" in result.error
+    assert store.plan is None
+    assert store.interface_quality is not None
+    assert not store.interface_quality.passed
+
+
 async def test_save_plan_json_discards_only_unknown_excluded_symbols(tmp_path):
     """Provider hallucinations in audit-only exclusions must not block a valid plan."""
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
@@ -660,6 +729,58 @@ def test_scaffold_and_verifier_accept_exact_multi_tool_contract(tmp_path):
     assert 'ALGORITHM_DIR / "src"' in loader
     assert "sys.path.append" in loader
     assert "sys.path.insert" not in loader
+
+
+def test_scaffold_preserves_agent_facing_schema_descriptions_and_constraints(
+    tmp_path,
+    monkeypatch,
+):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    predict = raw["services"][0]["tools"][0]
+    predict["description"] = (
+        "Predict a normalized risk score for one observation when an agent needs "
+        "a bounded value for a downstream decision or comparison."
+    )
+    predict["inputSchema"]["properties"]["value"] = {
+        "type": "number",
+        "description": "Observation value to normalize before risk scoring.",
+        "minimum": 0,
+        "maximum": 1,
+        "examples": [0.5],
+    }
+    predict["outputSchema"]["properties"]["score"]["description"] = (
+        "Normalized risk score in the inclusive range from zero to one."
+    )
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+
+    monkeypatch.syspath_prepend(str(artifact))
+    sys.modules.pop("adapters", None)
+    spec = importlib.util.spec_from_file_location(
+        "generated_schema_contract_server",
+        artifact / "server.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tools = {tool.name: tool for tool in module.mcp._tool_manager.list_tools()}
+    generated = tools["predict_risk"]
+
+    value_schema = generated.parameters["properties"]["value"]
+    assert value_schema["description"] == "Observation value to normalize before risk scoring."
+    assert value_schema["minimum"] == 0
+    assert value_schema["maximum"] == 1
+    assert value_schema["examples"] == [0.5]
+    assert generated.output_schema["properties"]["score"]["description"].startswith(
+        "Normalized risk score"
+    )
+    assert "Args:" in generated.description
+    assert "Returns:" in generated.description
+    assert "value: Observation value" in generated.description
+    assert "score (number)" in generated.description
 
 
 def test_verifier_rejects_adapter_sys_path_mutation(tmp_path):

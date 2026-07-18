@@ -39,11 +39,18 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 2. 以用户意图划分 MCP Tool。数据加载、日志、格式转换、私有方法、get_model_info/health 等运维元数据通常不应成为 Tool；一个 Tool 可以编排多个源码符号。任何返回都不得泄露容器内模型路径或临时目录。
 3. services 表示逻辑服务边界。按模型生命周期、共享状态、领域内聚性和部署依赖划分，不得为了增加数量而拆分。
 4. 每个工具必须给出明确 JSON Schema、源码符号、证据、适配/重构策略和依赖关系。禁止把复杂输入一律降级成 JSON 字符串。
+   Tool description 是给跨语言 Agent 使用的协议文本：必须包含至少 12 个英文词（可中英双语），
+   说明能力、适用时机以及它与同服务其他 Tool 的区别；不能只写“执行预测”“处理数据”。
+   inputSchema 每个 property 都必须有基于源码语义的 description；enum/default/format/minimum/maximum
+   只能在源码、测试或文档有依据时填写。outputSchema 必须有整体 description，或为每个稳定顶层字段
+   写 description，明确单位、结构和空值语义；禁止为提高评分编造约束或返回字段。
    MCP 调用者无法访问容器文件系统，public schema 严禁暴露 data_path、save_dir、model_path 等服务端路径；上传、解压、预处理、推理等内部阶段必须组合成端到端用户能力。
    这条限制同样适用于 wsi_dir、feature_dir、labels_csv 等“名称未含 path 但文档语义是文件/目录”的参数。目录输入必须重构为带 contentEncoding=base64 的 ZIP 内容字段，文本表格应重构为 CSV/JSON 内容字段；适配层再安全解压或写入临时目录后调用源码。不得保留原路径参数，也不得要求调用者预先把数据放进容器。
    同一组源码和相同输入输出只能形成一个工具，严禁仅换名字制造重复能力。直接封装单个源码函数时，Schema 必须提供调用它所需的全部必填信息。
    当公开字段被重构/改名或由其他字段派生时，adapterStrategy 必须逐字写出每个源码参数的映射，
    例如 `images_zip -> images_dir`；当分支参数由工具固定时，应写成 `operation='similarity'`，不能只笼统写“解压后调用”。
+   已由 Tool 名称固定的 operation/mode/action 不得继续暴露为用户必填参数；应由 adapterStrategy
+   声明固定值并在适配层注入，避免调用者同时选择工具和重复选择同一分支。
    inputSchema.required 必须覆盖执行所需的用户输入，不能为了绕过校验把源码必填参数标成可选；object 输出声明了 properties 时，outputSchema.required 必须标明稳定返回字段。
    源码函数含 yield/YieldFrom 时是多结果生成器，面向 MCP 的 outputSchema 必须是 array（由适配层收集为可序列化列表），不能伪装成单个 object。
 5. 不得使用隐藏样例答案、文件名特判、伪实现或硬编码返回值。
@@ -58,6 +65,8 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
    若索引声明 templateContract=true，则根目录 main.main_process 是用户提交模板的公共契约和审计边界；底层公开符号是实现证据，不要求逐项写入 excludedSymbols。索引已内嵌完整模板入口和 README 摘要，最多再读取 6 个必要的底层文件。必须阅读 main_process 及其调用的底层代码，并可按其中稳定 operation/工作流分支抽象成多个 Tool；不得因为只有一个契约入口就机械地只生成一个 Tool。
 10. 必须用 save_packaging_plan_json 提交一段无 Markdown fence 的完整严格 JSON。每次调用都是完整替换，不是局部 PATCH；校验失败后外层流程会反馈错误并开启下一轮，仍必须重发包含非空 services 的完整规划，不能只发送修改字段。调用 save_packaging_plan_json 后本轮即结束，无需再调用 terminate。
     顶层结构固定为 {"schemaVersion": ..., "decision": ..., "analysisSummary": ..., "services": [...], "excludedSymbols": [...], "assumptions": [...], "riskNotes": [...]}。
+    提交后还会执行 reference-free 接口质量门禁；它只检查当前仓库证据、描述、真实约束与输出语义，
+    不会提供任何 benchmark GT。门禁错误必须通过改进完整规划解决，不能用虚构描述或无意义默认值绕过。
 """
 
 
@@ -146,6 +155,7 @@ class AgenticAnalysisWorkflow:
             symbol_calls={symbol.qualifiedName: symbol.calls for symbol in ir.symbols},
             symbol_is_generator={symbol.qualifiedName: symbol.isGenerator for symbol in ir.symbols},
             candidate_symbols=planning_candidate_symbols(ir),
+            enforce_interface_quality=True,
         )
         self.agent = _build_planning_agent(self.project_dir, ir, self.plan_store)
 
@@ -236,6 +246,7 @@ class AgenticPackagingWorkflow:
                     symbol.qualifiedName: symbol.isGenerator for symbol in self.ir.symbols
                 },
                 candidate_symbols=planning_candidate_symbols(self.ir),
+                enforce_interface_quality=True,
             )
             planner = _build_planning_agent(self.project_dir, self.ir, plan_store)
             self._active_agent = planner

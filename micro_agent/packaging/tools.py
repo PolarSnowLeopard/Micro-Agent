@@ -14,6 +14,10 @@ from typing import Any
 from packaging.requirements import InvalidRequirement, Requirement
 
 from micro_agent.packaging.analyzer import RepositoryIR
+from micro_agent.packaging.interface_quality import (
+    InterfaceQualityReport,
+    assess_interface_quality,
+)
 from micro_agent.packaging.models import (
     PLAN_JSON_SCHEMA,
     SCHEMA_VERSION,
@@ -106,8 +110,10 @@ class PlanStore:
     symbol_calls: dict[str, list[str]] | None = None
     symbol_is_generator: dict[str, bool] | None = None
     candidate_symbols: set[str] | None = None
+    enforce_interface_quality: bool = False
     plan: PackagingPlan | None = None
     last_errors: list[str] | None = None
+    interface_quality: InterfaceQualityReport | None = None
 
 
 class SavePackagingPlan(Tool):
@@ -153,6 +159,7 @@ class SavePackagingPlan(Tool):
         except PlanValidationError as exc:
             self.store.plan = None
             self.store.last_errors = exc.errors
+            self.store.interface_quality = None
             return ToolResult(
                 error=(
                     "规划校验失败。save_packaging_plan 不是 PATCH；下一次必须重新提交包含 "
@@ -160,6 +167,20 @@ class SavePackagingPlan(Tool):
                     + "\n- ".join(exc.errors)
                 )
             )
+        if self.store.enforce_interface_quality and plan.decision == "package":
+            quality = assess_interface_quality(plan)
+            self.store.interface_quality = quality
+            if not quality.passed:
+                self.store.plan = None
+                self.store.last_errors = quality.errors
+                return ToolResult(
+                    error=(
+                        "Agent-facing MCP 接口质量门禁失败。不得删除工具或编造约束；"
+                        "必须依据仓库证据补齐描述、真实约束与输出语义后，"
+                        "重新提交完整规划:\n- "
+                        + "\n- ".join(quality.errors)
+                    )
+                )
         self.store.path.parent.mkdir(parents=True, exist_ok=True)
         self.store.path.write_text(plan.to_json() + "\n", encoding="utf-8")
         self.store.plan = plan
@@ -168,6 +189,11 @@ class SavePackagingPlan(Tool):
             output=(
                 f"规划已保存：decision={plan.decision}, "
                 f"services={len(plan.data.get('services', []))}, tools={len(plan.tools)}"
+                + (
+                    f", interfaceGoE={self.store.interface_quality.metrics['referenceFreeGoE']}"
+                    if self.store.interface_quality is not None
+                    else ""
+                )
             )
         )
 

@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import keyword
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -219,19 +220,8 @@ def _render_server(plan: PackagingPlan) -> str:
     variants such as ``from mcp import mcp``.
     """
     service_name = plan.data["services"][0]["name"]
-    lines = [
-        '"""Generated MCP protocol boundary; semantic adapters live in adapters.py."""',
-        "",
-        "from typing import Any",
-        "",
-        "import uvicorn",
-        "from mcp.server.fastmcp import FastMCP",
-        "",
-        "import adapters",
-        "",
-        f"mcp = FastMCP({service_name!r}, host=\"0.0.0.0\", port=8000, sse_path=\"/sse\", message_path=\"/messages/\")",
-        "",
-    ]
+    type_renderer = _SchemaTypeRenderer()
+    rendered_tools = []
     for tool in plan.tools:
         properties = tool["inputSchema"].get("properties", {})
         required = set(tool["inputSchema"].get("required", []))
@@ -244,17 +234,61 @@ def _render_server(plan: PackagingPlan) -> str:
         for name in ordered_names:
             if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
                 raise ValueError(f"工具 {tool['name']} 包含非法 Python 参数名: {name}")
-            annotation = _python_type(properties[name])
-            default = "" if name in required else " = None"
-            if name not in required:
-                annotation = f"{annotation} | None"
+            schema = properties[name] if isinstance(properties[name], dict) else {}
+            annotation = type_renderer.annotation(
+                schema,
+                suggested_name=f"{tool['name']}_{name}_input",
+            )
+            annotation = _annotated_field(annotation, schema)
+            if name in required:
+                default = ""
+            else:
+                default_value = schema.get("default")
+                if default_value is None and not _schema_allows_null(schema):
+                    annotation = f"{annotation} | None"
+                default = f" = {default_value!r}"
             params.append(f"{name}: {annotation}{default}")
-        return_type = _python_type(tool["outputSchema"])
+        return_type = type_renderer.annotation(
+            tool["outputSchema"],
+            suggested_name=f"{tool['name']}_output",
+            model_objects=True,
+        )
+        rendered_tools.append(
+            {
+                "tool": tool,
+                "ordered_names": ordered_names,
+                "params": params,
+                "return_type": return_type,
+            }
+        )
+
+    lines = [
+        '"""Generated MCP protocol boundary; semantic adapters live in adapters.py."""',
+        "",
+        "from typing import Annotated, Any, Literal",
+        "from typing_extensions import NotRequired, Required, TypedDict",
+        "",
+        "from pydantic import Field, create_model",
+        "",
+        "import uvicorn",
+        "from mcp.server.fastmcp import FastMCP",
+        "",
+        "import adapters",
+        "",
+        f"mcp = FastMCP({service_name!r}, host=\"0.0.0.0\", port=8000, sse_path=\"/sse\", message_path=\"/messages/\")",
+        "",
+    ]
+    if type_renderer.definitions:
+        lines.extend(type_renderer.definitions)
+        lines.append("")
+    for rendered in rendered_tools:
+        tool = rendered["tool"]
+        ordered_names = rendered["ordered_names"]
         lines.extend(
             [
                 "@mcp.tool()",
-                f"def {tool['name']}({', '.join(params)}) -> {return_type}:",
-                f"    {json.dumps(tool['description'], ensure_ascii=False)}",
+                f"def {tool['name']}({', '.join(rendered['params'])}) -> {rendered['return_type']}:",
+                f"    {_render_tool_docstring(tool)!r}",
                 f"    return adapters.{tool['name']}({', '.join(f'{name}={name}' for name in ordered_names)})",
                 "",
             ]
@@ -269,6 +303,289 @@ def _render_server(plan: PackagingPlan) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+@dataclass
+class _SchemaTypeRenderer:
+    """Render JSON Schema as Python annotations FastMCP can publish unchanged."""
+
+    definitions: list[str] = field(default_factory=list)
+    _defined_names: set[str] = field(default_factory=set)
+
+    def annotation(
+        self,
+        schema: Any,
+        *,
+        suggested_name: str,
+        model_objects: bool = False,
+    ) -> str:
+        if not isinstance(schema, dict):
+            return "Any"
+        variants = schema.get("oneOf") or schema.get("anyOf")
+        if isinstance(variants, list) and variants:
+            rendered = [
+                self.annotation(
+                    item,
+                    suggested_name=f"{suggested_name}_{index + 1}",
+                    model_objects=model_objects,
+                )
+                for index, item in enumerate(variants)
+            ]
+            return " | ".join(dict.fromkeys(rendered))
+        enum = schema.get("enum")
+        if isinstance(enum, list) and enum and all(_literal_compatible(item) for item in enum):
+            return f"Literal[{', '.join(repr(item) for item in enum)}]"
+        if "const" in schema and _literal_compatible(schema["const"]):
+            return f"Literal[{schema['const']!r}]"
+
+        type_name = schema.get("type")
+        if isinstance(type_name, list):
+            rendered = [
+                "None" if item == "null" else self.annotation(
+                    {**schema, "type": item},
+                    suggested_name=suggested_name,
+                    model_objects=model_objects,
+                )
+                for item in type_name
+            ]
+            return " | ".join(dict.fromkeys(rendered))
+        if type_name == "string":
+            return "str"
+        if type_name == "integer":
+            return "int"
+        if type_name == "number":
+            return "float"
+        if type_name == "boolean":
+            return "bool"
+        if type_name == "array":
+            return (
+                "list["
+                + self.annotation(
+                    schema.get("items", {}),
+                    suggested_name=f"{suggested_name}_item",
+                    model_objects=model_objects,
+                )
+                + "]"
+            )
+        if type_name == "object":
+            properties = schema.get("properties")
+            if isinstance(properties, dict) and properties:
+                if model_objects:
+                    return self._pydantic_model(schema, suggested_name)
+                return self._typed_dict(schema, suggested_name)
+            additional = schema.get("additionalProperties")
+            value_type = (
+                self.annotation(
+                    additional,
+                    suggested_name=f"{suggested_name}_value",
+                    model_objects=model_objects,
+                )
+                if isinstance(additional, dict)
+                else "Any"
+            )
+            return f"dict[str, {value_type}]"
+        if type_name == "null":
+            return "None"
+        return "Any"
+
+    def _typed_dict(self, schema: dict[str, Any], suggested_name: str) -> str:
+        name = _python_type_name(suggested_name)
+        candidate = name
+        suffix = 2
+        while candidate in self._defined_names:
+            candidate = f"{name}{suffix}"
+            suffix += 1
+        name = candidate
+        self._defined_names.add(name)
+
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        entries: list[str] = []
+        for property_name, raw_child in properties.items():
+            child = raw_child if isinstance(raw_child, dict) else {}
+            annotation = self.annotation(
+                child,
+                suggested_name=f"{name}_{property_name}",
+            )
+            wrapper = "Required" if property_name in required else "NotRequired"
+            wrapped = f"{wrapper}[{annotation}]"
+            wrapped = _annotated_field(wrapped, child)
+            entries.append(f"{property_name!r}: {wrapped}")
+        self.definitions.append(
+            f"{name} = TypedDict({name!r}, {{{', '.join(entries)}}})"
+        )
+        return name
+
+    def _pydantic_model(self, schema: dict[str, Any], suggested_name: str) -> str:
+        name = self._unique_name(suggested_name)
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        entries: list[str] = []
+        for property_name, raw_child in properties.items():
+            child = raw_child if isinstance(raw_child, dict) else {}
+            annotation = self.annotation(
+                child,
+                suggested_name=f"{name}_{property_name}",
+                model_objects=True,
+            )
+            annotation = _annotated_field(annotation, child)
+            if property_name in required:
+                default = "..."
+            else:
+                default = repr(child.get("default"))
+            entries.append(f"{property_name!r}: ({annotation}, {default})")
+        self.definitions.append(
+            f"{name} = create_model({name!r}, **{{{', '.join(entries)}}})"
+        )
+        return name
+
+    def _unique_name(self, suggested_name: str) -> str:
+        name = _python_type_name(suggested_name)
+        candidate = name
+        suffix = 2
+        while candidate in self._defined_names:
+            candidate = f"{name}{suffix}"
+            suffix += 1
+        self._defined_names.add(candidate)
+        return candidate
+
+
+def _annotated_field(annotation: str, schema: dict[str, Any]) -> str:
+    arguments: list[str] = []
+    description = schema.get("description")
+    if isinstance(description, str) and description.strip():
+        arguments.append(f"description={description.strip()!r}")
+    title = schema.get("title")
+    if isinstance(title, str) and title.strip():
+        arguments.append(f"title={title.strip()!r}")
+
+    mappings = {
+        "minimum": "ge",
+        "maximum": "le",
+        "exclusiveMinimum": "gt",
+        "exclusiveMaximum": "lt",
+        "multipleOf": "multiple_of",
+        "minLength": "min_length",
+        "maxLength": "max_length",
+        "minItems": "min_length",
+        "maxItems": "max_length",
+        "pattern": "pattern",
+    }
+    for schema_name, field_name in mappings.items():
+        value = schema.get(schema_name)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            arguments.append(f"{field_name}={value!r}")
+    examples = schema.get("examples")
+    if isinstance(examples, list) and examples:
+        arguments.append(f"examples={examples!r}")
+
+    extras = {
+        key: schema[key]
+        for key in ("format", "contentEncoding", "contentMediaType")
+        if key in schema
+    }
+    if extras:
+        arguments.append(f"json_schema_extra={extras!r}")
+    if not arguments:
+        return annotation
+    return f"Annotated[{annotation}, Field({', '.join(arguments)})]"
+
+
+def _render_tool_docstring(tool: dict[str, Any]) -> str:
+    description = str(tool.get("description", "")).strip()
+    lines = [description]
+    properties = tool.get("inputSchema", {}).get("properties", {})
+    if isinstance(properties, dict) and properties:
+        lines.extend(["", "Args:"])
+        required = set(tool.get("inputSchema", {}).get("required", []))
+        for name, raw_schema in properties.items():
+            schema = raw_schema if isinstance(raw_schema, dict) else {}
+            detail = str(schema.get("description") or f"Input value for {name}.").strip()
+            constraints = _describe_constraints(schema, required=name in required)
+            if constraints:
+                detail = f"{detail} {constraints}"
+            lines.append(f"    {name}: {detail}")
+
+    lines.extend(["", "Returns:", f"    {_describe_output(tool.get('outputSchema'))}"])
+    lines.extend(
+        [
+            "",
+            "Raises:",
+            "    ValueError: If an input is invalid or the underlying algorithm cannot produce a valid result.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _describe_constraints(schema: dict[str, Any], *, required: bool) -> str:
+    details = ["Required." if required else "Optional."]
+    if "default" in schema:
+        details.append(f"Default: {schema['default']!r}.")
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        details.append(f"Allowed values: {', '.join(repr(item) for item in enum)}.")
+    if "minimum" in schema:
+        details.append(f"Minimum: {schema['minimum']!r}.")
+    if "maximum" in schema:
+        details.append(f"Maximum: {schema['maximum']!r}.")
+    if "exclusiveMinimum" in schema:
+        details.append(f"Must be greater than {schema['exclusiveMinimum']!r}.")
+    if "exclusiveMaximum" in schema:
+        details.append(f"Must be less than {schema['exclusiveMaximum']!r}.")
+    if "pattern" in schema:
+        details.append(f"Must match pattern {schema['pattern']!r}.")
+    if "format" in schema:
+        details.append(f"Format: {schema['format']}.")
+    if "contentEncoding" in schema:
+        details.append(f"Content encoding: {schema['contentEncoding']}.")
+    return " ".join(details)
+
+
+def _describe_output(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return "A JSON-compatible result produced by the underlying algorithm."
+    description = schema.get("description")
+    if isinstance(description, str) and description.strip():
+        return description.strip()
+    type_name = schema.get("type")
+    properties = schema.get("properties")
+    if type_name == "object" and isinstance(properties, dict) and properties:
+        fields = []
+        for name, raw_child in properties.items():
+            child = raw_child if isinstance(raw_child, dict) else {}
+            child_type = child.get("type", "value")
+            child_description = str(child.get("description", "")).strip()
+            rendered = f"{name} ({child_type})"
+            if child_description:
+                rendered += f": {child_description}"
+            fields.append(rendered)
+        return "A structured JSON object with fields: " + "; ".join(fields) + "."
+    if type_name == "array":
+        return "A structured JSON array containing the algorithm results."
+    return f"A JSON-compatible {type_name or 'result'} produced by the underlying algorithm."
+
+
+def _schema_allows_null(schema: dict[str, Any]) -> bool:
+    type_name = schema.get("type")
+    if isinstance(type_name, list) and "null" in type_name:
+        return True
+    variants = schema.get("oneOf") or schema.get("anyOf")
+    return bool(
+        isinstance(variants, list)
+        and any(isinstance(item, dict) and item.get("type") == "null" for item in variants)
+    )
+
+
+def _literal_compatible(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, bool))
+
+
+def _python_type_name(value: str) -> str:
+    parts = re.findall(r"[A-Za-z0-9]+", value)
+    rendered = "".join(part[:1].upper() + part[1:] for part in parts) or "GeneratedSchema"
+    if rendered[0].isdigit():
+        rendered = "Schema" + rendered
+    return rendered
 
 
 def _python_type(schema: Any) -> str:
