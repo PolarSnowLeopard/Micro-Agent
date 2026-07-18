@@ -59,6 +59,9 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
    若源码入口返回通用 `success/operation/result/error` 分派信封，公共 Tool 的 outputSchema 必须
    对每个能力单独重构：解包 result，使用有领域含义的字段，移除由 Tool 身份固定的 operation，
    且不暴露 success/error 控制字段；失败应成为 MCP error，而不是成功 payload。
+   若 props/fields/metrics 等数组参数决定返回哪些键，未被选择的键就不是稳定返回字段，不能放进
+   outputSchema.required；应将它们声明为可省略字段，或使用 additionalProperties 描述领域映射。
+   smokeTest 选择的返回键必须与 outputSchema.required 一致，禁止让实现层额外计算或伪造未请求字段。
    源码函数含 yield/YieldFrom 时是多结果生成器，面向 MCP 的 outputSchema 必须是 array（由适配层收集为可序列化列表），不能伪装成单个 object。
 5. 不得使用隐藏样例答案、文件名特判、伪实现或硬编码返回值。
 6. 如果仓库没有可调用算法、源码无法解析、关键实现/依赖/模型资产缺失，decision=reject 并给出可操作原因。

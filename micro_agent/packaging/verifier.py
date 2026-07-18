@@ -533,6 +533,13 @@ def _guards_failure_return_from_calls(
         if raises and tested_names & risky_results:
             return True
     if adapter_functions:
+        if _guards_tainted_parameters(
+            function,
+            risky_results,
+            adapter_functions=adapter_functions,
+            visited=visited,
+        ):
+            return True
         seen = set(visited or ())
         if function.name in seen:
             return False
@@ -573,6 +580,65 @@ def _guards_failure_return_from_calls(
                 visited=seen,
             ):
                 return True
+    return False
+
+
+def _guards_tainted_parameters(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    tainted_names: set[str],
+    *,
+    adapter_functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    visited: set[str] | None = None,
+) -> bool:
+    if not tainted_names:
+        return False
+    if _raises_from_tested_parameters(function, tainted_names):
+        return True
+    seen = set(visited or ())
+    if function.name in seen:
+        return False
+    seen.add(function.name)
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _call_name(node.func)
+        if not call_name:
+            continue
+        helper = adapter_functions.get(call_name.rsplit(".", 1)[-1])
+        if helper is None or helper.name in seen:
+            continue
+        positional_parameters = [
+            *helper.args.posonlyargs,
+            *helper.args.args,
+        ]
+        mapped = {
+            parameter.arg
+            for argument, parameter in zip(node.args, positional_parameters)
+            if any(
+                isinstance(child, ast.Name) and child.id in tainted_names
+                for child in ast.walk(argument)
+            )
+        }
+        parameter_by_name = {
+            parameter.arg: parameter
+            for parameter in [*positional_parameters, *helper.args.kwonlyargs]
+        }
+        mapped.update(
+            keyword.arg
+            for keyword in node.keywords
+            if keyword.arg in parameter_by_name
+            and any(
+                isinstance(child, ast.Name) and child.id in tainted_names
+                for child in ast.walk(keyword.value)
+            )
+        )
+        if mapped and _guards_tainted_parameters(
+            helper,
+            mapped,
+            adapter_functions=adapter_functions,
+            visited=seen,
+        ):
+            return True
     return False
 
 

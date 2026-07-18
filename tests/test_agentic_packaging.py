@@ -528,6 +528,50 @@ def test_reference_free_interface_quality_gate_rejects_dispatcher_envelopes(tmp_
     assert any("控制信封" in error and "predict_risk" in error for error in report.errors)
 
 
+def test_reference_free_interface_quality_gate_rejects_required_selector_outputs(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    tool = raw["services"][0]["tools"][0]
+    tool["description"] = (
+        "Calculate selected risk metrics for an observation when a caller needs "
+        "a configurable subset of interpretable scoring outputs."
+    )
+    tool["inputSchema"] = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "number",
+                "description": "Observation value accepted by the metric calculator.",
+            },
+            "metrics": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["score", "confidence"]},
+                "description": "Metric names to calculate and return.",
+                "default": ["score"],
+            },
+        },
+        "required": ["value"],
+    }
+    tool["outputSchema"] = {
+        "type": "object",
+        "description": "Mapping of requested metric names to numeric values.",
+        "properties": {
+            "score": {"type": "number", "description": "Normalized risk score."},
+            "confidence": {"type": "number", "description": "Score confidence."},
+        },
+        "required": ["score", "confidence"],
+    }
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+
+    report = assess_interface_quality(plan)
+
+    assert not report.passed
+    assert any(
+        "metrics" in error and "条件字段声明为必返" in error
+        for error in report.errors
+    )
+
+
 def test_plan_rejects_unknown_source_symbol(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()
@@ -1303,6 +1347,28 @@ def test_verifier_requires_guard_on_source_failure_sentinel(tmp_path):
     helper_report = ArtifactVerifier(artifact, plan).verify()
 
     assert helper_report.passed, helper_report.to_json()
+
+    guarded_by_transitive_result_helper = unguarded.replace(
+        "    return algorithm_predict(float(value))",
+        "    result = algorithm_predict(float(value))\n"
+        "    return _unwrap_result(result)",
+    )
+    guarded_by_transitive_result_helper += (
+        "\n\ndef _unwrap_result(result: dict) -> dict:\n"
+        "    _raise_on_failure(result)\n"
+        "    return result\n"
+        "\n\ndef _raise_on_failure(result: dict) -> None:\n"
+        '    if result.get("success") is False:\n'
+        '        raise RuntimeError(result.get("error", "algorithm failed"))\n'
+    )
+    (artifact / "adapters.py").write_text(
+        guarded_by_transitive_result_helper,
+        encoding="utf-8",
+    )
+
+    transitive_helper_report = ArtifactVerifier(artifact, plan).verify()
+
+    assert transitive_helper_report.passed, transitive_helper_report.to_json()
 
     guarded_by_helper = unguarded.replace(
         "    return algorithm_predict(float(value))",

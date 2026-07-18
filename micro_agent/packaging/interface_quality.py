@@ -145,6 +145,8 @@ def assess_interface_quality(
             + "；MCP Tool 必须只返回该能力的领域成功结果，解包 result、移除固定 operation，"
             "并把失败转换成 MCP error"
         )
+    selector_contract_errors = _selector_output_contract_errors(tools)
+    errors.extend(selector_contract_errors)
 
     if goe < min_goe:
         errors.append(
@@ -242,6 +244,39 @@ def _dispatcher_envelope_tools(tools: list[dict[str, Any]]) -> list[str]:
         if has_status_envelope or has_dispatch_envelope:
             offenders.append(str(tool.get("name", "<unnamed>")))
     return offenders
+
+
+def _selector_output_contract_errors(tools: list[dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    for tool in tools:
+        input_schema = tool.get("inputSchema")
+        output_schema = tool.get("outputSchema")
+        if not isinstance(input_schema, dict) or not isinstance(output_schema, dict):
+            continue
+        input_properties = input_schema.get("properties")
+        output_properties = output_schema.get("properties")
+        if not isinstance(input_properties, dict) or not isinstance(output_properties, dict):
+            continue
+        output_required = set(output_schema.get("required", []))
+        for selector_name, raw_selector in input_properties.items():
+            selector = raw_selector if isinstance(raw_selector, dict) else {}
+            items = selector.get("items")
+            choices = items.get("enum") if isinstance(items, dict) else None
+            if selector.get("type") != "array" or not isinstance(choices, list):
+                continue
+            string_choices = {choice for choice in choices if isinstance(choice, str)}
+            controlled_fields = string_choices & set(output_properties)
+            unstable_required = sorted(controlled_fields & output_required)
+            if not unstable_required:
+                continue
+            errors.append(
+                "[interface_quality] "
+                f"{tool['name']}.{selector_name} 可选择返回字段，但 outputSchema.required "
+                f"仍把这些条件字段声明为必返: {', '.join(unstable_required)}；"
+                "请将选择性字段设为非 required，或改为带 additionalProperties 的领域映射，"
+                "不能要求适配器伪造未请求结果"
+            )
+    return errors
 
 
 __all__ = ["InterfaceQualityReport", "assess_interface_quality"]
