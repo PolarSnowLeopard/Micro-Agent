@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import ast
+import configparser
 import json
+import keyword
 import re
 import shutil
-import keyword
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 from micro_agent.packaging.models import PackagingPlan
 
@@ -40,7 +44,13 @@ def prepare_artifact(project_dir: str | Path, artifact_dir: str | Path, plan: Pa
     _copy_project(source_root, algorithm_root)
     (algorithm_root / "__init__.py").touch(exist_ok=True)
 
-    source_requirements = _read_requirements(source_root)
+    source_owned_distributions = _source_owned_distributions(source_root)
+    source_requirements = [
+        requirement
+        for requirement in _read_requirements(source_root)
+        if canonicalize_name(_requirement_name(requirement))
+        not in source_owned_distributions
+    ]
     cpu_requirements = [
         requirement
         for requirement in source_requirements
@@ -182,6 +192,104 @@ def _read_requirements(root: Path) -> list[str]:
             continue
         requirements.append(line)
     return requirements
+
+
+def _source_owned_distributions(root: Path) -> set[str]:
+    """Find pure-Python distributions that should run from the submitted source.
+
+    Installing a second PyPI copy of the repository can silently replace the
+    reviewed code with a different release. Compiled projects remain declared
+    because their checked-out Python wrappers may require wheel-provided native
+    extensions.
+    """
+    if _uses_compiled_build(root):
+        return set()
+    owned: set[str] = set()
+    for name in _declared_project_names(root):
+        import_name = name.replace("-", "_").replace(".", "_")
+        if any(
+            (root / prefix / import_name / "__init__.py").is_file()
+            for prefix in (Path(), Path("src"), Path("python"), Path("lib"))
+        ):
+            owned.add(canonicalize_name(name))
+    return owned
+
+
+def _declared_project_names(root: Path) -> set[str]:
+    names: set[str] = set()
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            value = tomllib.loads(
+                pyproject.read_text(encoding="utf-8", errors="replace")
+            ).get("project", {}).get("name")
+            if isinstance(value, str) and value.strip():
+                names.add(value.strip())
+        except (OSError, tomllib.TOMLDecodeError):
+            pass
+
+    setup_cfg = root / "setup.cfg"
+    if setup_cfg.is_file():
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(setup_cfg, encoding="utf-8")
+            value = parser.get("metadata", "name", fallback="").strip()
+            if value:
+                names.add(value)
+        except (OSError, configparser.Error):
+            pass
+
+    setup_py = root / "setup.py"
+    if setup_py.is_file():
+        try:
+            tree = ast.parse(setup_py.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError):
+            tree = None
+        if tree is not None:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if not (
+                    (isinstance(node.func, ast.Name) and node.func.id == "setup")
+                    or (
+                        isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "setup"
+                    )
+                ):
+                    continue
+                for keyword_arg in node.keywords:
+                    if (
+                        keyword_arg.arg == "name"
+                        and isinstance(keyword_arg.value, ast.Constant)
+                        and isinstance(keyword_arg.value.value, str)
+                    ):
+                        names.add(keyword_arg.value.value.strip())
+    return {name for name in names if name}
+
+
+def _uses_compiled_build(root: Path) -> bool:
+    markers = (
+        "ext_modules",
+        "Extension(",
+        "cythonize(",
+        "RustExtension",
+        "CMakeExtension",
+        "maturin",
+        "mesonpy",
+        "scikit_build",
+        "setuptools_rust",
+    )
+    for name in ("setup.py", "setup.cfg", "pyproject.toml"):
+        path = root / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if any(marker.lower() in text.lower() for marker in markers):
+            return True
+    return False
 
 
 def _merge_requirements(original: list[str], required: list[str]) -> list[str]:

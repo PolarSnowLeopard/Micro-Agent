@@ -1343,6 +1343,50 @@ def test_scaffold_splits_cpu_wheels_and_drops_unsafe_source_requirements(tmp_pat
     assert "../local-package" not in general + cpu
 
 
+def test_scaffold_uses_reviewed_pure_python_source_instead_of_pypi_copy(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "risk-model"\nversion = "1.0.0"\n',
+        encoding="utf-8",
+    )
+    package = project / "risk_model"
+    package.mkdir()
+    (package / "__init__.py").write_text("VALUE = 'submitted-source'\n", encoding="utf-8")
+    (project / "requirements.txt").write_text(
+        "risk-model>=9\nnumpy>=1.26\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    artifact = prepare_artifact(project, tmp_path / "artifact", _plan(ir))
+
+    requirements = (artifact / "requirements.txt").read_text(encoding="utf-8")
+    assert "risk-model" not in requirements
+    assert "numpy>=1.26" in requirements
+
+
+def test_scaffold_keeps_wheel_dependency_for_compiled_source_wrapper(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "risk-model"\nversion = "1.0.0"\n',
+        encoding="utf-8",
+    )
+    package = project / "risk_model"
+    package.mkdir()
+    (package / "__init__.py").write_text("VALUE = 'python-wrapper'\n", encoding="utf-8")
+    (project / "setup.py").write_text(
+        "from setuptools import Extension, setup\n"
+        "setup(name='risk-model', ext_modules=[Extension('risk_model._core', ['core.c'])])\n",
+        encoding="utf-8",
+    )
+    (project / "requirements.txt").write_text("risk-model>=1\n", encoding="utf-8")
+    ir = RepositoryAnalyzer().analyze(project)
+
+    artifact = prepare_artifact(project, tmp_path / "artifact", _plan(ir))
+
+    assert "risk-model>=1" in (artifact / "requirements.txt").read_text(encoding="utf-8")
+
+
 def test_dependency_inspector_follows_local_import_chain_once(tmp_path):
     algorithm = tmp_path / "algorithm"
     package = algorithm / "src" / "localpkg"
