@@ -11,10 +11,12 @@ from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer, RepositoryIR
 from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
+from micro_agent.packaging.scaffold import _source_owned_distributions
 
 
 REQUIRED_FILES = {
@@ -234,7 +236,17 @@ class ArtifactVerifier:
                 requirement = Requirement(line)
             except InvalidRequirement:
                 continue
-            parsed[requirement.name.lower().replace("_", "-")] = requirement
+            parsed[canonicalize_name(requirement.name)] = requirement
+        source_owned = _source_owned_distributions(self.root / "algorithm")
+        report.checks["sourceOwnedDistributions"] = sorted(source_owned)
+        shadowing = sorted(source_owned & set(parsed))
+        if shadowing:
+            report.errors.append(
+                "requirements.txt 不得重新安装由提交仓库提供的纯 Python 包，"
+                "否则 site-packages 会覆盖已审核源码: "
+                + ", ".join(shadowing)
+                + "；请保留其 install_requires 依赖，但移除同名项目自身"
+            )
         missing = [name for name in PROTOCOL_REQUIREMENTS if name not in parsed]
         if missing:
             report.errors.append(f"requirements.txt 缺少运行依赖: {', '.join(missing)}")

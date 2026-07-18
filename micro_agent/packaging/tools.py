@@ -459,6 +459,10 @@ def _independent_smoke_evidence_errors(
         if evidence_root is None:
             continue
         corpus = _read_smoke_evidence_corpus(evidence_root, cited_files)
+        suggestion_corpus = corpus + "\n" + _read_smoke_evidence_corpus(
+            evidence_root,
+            _smoke_candidate_files(independent_files),
+        )
         ungrounded = _ungrounded_smoke_strings(
             smoke.get("input", {}),
             tool.get("inputSchema", {}),
@@ -467,7 +471,7 @@ def _independent_smoke_evidence_errors(
         if ungrounded:
             rendered = ", ".join(repr(value[:120]) for value in ungrounded[:5])
             suggestions = {
-                value: _smoke_string_candidates(corpus, value)
+                value: _smoke_string_candidates(suggestion_corpus, value)
                 for value in ungrounded[:5]
             }
             rendered_suggestions = "; ".join(
@@ -480,13 +484,32 @@ def _independent_smoke_evidence_errors(
                 f"doctest/示例中出现的自由文本值: {rendered}；"
                 "必须改用被引用文件中的真实可执行 fixture，不能依据模板注释编造"
                 + (
-                    "；所引文件中的接近字符串候选（仍须核对调用上下文）: "
+                    "；仓库测试/doctest/示例中的接近字符串候选"
+                    "（使用时必须同步更新 evidence 并核对调用上下文）: "
                     + rendered_suggestions
                     if rendered_suggestions
                     else ""
                 )
             )
     return errors
+
+
+def _smoke_candidate_files(paths: set[str]) -> set[str]:
+    candidates: set[str] = set()
+    for path in paths:
+        lowered = path.lower()
+        parts = Path(lowered).parts
+        if Path(lowered).suffix not in {".py", ".md", ".rst", ".ipynb"}:
+            continue
+        if (
+            Path(lowered).name.startswith("test")
+            or any(
+                part in {"test", "tests", "example", "examples", "demo", "demos", "docs"}
+                for part in parts
+            )
+        ):
+            candidates.add(path)
+    return candidates
 
 
 def _read_smoke_evidence_corpus(root: Path, paths: set[str]) -> str:

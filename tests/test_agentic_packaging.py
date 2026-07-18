@@ -1224,7 +1224,7 @@ async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_
     predict_tool = raw["services"][0]["tools"][0]
     predict_tool["inputSchema"]["properties"]["scenario"] = {"type": "string"}
     predict_tool["smokeTest"]["input"]["scenario"] = "invented placeholder"
-    predict_tool["smokeTest"]["evidence"] = ["examples/fixture.py:1"]
+    predict_tool["smokeTest"]["evidence"] = ["README.md:1"]
 
     rejected_store = PlanStore(
         tmp_path / "rejected-plan.json",
@@ -1241,9 +1241,10 @@ async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_
     assert "未在所引测试/doctest/示例中出现" in rejected.error
     assert "invented placeholder" in rejected.error
     assert "documented risk fixture" in rejected.error
-    assert "仍须核对调用上下文" in rejected.error
+    assert "同步更新 evidence" in rejected.error
 
     predict_tool["smokeTest"]["input"]["scenario"] = "documented risk fixture"
+    predict_tool["smokeTest"]["evidence"] = ["examples/fixture.py:1"]
     accepted_store = PlanStore(
         tmp_path / "accepted-plan.json",
         ir.known_symbols,
@@ -1673,6 +1674,35 @@ def test_scaffold_preserves_pure_python_project_install_dependencies(tmp_path):
     assert "pyodesys>=0.14.5" in requirements
     assert "pyodesys<0.12" not in requirements
     assert "example.test" not in requirements
+
+
+def test_verifier_rejects_wheel_shadowing_of_reviewed_pure_python_source(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "risk-model"\nversion = "1.0.0"\n',
+        encoding="utf-8",
+    )
+    package = project / "risk_model"
+    package.mkdir()
+    (package / "__init__.py").write_text("VALUE = 'submitted-source'\n", encoding="utf-8")
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+    requirements = artifact / "requirements.txt"
+    requirements.write_text(
+        requirements.read_text(encoding="utf-8") + "risk-model>=9\n",
+        encoding="utf-8",
+    )
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert report.checks["sourceOwnedDistributions"] == ["risk-model"]
+    assert any(
+        "site-packages 会覆盖已审核源码" in error and "risk-model" in error
+        for error in report.errors
+    )
 
 
 def test_scaffold_reads_static_pyproject_and_setup_cfg_dependencies(tmp_path):
