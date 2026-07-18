@@ -1852,6 +1852,25 @@ async def test_artifact_patcher_requires_one_exact_safe_match(tmp_path):
     assert "不允许" in immutable.error
 
 
+async def test_artifact_writer_requires_patches_after_initial_generation(tmp_path):
+    writer = WriteArtifactFile(tmp_path)
+    first = await writer.execute(path="adapters.py", content="value = 1\n")
+    assert not first.error
+
+    writer.lock_nonempty_overwrites()
+    overwrite = await writer.execute(path="adapters.py", content="value = 2\n")
+    initialize_empty = await writer.execute(
+        path="system-packages.txt",
+        content="libgomp1\n",
+    )
+
+    assert overwrite.error
+    assert "patch_artifact_file" in overwrite.error
+    assert not initialize_empty.error
+    assert (tmp_path / "adapters.py").read_text(encoding="utf-8") == "value = 1\n"
+    assert (tmp_path / "system-packages.txt").read_text(encoding="utf-8") == "libgomp1\n"
+
+
 def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
     (tmp_path / "adapters.py").write_text("a" * 30, encoding="utf-8")
     (tmp_path / "requirements.txt").write_text("numpy\n", encoding="utf-8")

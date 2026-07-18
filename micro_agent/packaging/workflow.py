@@ -331,6 +331,7 @@ class AgenticPackagingWorkflow:
         runtime_repairs = 0
         total_repairs = 0
         prompt = _builder_prompt(plan, self.ir)
+        initial_generation_complete = False
         while True:
             async for event in builder.run(prompt):
                 if event.type == "done":
@@ -338,6 +339,9 @@ class AgenticPackagingWorkflow:
                 forwarded = AgentEvent(type=event.type, step=step_offset + event.step, data=event.data)
                 yield forwarded
             step_offset += builder.max_steps + 1
+            if not initial_generation_complete:
+                _lock_builder_overwrites(builder)
+                initial_generation_complete = True
 
             report = ArtifactVerifier(self.artifact_dir, plan).verify()
             (self.artifact_dir / "verification_report.json").write_text(
@@ -585,6 +589,15 @@ def _build_builder_agent(
         max_observe=50_000,
         terminal_tools={"verify_artifact", "terminate"},
     )
+
+
+def _lock_builder_overwrites(builder: Agent) -> None:
+    """Make repair turns patch-only while still allowing empty-file setup."""
+
+    tools = getattr(builder, "tools", None)
+    writer = tools.get("write_artifact_file") if tools is not None else None
+    if isinstance(writer, WriteArtifactFile):
+        writer.lock_nonempty_overwrites()
 
 
 def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:

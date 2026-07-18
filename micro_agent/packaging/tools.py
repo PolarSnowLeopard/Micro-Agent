@@ -496,9 +496,21 @@ class WriteArtifactFile(Tool):
         "additionalProperties": False,
     }
 
-    def __init__(self, artifact_dir: str | Path, *, max_chars: int = 250_000) -> None:
+    def __init__(
+        self,
+        artifact_dir: str | Path,
+        *,
+        max_chars: int = 250_000,
+        allow_nonempty_overwrite: bool = True,
+    ) -> None:
         self.root = Path(artifact_dir).resolve()
         self.max_chars = max_chars
+        self.allow_nonempty_overwrite = allow_nonempty_overwrite
+
+    def lock_nonempty_overwrites(self) -> None:
+        """After first generation, require exact patches for existing content."""
+
+        self.allow_nonempty_overwrite = False
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         relative = str(kwargs.get("path", ""))
@@ -511,6 +523,17 @@ class WriteArtifactFile(Tool):
         if validation_error:
             return ToolResult(error=validation_error)
         path = _contained_path(self.root, relative)
+        if (
+            not self.allow_nonempty_overwrite
+            and path.is_file()
+            and path.stat().st_size > 0
+        ):
+            return ToolResult(
+                error=(
+                    f"{relative} 已包含首轮实现；验收修复必须使用 "
+                    "patch_artifact_file 做精确局部替换"
+                )
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return ToolResult(output=f"已写入 {relative} ({len(content)} chars)")
