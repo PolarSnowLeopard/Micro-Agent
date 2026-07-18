@@ -430,7 +430,7 @@ def main_process(operation: str, value: float) -> dict[str, float]:
         artifact_dir=tmp_path / "artifact",
     )
     assert packaging.max_repairs == 4
-    assert packaging.max_runtime_repairs == 6
+    assert packaging.max_runtime_repairs == 8
 
 
 def test_repair_builder_has_bounded_evidence_and_patch_only_tools(tmp_path):

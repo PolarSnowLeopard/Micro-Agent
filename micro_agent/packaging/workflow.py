@@ -267,7 +267,7 @@ class AgenticPackagingWorkflow:
         artifact_dir: str | Path,
         plan: PackagingPlan | None = None,
         max_repairs: int = 4,
-        max_runtime_repairs: int = 6,
+        max_runtime_repairs: int = 8,
         runtime_verifier_factory: RuntimeVerifierFactory | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
