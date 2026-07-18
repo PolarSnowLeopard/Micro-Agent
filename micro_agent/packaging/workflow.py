@@ -111,6 +111,8 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
    只有目标文件为空，或修改确实涉及文件大部分内容时，才可再次完整写入。
    requirements.txt 与 requirements-cpu.txt 只允许合法 PEP 508 包依赖，禁止 URL、VCS、本地路径和 pip 参数；
    torch/torchvision/torchaudio 必须写入 requirements-cpu.txt，以固定 CPU wheel 源安装；system-packages.txt 每行只能是一个 Debian 包名。
+   scaffold 已写入 mcp>=1.28.0,<2、starlette>=0.37.0,<2 与 uvicorn[standard]>=0.30.0,<1；
+   修改算法依赖时必须原样保留这三个经过平台验证的协议依赖范围，不能降级成无版本约束。
    不需要某类依赖时必须将对应清单写成真正的空文件，不能写解释性注释。
    根据源码导入和验收日志补齐最小运行依赖，不得盲目复制开发/文档依赖，不得把 CPU 服务解析成不必要的 CUDA 工具链。
    首轮静态验收会沿 sourceSymbols 和 adapters 的本地 import 链一次性列出未声明第三方模块；

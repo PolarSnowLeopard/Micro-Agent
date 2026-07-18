@@ -1254,6 +1254,24 @@ def test_verifier_rejects_compatibility_shim_after_source_import(tmp_path):
     assert any("兼容映射必须在源码入口模块导入前生效" in error for error in report.errors)
 
 
+def test_verifier_rejects_unbounded_protocol_dependencies(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+    (artifact / "requirements.txt").write_text(
+        "numpy>=1.26\nmcp\nstarlette\nuvicorn\n",
+        encoding="utf-8",
+    )
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert any("必须保留平台已验证的 MCP 协议依赖范围" in error for error in report.errors)
+
+
 def test_scaffold_splits_cpu_wheels_and_drops_unsafe_source_requirements(tmp_path):
     project = _sample_project(tmp_path)
     (project / "requirements.txt").write_text(

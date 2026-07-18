@@ -9,6 +9,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.specifiers import SpecifierSet
+
 from micro_agent.packaging.analyzer import RepositoryAnalyzer, RepositoryIR
 from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
@@ -21,6 +24,11 @@ REQUIRED_FILES = {
     "requirements-cpu.txt",
 }
 SYSTEM_PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?$")
+PROTOCOL_REQUIREMENTS = {
+    "mcp": (SpecifierSet(">=1.28.0,<2"), frozenset()),
+    "starlette": (SpecifierSet(">=0.37.0,<2"), frozenset()),
+    "uvicorn": (SpecifierSet(">=0.30.0,<1"), frozenset({"standard"})),
+}
 
 
 @dataclass
@@ -203,10 +211,37 @@ class ArtifactVerifier:
         path = self.root / "requirements.txt"
         if not path.is_file():
             return
-        text = path.read_text(encoding="utf-8", errors="replace").lower()
-        missing = [name for name in ("mcp", "starlette", "uvicorn") if name not in text]
+        parsed: dict[str, Requirement] = {}
+        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                requirement = Requirement(line)
+            except InvalidRequirement:
+                continue
+            parsed[requirement.name.lower().replace("_", "-")] = requirement
+        missing = [name for name in PROTOCOL_REQUIREMENTS if name not in parsed]
         if missing:
             report.errors.append(f"requirements.txt 缺少运行依赖: {', '.join(missing)}")
+        incompatible: list[str] = []
+        for name, (specifier, extras) in PROTOCOL_REQUIREMENTS.items():
+            requirement = parsed.get(name)
+            if requirement is None:
+                continue
+            if requirement.specifier != specifier or not extras.issubset(requirement.extras):
+                expected = (
+                    f"{name}[{','.join(sorted(extras))}]{specifier}"
+                    if extras
+                    else f"{name}{specifier}"
+                )
+                incompatible.append(f"{requirement} (expected {expected})")
+        if incompatible:
+            report.errors.append(
+                "requirements.txt 必须保留平台已验证的 MCP 协议依赖范围，"
+                "不能改为无版本约束或未来不兼容主版本: "
+                + "; ".join(incompatible)
+            )
 
     def _check_import_dependencies(
         self,
