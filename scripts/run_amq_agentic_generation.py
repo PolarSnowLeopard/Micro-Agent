@@ -26,6 +26,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
+from micro_agent.core.config import config
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.runtime_verifier import ContainerRuntimeVerifier
 from micro_agent.packaging.workflow import AgenticAnalysisWorkflow, AgenticPackagingWorkflow
@@ -218,6 +219,42 @@ def is_retryable_provider_failure(summary: dict[str, Any]) -> bool:
     return any(marker in serialized for marker in RETRYABLE_PROVIDER_MARKERS)
 
 
+def construction_metadata() -> dict[str, Any]:
+    """Return reproducibility metadata without persisting credentials or endpoints."""
+    reasoning = config.get_llm("reasoning")
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    worktree = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return {
+        "implementationGitCommit": (
+            revision.stdout.strip() if revision.returncode == 0 else "unknown"
+        ),
+        "implementationGitDirty": (
+            bool(worktree.stdout.strip()) if worktree.returncode == 0 else None
+        ),
+        "agentModel": reasoning.model,
+        "agentReasoningEnabled": reasoning.reasoning_enabled,
+        "agentTemperature": reasoning.temperature,
+        "agentMaxTokens": reasoning.max_tokens,
+        "runtimeAcceptance": {
+            "containerBuild": True,
+            "networkDuringProbe": False,
+            "fullSmokeCoverageRequired": True,
+        },
+    }
+
+
 async def generate_one(
     sample: dict[str, Any],
     *,
@@ -377,6 +414,7 @@ async def main() -> int:
         "constructionInput": "wrap_intent_only",
         "concurrency": args.concurrency,
         "repoCacheRoots": [str(path) for path in cache_roots],
+        **construction_metadata(),
     }
     _write_json_atomic(run_dir / "generation_protocol.json", protocol)
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from scripts.run_amq_agentic_generation import (
     EXPORT_FILES,
     STRICT_RUNTIME_VERIFIER_FACTORY,
+    construction_metadata,
     export_submission,
     is_retryable_provider_failure,
 )
@@ -33,6 +34,19 @@ def test_generation_uses_production_full_smoke_coverage_gate(tmp_path: Path) -> 
     )
 
     assert verifier.require_full_smoke_coverage is True
+
+
+def test_generation_metadata_is_reproducible_and_secret_free() -> None:
+    metadata = construction_metadata()
+
+    assert metadata["implementationGitCommit"]
+    assert metadata["agentModel"]
+    assert metadata["runtimeAcceptance"]["fullSmokeCoverageRequired"] is True
+    serialized = json.dumps(metadata).lower()
+    assert "api_key" not in serialized
+    assert "apikey" not in serialized
+    assert "base_url" not in serialized
+    assert "baseurl" not in serialized
 
 
 def test_paper_goe_uses_all_tools_in_information_denominator() -> None:
