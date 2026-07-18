@@ -210,7 +210,22 @@ class AgenticAnalysisWorkflow:
                 )
             },
         )
-        async for event in _run_planner(self.agent, self.plan_store, self.ir, request):
+
+        def fresh_planner() -> Agent:
+            self.agent = _build_planning_agent(
+                self.project_dir,
+                self.ir,
+                self.plan_store,
+            )
+            return self.agent
+
+        async for event in _run_planner(
+            self.agent,
+            self.plan_store,
+            self.ir,
+            request,
+            fresh_agent_factory=fresh_planner,
+        ):
             yield event
 
         plan = self.plan_store.plan
@@ -290,12 +305,28 @@ class AgenticPackagingWorkflow:
             )
             planner = _build_planning_agent(self.project_dir, self.ir, plan_store)
             self._active_agent = planner
+
+            def fresh_planner() -> Agent:
+                fresh = _build_planning_agent(
+                    self.project_dir,
+                    self.ir,
+                    plan_store,
+                )
+                self._active_agent = fresh
+                return fresh
+
             yield AgentEvent(
                 type="think",
                 step=0,
                 data={"thought": "未命中同文件分析缓存，先运行 Agent 语义规划阶段。"},
             )
-            async for event in _run_planner(planner, plan_store, self.ir, request):
+            async for event in _run_planner(
+                planner,
+                plan_store,
+                self.ir,
+                request,
+                fresh_agent_factory=fresh_planner,
+            ):
                 step_offset = max(step_offset, event.step + 1)
                 yield event
             self.plan = plan_store.plan
@@ -484,16 +515,26 @@ async def _run_planner(
     store: PlanStore,
     ir: RepositoryIR,
     user_request: str,
+    *,
+    fresh_agent_factory: Callable[[], Agent] | None = None,
 ) -> AsyncIterator[AgentEvent]:
     step_offset = 0
+    initial_prompt = _planner_prompt(ir, user_request)
     for attempt in range(5):
+        if attempt and fresh_agent_factory is not None:
+            agent = fresh_agent_factory()
         text_candidates: list[str] = []
-        prompt = _planner_prompt(ir, user_request) if attempt == 0 else (
-            "你尚未提交一个有效规划。必须使用 save_packaging_plan_json 重新发送完整严格 JSON；"
+        prompt = initial_prompt if attempt == 0 else (
+            initial_prompt
+            + "\n\n上一次独立质量门禁未接受规划。请从上述原始仓库证据重新提交完整严格 JSON；"
             "这不是 PATCH，decision=package 时 services 绝对不能省略或为空。"
             "excludedSymbols 必须位于 JSON 根节点并与 services 同级，不能放进任一 service。"
             "每个工具都必须显式提交 smokeTest；仓库已有可追溯示例时不能省略或关闭。"
-            + ("\n上次校验错误：\n- " + "\n- ".join(store.last_errors) if store.last_errors else "")
+            + (
+                "\n上次校验错误：\n- " + "\n- ".join(store.last_errors)
+                if store.last_errors
+                else ""
+            )
         )
         async for event in agent.run(prompt):
             if event.type == "think" and isinstance(event.data.get("thought"), str):

@@ -942,12 +942,13 @@ async def test_planner_can_repair_multiple_quality_gate_failures(tmp_path):
     class FakePlanner:
         max_steps = 1
 
-        def __init__(self):
+        def __init__(self, attempt):
+            self.attempt = attempt
             self.calls = 0
 
         async def run(self, prompt):
             self.calls += 1
-            if self.calls == 4:
+            if self.attempt == 3:
                 await SavePackagingPlanJson(store).execute(
                     content=_plan(ir).to_json(indent=None)
                 )
@@ -957,18 +958,26 @@ async def test_planner_can_repair_multiple_quality_gate_failures(tmp_path):
                 data={"result": "attempt complete"},
             )
 
-    planner = FakePlanner()
+    planners = [FakePlanner(0)]
+
+    def fresh_planner():
+        planner = FakePlanner(len(planners))
+        planners.append(planner)
+        return planner
+
     events = [
         event
         async for event in _run_planner(
-            planner,
+            planners[0],
             store,
             ir,
             "package it",
+            fresh_agent_factory=fresh_planner,
         )
     ]
 
-    assert planner.calls == 4
+    assert len(planners) == 4
+    assert [planner.calls for planner in planners] == [1, 1, 1, 1]
     assert store.plan is not None
     assert len([event for event in events if event.type == "think"]) == 3
 
