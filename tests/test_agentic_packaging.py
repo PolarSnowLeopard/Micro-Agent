@@ -16,6 +16,7 @@ from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
 from micro_agent.packaging.interface_quality import assess_interface_quality
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
+from micro_agent.packaging.relevance import build_relevance_evidence
 from micro_agent.packaging.scaffold import prepare_artifact
 from micro_agent.packaging.runtime_guardrails import decode_safe_zip
 from micro_agent.packaging.runtime_verifier import (
@@ -206,6 +207,84 @@ def test_repository_analyzer_never_truncates_root_template_evidence(tmp_path):
     assert "main.main_process" in ir.known_symbols
     assert "README.md" in ir.documentation
     assert ir.truncated
+
+
+def test_darp_propagates_intent_relevance_through_internal_dependencies(tmp_path):
+    project = tmp_path / "relevance"
+    project.mkdir()
+    (project / "main.py").write_text(
+        "from predictor import predict_risk\n\n"
+        "def main_process(record: dict) -> dict:\n"
+        "    return predict_risk(record)\n",
+        encoding="utf-8",
+    )
+    (project / "predictor.py").write_text(
+        "from features import normalize_age\n\n"
+        "def predict_risk(record: dict) -> dict:\n"
+        '    \"\"\"Predict transaction risk from customer features.\"\"\"\n'
+        '    return {\"risk\": normalize_age(record[\"age\"])}\n',
+        encoding="utf-8",
+    )
+    (project / "features.py").write_text(
+        "def normalize_age(age: int) -> float:\n"
+        "    return age / 100\n",
+        encoding="utf-8",
+    )
+    (project / "unrelated.py").write_text(
+        "def render_admin_dashboard() -> str:\n"
+        '    return \"ok\"\n',
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    evidence = build_relevance_evidence(
+        ir,
+        "Wrap customer transaction risk prediction for compliance agents.",
+    )
+    scores = {
+        path: item["relevance"]
+        for path, item in evidence["detailed"].items()
+    } | {
+        path: item["relevance"]
+        for path, item in evidence["compact"].items()
+    } | {
+        item["path"]: item["relevance"] for item in evidence["minimal"]
+    }
+
+    assert scores["main.py"] == 1.0
+    assert scores["predictor.py"] >= 0.6
+    assert scores["features.py"] >= 0.36
+    assert "unrelated.py" not in scores
+    assert evidence["overview"]["belowThresholdFileCount"] == 1
+
+
+def test_bage_retains_budgeted_inventory_without_promoting_unrelated_files(tmp_path):
+    project = tmp_path / "budget"
+    project.mkdir()
+    (project / "main.py").write_text(
+        "from domain import run\n\ndef main() -> dict:\n    return run()\n",
+        encoding="utf-8",
+    )
+    (project / "domain.py").write_text(
+        "def run() -> dict:\n"
+        '    \"\"\"Run the documented domain algorithm.\"\"\"\n'
+        '    return {\"status\": \"ok\"}\n',
+        encoding="utf-8",
+    )
+    for index in range(12):
+        (project / f"unused_{index}.py").write_text(
+            f"def helper_{index}() -> int:\n    return {index}\n",
+            encoding="utf-8",
+        )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    evidence = build_relevance_evidence(ir, "Run the domain algorithm.", max_tokens=900)
+
+    assert evidence["overview"]["estimatedTokens"] <= 900
+    assert evidence["overview"]["relevantFiles"] == 2
+    assert evidence["overview"]["belowThresholdFileCount"] == 12
+    assert "main.py" in evidence["detailed"]
+    assert "domain.py" in evidence["detailed"] or "domain.py" in evidence["compact"]
 
 
 def test_template_main_process_is_planning_audit_boundary_not_only_possible_source(tmp_path):

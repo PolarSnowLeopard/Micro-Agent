@@ -10,7 +10,19 @@ from micro_agent.packaging.models import PackagingPlan
 from micro_agent.packaging.scaffold import _render_tool_docstring
 
 
-_PAPER_CONSTRAINT_KEYS = {"enum", "default", "format", "minimum", "maximum"}
+_PAPER_CONSTRAINT_KEYS = {
+    "enum",
+    "default",
+    "format",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+}
 
 
 @dataclass
@@ -47,8 +59,11 @@ def assess_interface_quality(
     non_empty = [description for description in published_descriptions if description.strip()]
     tool_desc_coverage = len(non_empty) / len(tools) if tools else 0.0
     tool_desc_informativeness = (
-        sum(min(len(description.split()) / 25.0, 1.0) for description in published_descriptions)
-        / len(tools)
+        min(
+            sum(len(description.split()) for description in published_descriptions)
+            / (25.0 * len(tools)),
+            1.0,
+        )
         if tools
         else 0.0
     )

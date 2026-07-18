@@ -17,6 +17,7 @@ from micro_agent.core.llm import LLM
 from micro_agent.core.schema import AgentEvent
 from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.models import PackagingPlan
+from micro_agent.packaging.relevance import build_relevance_evidence
 from micro_agent.packaging.scaffold import prepare_artifact
 from micro_agent.packaging.tools import (
     InspectRepository,
@@ -548,19 +549,6 @@ def _build_builder_agent(
 def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
     contract_symbols = sorted(planning_candidate_symbols(ir))
     template_contract = bool(_template_contract_entries(ir))
-    public_symbols = [
-        {
-            "qualifiedName": symbol.qualifiedName,
-            "kind": symbol.kind,
-            "file": symbol.file,
-            "signature": symbol.signature,
-            "docstring": symbol.docstring[:240],
-            "calls": symbol.calls[:15],
-            "isGenerator": symbol.isGenerator,
-        }
-        for symbol in ir.symbols
-        if symbol.isPublic
-    ][:160]
     overview = {
         "fingerprint": ir.fingerprint,
         "fileCount": len(ir.files),
@@ -570,10 +558,10 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "assetFiles": ir.assetFiles,
         "documentationFiles": list(ir.documentation),
         "parseErrors": ir.parseErrors,
-        "publicSymbols": public_symbols,
         "truncated": ir.truncated,
         "templateContract": template_contract,
         "contractEntrySymbols": contract_symbols if template_contract else [],
+        "relevanceEvidence": build_relevance_evidence(ir, user_request),
     }
     if template_contract:
         main_path = Path(ir.root) / "main.py"
@@ -587,7 +575,9 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
     return (
         "请分析这个算法仓库，规划可投入真实使用的 MCP 服务。\n"
         f"用户请求补充：{user_request or '无'}\n"
-        "以下只是索引，必须使用工具读取证据后再决策：\n"
+        "以下索引已使用 DARP 依赖相关度传播和 BAGE 预算自适应编码；"
+        "它只负责排序证据，不替你决定 Tool，也不会隐藏 benchmark 答案。"
+        "必须使用工具核对完整仓库并阅读高相关源码后再决策：\n"
         + json.dumps(overview, ensure_ascii=False, indent=2)
     )
 
