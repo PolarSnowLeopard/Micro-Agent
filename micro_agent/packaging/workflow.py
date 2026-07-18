@@ -86,6 +86,8 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
 3. 不复制或重写算法核心，不返回伪造结果，不做文件名/样例特判，不吞掉异常并伪装成功。
    必须检查所有 sourceSymbols 是否以“错误/失败/error/failed”等字符串，或 `success=false` 结构化对象作为普通返回值；
    若有，适配器必须识别该失败契约并 raise，使 MCP 返回 isError，而不是成功 payload。
+   返回 object 时必须严格遵守 outputSchema：未声明 nullable 的可选字段在没有值时应省略，
+   不能写成 `{"error": None}`；只有 schema 明确包含 null 类型时才能返回 None。
 4. 产物内已有只读 algorithm_loader.py。adapters.py 必须先 `from algorithm_loader import ALGORITHM_DIR`，再导入 predictor、api、main 等原仓库模块；所有模型/资源路径必须以 ALGORITHM_DIR 开始，不能使用 adapters.py 所在目录冒充算法目录，也不能依赖进程当前目录。
    源码函数必须用 alias 导入，避免适配函数覆盖同名导入后递归。任何执行异常都必须抛出，禁止返回“失败/错误”字符串伪装为成功。
    若工具接收 Base64/ZIP，必须把原始字符串直接传给只读模块 runtime_guardrails.decode_safe_zip（该函数已经完成 Base64 解码和 ZIP 安全校验），再把返回的 BytesIO 交给原算法；禁止自行先 b64decode，也禁止给 guardrail 写 fallback。
@@ -224,7 +226,7 @@ class AgenticPackagingWorkflow:
         artifact_dir: str | Path,
         plan: PackagingPlan | None = None,
         max_repairs: int = 2,
-        max_runtime_repairs: int = 4,
+        max_runtime_repairs: int = 6,
         runtime_verifier_factory: RuntimeVerifierFactory | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
@@ -707,6 +709,8 @@ def _repair_prompt(
         "中最先报错的一个属性。runtimeApiCompatibilitySuggestions 是隔离容器对已安装包做运行时"
         "内省得到的候选，不是猜测；应结合源码调用语义选择等价 API，不能只按字符串相似度盲选。"
         "若候选位于另一个已安装子模块，必须从该模块导入后在算法模块导入前完成兼容映射。"
+        "Pydantic 报告某个可选输出字段收到 None 时，若 outputSchema 未声明 null，必须从成功结果"
+        "中省略该字段，不能通过伪造空字符串或修改只读 Schema 绕过。"
         "修复后再次调用 verify_artifact。\n"
         + (report.to_json() if report else "无验收报告")
     )

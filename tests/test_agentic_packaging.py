@@ -413,6 +413,12 @@ def main_process(operation: str, value: float) -> dict[str, float]:
     )
     assert workflow.plan_store.candidate_symbols == {"main.main_process"}
     assert {"core.predict", "core.evaluate"} <= ir.known_symbols
+    packaging = AgenticPackagingWorkflow(
+        project_dir=project,
+        ir=ir,
+        artifact_dir=tmp_path / "artifact",
+    )
+    assert packaging.max_runtime_repairs == 6
 
 
 def test_non_template_repository_retains_full_public_symbol_audit(tmp_path):
