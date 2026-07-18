@@ -244,8 +244,6 @@ def _render_server(plan: PackagingPlan) -> str:
                 default = ""
             else:
                 default_value = schema.get("default")
-                if default_value is None and not _schema_allows_null(schema):
-                    annotation = f"{annotation} | None"
                 default = f" = {default_value!r}"
             params.append(f"{name}: {annotation}{default}")
         return_type = type_renderer.annotation(
@@ -277,6 +275,19 @@ def _render_server(plan: PackagingPlan) -> str:
         "",
         f"mcp = FastMCP({service_name!r}, host=\"0.0.0.0\", port=8000, sse_path=\"/sse\", message_path=\"/messages/\")",
         "",
+        "def _bind_protocol_schema(",
+        "    tool_name: str,",
+        "    input_schema: dict[str, Any],",
+        "    output_schema: dict[str, Any],",
+        ") -> None:",
+        '    """Publish the reviewed JSON Schemas without Pydantic default/null drift."""',
+        "    registered = mcp._tool_manager.get_tool(tool_name)",
+        "    if registered is None:",
+        '        raise RuntimeError(f"MCP tool registration missing: {tool_name}")',
+        "    registered.parameters = input_schema",
+        "    registered.fn_metadata.output_schema = output_schema",
+        '    registered.__dict__.pop("output_schema", None)',
+        "",
         "class _IOEBOutputModel(BaseModel):",
         '    """Preserve optional-but-non-null JSON Schema fields on serialization."""',
         "    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:",
@@ -296,6 +307,9 @@ def _render_server(plan: PackagingPlan) -> str:
                 f"def {tool['name']}({', '.join(rendered['params'])}) -> {rendered['return_type']}:",
                 f"    {_render_tool_docstring(tool)!r}",
                 f"    return adapters.{tool['name']}({', '.join(f'{name}={name}' for name in ordered_names)})",
+                "",
+                f"_bind_protocol_schema({tool['name']!r}, "
+                f"{tool['inputSchema']!r}, {tool['outputSchema']!r})",
                 "",
             ]
         )

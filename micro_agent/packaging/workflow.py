@@ -54,6 +54,11 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
    已由 Tool 名称固定的 operation/mode/action 不得继续暴露为用户必填参数；应由 adapterStrategy
    声明固定值并在适配层注入，避免调用者同时选择工具和重复选择同一分支。
    inputSchema.required 必须覆盖执行所需的用户输入，不能为了绕过校验把源码必填参数标成可选；object 输出声明了 properties 时，outputSchema.required 必须标明稳定返回字段。
+   源码若用 `parameters.get(name, literal_default)` 或函数默认值声明稳定默认值，必须把该值写入
+   inputSchema.properties[name].default，不能只在 description 中说 “defaults to ...”。
+   若源码入口返回通用 `success/operation/result/error` 分派信封，公共 Tool 的 outputSchema 必须
+   对每个能力单独重构：解包 result，使用有领域含义的字段，移除由 Tool 身份固定的 operation，
+   且不暴露 success/error 控制字段；失败应成为 MCP error，而不是成功 payload。
    源码函数含 yield/YieldFrom 时是多结果生成器，面向 MCP 的 outputSchema 必须是 array（由适配层收集为可序列化列表），不能伪装成单个 object。
 5. 不得使用隐藏样例答案、文件名特判、伪实现或硬编码返回值。
 6. 如果仓库没有可调用算法、源码无法解析、关键实现/依赖/模型资产缺失，decision=reject 并给出可操作原因。
@@ -89,6 +94,9 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
    若有，适配器必须识别该失败契约并 raise，使 MCP 返回 isError，而不是成功 payload。
    返回 object 时必须严格遵守 outputSchema：未声明 nullable 的可选字段在没有值时应省略，
    不能写成 `{"error": None}`；只有 schema 明确包含 null 类型时才能返回 None。
+   若源码返回 `success/operation/result/error` 之类通用分派信封，适配器必须先检查失败并 raise，
+   然后只把 result 解包、重命名或重组为规划中该 Tool 专属的领域输出；不得把内部 operation、
+   success 或 error 继续透传到成功结果。
 4. 产物内已有只读 algorithm_loader.py。adapters.py 必须先 `from algorithm_loader import ALGORITHM_DIR`，再导入 predictor、api、main 等原仓库模块；所有模型/资源路径必须以 ALGORITHM_DIR 开始，不能使用 adapters.py 所在目录冒充算法目录，也不能依赖进程当前目录。
    源码函数必须用 alias 导入，避免适配函数覆盖同名导入后递归。任何执行异常都必须抛出，禁止返回“失败/错误”字符串伪装为成功。
    若工具接收 Base64/ZIP，必须把原始字符串直接传给只读模块 runtime_guardrails.decode_safe_zip（该函数已经完成 Base64 解码和 ZIP 安全校验），再把返回的 BytesIO 交给原算法；禁止自行先 b64decode，也禁止给 guardrail 写 fallback。

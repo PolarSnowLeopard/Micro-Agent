@@ -443,12 +443,47 @@ async def verify():
         for service in plan.get("services", [])
         for tool in service.get("tools", [])
     ]
-    registered = sorted(tool.name for tool in await server.mcp.list_tools())
+    listed_tools = await server.mcp.list_tools()
+    registered = sorted(tool.name for tool in listed_tools)
     expected = sorted(tool.get("name") for tool in planned)
     if registered != expected:
         raise RuntimeError(
             "runtime tool registry mismatch: "
             + json.dumps({{"expected": expected, "actual": registered}})
+        )
+    planned_by_name = {{tool["name"]: tool for tool in planned}}
+    schema_mismatches = {{}}
+    for runtime_tool in listed_tools:
+        planned_tool = planned_by_name[runtime_tool.name]
+        actual_input = runtime_tool.inputSchema or {{}}
+        actual_output = runtime_tool.outputSchema or {{}}
+        expected_input = planned_tool.get("inputSchema", {{}})
+        expected_output = planned_tool.get("outputSchema", {{}})
+        mismatch = {{}}
+        if actual_input != expected_input:
+            mismatch["inputSchema"] = {{
+                "expected": expected_input,
+                "actual": actual_input,
+            }}
+        if actual_output != expected_output:
+            mismatch["outputSchema"] = {{
+                "expected": expected_output,
+                "actual": actual_output,
+            }}
+        if mismatch:
+            schema_mismatches[runtime_tool.name] = mismatch
+    if schema_mismatches:
+        payload = {{
+            "registeredTools": registered,
+            "schemaContractMismatches": schema_mismatches,
+            "smokeTestsExecuted": [],
+            "smokeTestCount": 0,
+            "smokeTestFailures": {{}},
+        }}
+        print({PROBE_MARKER!r} + json.dumps(payload, sort_keys=True))
+        raise RuntimeError(
+            "runtime schema contract mismatch: "
+            + json.dumps(schema_mismatches, sort_keys=True)
         )
     api_gaps, api_suggestions = imported_attribute_gaps()
     if api_gaps:
@@ -558,6 +593,8 @@ def _classify_failure(text: str, *, phase: str) -> str:
         return "tool_registry"
     if "runtime api compatibility failures" in normalized:
         return "runtime_api_compatibility"
+    if "runtime schema contract mismatch" in normalized:
+        return "runtime_schema_contract"
     if (
         "validation error" in normalized
         or "smoketest" in normalized

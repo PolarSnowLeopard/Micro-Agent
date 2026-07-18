@@ -495,6 +495,39 @@ def test_reference_free_interface_quality_gate_accepts_evidence_rich_contract(tm
     assert report.metrics["referenceFreeGoE"] >= 0.72
 
 
+def test_reference_free_interface_quality_gate_rejects_dispatcher_envelopes(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    tool = raw["services"][0]["tools"][0]
+    tool["description"] = (
+        "Predict a normalized observation risk score for downstream decisions "
+        "using the repository's bounded scoring algorithm."
+    )
+    tool["inputSchema"]["properties"]["value"].update(
+        {
+            "description": "Observation value accepted by the risk scoring algorithm.",
+            "minimum": 0,
+            "maximum": 1,
+        }
+    )
+    tool["outputSchema"] = {
+        "type": "object",
+        "properties": {
+            "success": {"type": "boolean", "description": "Whether dispatch succeeded."},
+            "operation": {"type": "string", "description": "Fixed dispatcher operation."},
+            "result": {"type": "object", "description": "Generic dispatcher payload."},
+            "error": {"type": "string", "description": "Dispatcher failure detail."},
+        },
+        "required": ["success", "operation", "result"],
+    }
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+
+    report = assess_interface_quality(plan)
+
+    assert not report.passed
+    assert any("控制信封" in error and "predict_risk" in error for error in report.errors)
+
+
 def test_plan_rejects_unknown_source_symbol(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()
@@ -974,6 +1007,60 @@ def test_scaffold_preserves_agent_facing_schema_descriptions_and_constraints(
     assert "Returns:" in generated.description
     assert "value: Observation value" in generated.description
     assert "score (number)" in generated.description
+
+
+def test_scaffold_publishes_exact_non_nullable_optional_schema(tmp_path, monkeypatch):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    predict = raw["services"][0]["tools"][0]
+    predict["inputSchema"]["properties"]["threshold"] = {
+        "type": "number",
+        "description": "Optional decision threshold; omission delegates to the algorithm default.",
+        "minimum": 0,
+        "maximum": 1,
+    }
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "adapters.py").write_text(
+        "def predict_risk(value, threshold=None):\n"
+        "    return {'score': value}\n\n"
+        "def evaluate_risk(values):\n"
+        "    return {'mean': sum(values) / len(values)}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.syspath_prepend(str(artifact))
+    sys.modules.pop("adapters", None)
+    spec = importlib.util.spec_from_file_location(
+        "generated_exact_schema_server",
+        artifact / "server.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    generated = module.mcp._tool_manager.get_tool("predict_risk")
+    assert generated is not None
+
+    assert generated.parameters == predict["inputSchema"]
+    assert generated.output_schema == predict["outputSchema"]
+    assert generated.parameters["properties"]["threshold"]["type"] == "number"
+    assert "anyOf" not in generated.parameters["properties"]["threshold"]
+    _, structured = asyncio.run(
+        generated.run({"value": 0.5}, convert_result=True)
+    )
+    assert structured == {"score": 0.5}
+    try:
+        asyncio.run(
+            generated.run(
+                {"value": 0.5, "threshold": None},
+                convert_result=True,
+            )
+        )
+    except Exception as exc:
+        assert "threshold" in str(exc)
+    else:
+        raise AssertionError("explicit null must be rejected by a non-null optional schema")
 
 
 def test_verifier_rejects_adapter_sys_path_mutation(tmp_path):

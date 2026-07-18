@@ -124,7 +124,7 @@ def assess_interface_quality(
             + ", ".join(weak_tool_descriptions)
         )
 
-    if len(tools) > 1 and tool_desc_distinguishability < 0.35:
+    if len(tools) > 1 and tool_desc_distinguishability < 0.40:
         errors.append(
             "[interface_quality] 工具描述过于相似，Agent 难以选择；"
             f"最小 Jaccard distance={tool_desc_distinguishability:.3f}"
@@ -135,6 +135,15 @@ def assess_interface_quality(
         errors.append(
             "[interface_quality] 以下输出字段缺少语义 description，或输出 object 未声明稳定字段: "
             + ", ".join(weak_outputs)
+        )
+    dispatcher_envelopes = _dispatcher_envelope_tools(tools)
+    if dispatcher_envelopes:
+        errors.append(
+            "[interface_quality] 以下 Tool 仍把源码分派器的 success/operation/result/error "
+            "控制信封直接暴露给调用者: "
+            + ", ".join(dispatcher_envelopes)
+            + "；MCP Tool 必须只返回该能力的领域成功结果，解包 result、移除固定 operation，"
+            "并把失败转换成 MCP error"
         )
 
     if goe < min_goe:
@@ -216,6 +225,23 @@ def _output_contract_coverage(
         total += 1
         weak.append(f"{tool['name']}.outputSchema")
     return (described / total if total else 0.0), weak
+
+
+def _dispatcher_envelope_tools(tools: list[dict[str, Any]]) -> list[str]:
+    offenders: list[str] = []
+    for tool in tools:
+        schema = tool.get("outputSchema")
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            continue
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        names = set(properties)
+        has_status_envelope = {"success", "result", "error"} <= names
+        has_dispatch_envelope = {"operation", "result"} <= names
+        if has_status_envelope or has_dispatch_envelope:
+            offenders.append(str(tool.get("name", "<unnamed>")))
+    return offenders
 
 
 __all__ = ["InterfaceQualityReport", "assess_interface_quality"]
