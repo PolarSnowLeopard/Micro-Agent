@@ -418,6 +418,7 @@ def main_process(operation: str, value: float) -> dict[str, float]:
         graph_path=tmp_path / "function.json",
     )
     assert workflow.plan_store.candidate_symbols == {"main.main_process"}
+    assert workflow.agent.tools.get("read_project_file").max_reads == 10
     assert {"core.predict", "core.evaluate"} <= ir.known_symbols
     packaging = AgenticPackagingWorkflow(
         project_dir=project,

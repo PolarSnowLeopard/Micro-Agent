@@ -78,7 +78,7 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 9. 普通仓库中每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
    独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
    excludedSymbols 必须位于规划 JSON 根节点，和 services 同级；绝不能写入 services[i] 内。
-   若索引声明 templateContract=true，则根目录 main.main_process 是用户提交模板的公共契约和审计边界；底层公开符号是实现证据，不要求逐项写入 excludedSymbols。索引已内嵌完整模板入口和 README 摘要，最多再读取 6 个必要的底层文件。必须阅读 main_process 及其调用的底层代码，并可按其中稳定 operation/工作流分支抽象成多个 Tool；不得因为只有一个契约入口就机械地只生成一个 Tool。
+   若索引声明 templateContract=true，则根目录 main.main_process 是用户提交模板的公共契约和审计边界；底层公开符号是实现证据，不要求逐项写入 excludedSymbols。索引已内嵌完整模板入口和 README 摘要，最多再读取 10 个必要的底层文件。必须阅读 main_process 及其调用的底层代码，并可按其中稳定 operation/工作流分支抽象成多个 Tool；不得因为只有一个契约入口就机械地只生成一个 Tool。
    索引中 dispatchBranches 是 AST 直接提取的字面量分派证据。若 operation/action/task_type/
    calculation_type 等语义选择参数存在两个以上分支值，必须为每个分支规划独立 Tool；
    每个 Tool 的 adapterStrategy 都要明确写成
@@ -546,7 +546,7 @@ def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore)
     template_contract = bool(_template_contract_entries(ir))
     tools = ToolRegistry()
     tools.register(InspectRepository(ir, max_calls=1))
-    tools.register(ReadProjectFile(project_dir, max_reads=6 if template_contract else 14))
+    tools.register(ReadProjectFile(project_dir, max_reads=10 if template_contract else 14))
     tools.register(SavePackagingPlanJson(store))
     tools.register(Terminate())
     return Agent(
@@ -555,7 +555,7 @@ def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore)
         tools=tools,
         system_prompt=PLANNER_SYSTEM_PROMPT,
         next_step_prompt=(
-            "模板入口与文档证据已在初始请求中。最多补读 6 个底层文件；"
+            "模板入口与文档证据已在初始请求中。最多补读 10 个底层文件；"
             "证据足够后立即调用 save_packaging_plan_json，不得重复读取。"
             if template_contract
             else "证据足够后立即调用 save_packaging_plan_json，不得重复读取。"
