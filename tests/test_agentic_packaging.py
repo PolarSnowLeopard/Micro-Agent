@@ -1488,8 +1488,13 @@ def test_runtime_probe_is_valid_python_and_checks_smoke_output_schema():
     assert "assert_schema(" in source
     assert "imported_attribute_gaps()" in source
     assert '"runtimeApiCompatibilityFailures": api_gaps' in source
+    assert '"runtimeApiCompatibilitySuggestions": api_suggestions' in source
+    assert "def compatibility_candidates(module, missing_name):" in source
     assert "smoke output schema mismatch" in source
     assert '"smokeTestFailures": smoke_failures' in source
+    assert "def schema_variants(tool, base_input):" in source
+    assert '"schemaVariantsExecuted": schema_variants_executed' in source
+    assert 'schema.get("additionalProperties")' in source
     assert "timeout=17" in source
 
 
