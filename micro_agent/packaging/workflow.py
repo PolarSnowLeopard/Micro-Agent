@@ -522,7 +522,7 @@ async def _run_planner(
 ) -> AsyncIterator[AgentEvent]:
     step_offset = 0
     initial_prompt = _planner_prompt(ir, user_request)
-    for attempt in range(8):
+    for attempt in range(12):
         if attempt and fresh_agent_factory is not None:
             agent = fresh_agent_factory()
         text_candidates: list[str] = []

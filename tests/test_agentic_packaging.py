@@ -1096,6 +1096,57 @@ async def test_planner_retry_receives_previous_candidate_artifact(tmp_path):
     assert any(event.type == "think" for event in events)
 
 
+async def test_planner_allows_late_staged_refinement_to_converge(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+    )
+
+    class FakePlanner:
+        max_steps = 1
+
+        def __init__(self, attempt: int):
+            self.attempt = attempt
+
+        async def run(self, prompt):
+            rejected = _plan(ir).to_dict()
+            rejected["services"] = []
+            rejected["analysisSummary"] = f"staged candidate {self.attempt}"
+            if self.attempt == 8:
+                await SavePackagingPlanJson(store).execute(
+                    content=_plan(ir).to_json(indent=None)
+                )
+            else:
+                await SavePackagingPlanJson(store).execute(
+                    content=json.dumps(rejected, ensure_ascii=False)
+                )
+            yield AgentEvent(type="done", step=1, data={"result": "complete"})
+
+    attempts = [FakePlanner(0)]
+
+    def fresh_planner():
+        planner = FakePlanner(len(attempts))
+        attempts.append(planner)
+        return planner
+
+    _ = [
+        event
+        async for event in _run_planner(
+            attempts[0],
+            store,
+            ir,
+            "package it",
+            fresh_agent_factory=fresh_planner,
+        )
+    ]
+
+    assert len(attempts) == 9
+    assert store.plan is not None
+
+
 async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path):
     """Regression for the GNN plan that nested the repository audit in a service."""
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
