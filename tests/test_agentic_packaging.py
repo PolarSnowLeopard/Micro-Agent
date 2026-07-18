@@ -1358,6 +1358,10 @@ def test_dependency_inspector_follows_local_import_chain_once(tmp_path):
     (package / "worker.py").write_text(
         "from PIL import Image\n"
         "import lmdb\n"
+        "import sympy as sm\n"
+        "jit_backend = sm.external.import_module('jit_backend')\n"
+        "if jit_backend:\n"
+        "    from jit_backend import compile_func\n"
         "try:\n"
         "    import optional_accelerator\n"
         "except ImportError:\n"
@@ -1372,7 +1376,7 @@ def test_dependency_inspector_follows_local_import_chain_once(tmp_path):
         encoding="utf-8",
     )
     requirements = tmp_path / "requirements.txt"
-    requirements.write_text("numpy>=1.26\nPillow>=10\n", encoding="utf-8")
+    requirements.write_text("numpy>=1.26\nPillow>=10\nsympy>=1.12\n", encoding="utf-8")
 
     unresolved = unresolved_import_dependencies(
         algorithm,

@@ -126,11 +126,12 @@ def _imports_from_file(path: Path, *, module_name: str) -> list[str]:
         for parent in ast.walk(tree)
         for child in ast.iter_child_nodes(parent)
     }
+    optional_import_guards = _optional_import_guard_names(tree)
     imports: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
-        if _is_optional_or_type_only_import(node, parents):
+        if _is_optional_or_type_only_import(node, parents, optional_import_guards):
             continue
         if isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
@@ -170,11 +171,18 @@ def _resolve_from_base(
 def _is_optional_or_type_only_import(
     node: ast.Import | ast.ImportFrom,
     parents: dict[ast.AST, ast.AST],
+    optional_import_guards: set[str],
 ) -> bool:
     current: ast.AST = node
     while current in parents:
         parent = parents[current]
         if isinstance(parent, ast.If) and _is_type_checking_test(parent.test):
+            return True
+        if (
+            isinstance(parent, ast.If)
+            and current in parent.body
+            and _references_any_name(parent.test, optional_import_guards)
+        ):
             return True
         if isinstance(parent, ast.Try) and any(
             _handler_catches_import_error(handler)
@@ -183,6 +191,74 @@ def _is_optional_or_type_only_import(
             return True
         current = parent
     return False
+
+
+def _optional_import_guard_names(tree: ast.Module) -> set[str]:
+    """Find variables populated by APIs whose contract is "module or None"."""
+    sympy_aliases = {
+        alias.asname or "sympy"
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "sympy"
+    }
+    external_aliases = {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "sympy"
+        for alias in node.names
+        if alias.name == "external"
+    }
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Call) or not _is_sympy_optional_import(
+            value.func,
+            sympy_aliases=sympy_aliases,
+            external_aliases=external_aliases,
+        ):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            names.update(
+                child.id
+                for child in ast.walk(target)
+                if isinstance(child, ast.Name)
+            )
+    return names
+
+
+def _is_sympy_optional_import(
+    node: ast.AST,
+    *,
+    sympy_aliases: set[str],
+    external_aliases: set[str],
+) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "import_module"
+        and (
+            (
+                isinstance(node.value, ast.Attribute)
+                and node.value.attr == "external"
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id in sympy_aliases
+            )
+            or (
+                isinstance(node.value, ast.Name)
+                and node.value.id in external_aliases
+            )
+        )
+    )
+
+
+def _references_any_name(node: ast.AST, names: set[str]) -> bool:
+    return bool(names) and any(
+        isinstance(child, ast.Name) and child.id in names
+        for child in ast.walk(node)
+    )
 
 
 def _is_type_checking_test(node: ast.AST) -> bool:
