@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from scripts.run_amq_agentic_generation import (
     EXPORT_FILES,
+    STRICT_RUNTIME_VERIFIER_FACTORY,
     export_submission,
     is_retryable_provider_failure,
 )
@@ -23,6 +24,15 @@ def _tool(description: str, properties: dict | None = None) -> SimpleNamespace:
         description=description,
         inputSchema={"properties": properties or {}, "required": list((properties or {}).keys())},
     )
+
+
+def test_generation_uses_production_full_smoke_coverage_gate(tmp_path: Path) -> None:
+    verifier = STRICT_RUNTIME_VERIFIER_FACTORY(
+        tmp_path,
+        SimpleNamespace(tools=[]),
+    )
+
+    assert verifier.require_full_smoke_coverage is True
 
 
 def test_paper_goe_uses_all_tools_in_information_denominator() -> None:

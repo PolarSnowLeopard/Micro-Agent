@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from functools import partial
 import json
 import os
 import shutil
@@ -28,6 +29,12 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.runtime_verifier import ContainerRuntimeVerifier
 from micro_agent.packaging.workflow import AgenticAnalysisWorkflow, AgenticPackagingWorkflow
+
+
+STRICT_RUNTIME_VERIFIER_FACTORY = partial(
+    ContainerRuntimeVerifier,
+    require_full_smoke_coverage=True,
+)
 
 
 EXPORT_FILES = (
@@ -306,7 +313,7 @@ async def generate_one(
                 ir=ir,
                 artifact_dir=artifact,
                 plan=plan,
-                runtime_verifier_factory=ContainerRuntimeVerifier,
+                runtime_verifier_factory=STRICT_RUNTIME_VERIFIER_FACTORY,
             )
             packaging_started = time.perf_counter()
             packaging_errors: list[str] = []
