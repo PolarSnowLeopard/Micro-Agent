@@ -242,7 +242,7 @@ class AgenticPackagingWorkflow:
         ir: RepositoryIR,
         artifact_dir: str | Path,
         plan: PackagingPlan | None = None,
-        max_repairs: int = 2,
+        max_repairs: int = 4,
         max_runtime_repairs: int = 6,
         runtime_verifier_factory: RuntimeVerifierFactory | None = None,
     ) -> None:

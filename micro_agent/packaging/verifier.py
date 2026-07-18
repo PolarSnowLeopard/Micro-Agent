@@ -177,7 +177,7 @@ class ArtifactVerifier:
         )
 
         if "adapters.py" in trees:
-            self._check_algorithm_imports(report, trees["adapters.py"])
+            self._check_algorithm_imports(report, trees["adapters.py"], plan)
             imported_bindings = _imported_bound_names(trees["adapters.py"])
             shadowed = sorted(planned & imported_bindings & set(adapter_functions))
             if shadowed:
@@ -349,9 +349,21 @@ class ArtifactVerifier:
                     + ", ".join(double_decoded)
                 )
 
-    def _check_algorithm_imports(self, report: VerificationReport, tree: ast.Module) -> None:
+    def _check_algorithm_imports(
+        self,
+        report: VerificationReport,
+        tree: ast.Module,
+        plan: PackagingPlan,
+    ) -> None:
         source_roots = _algorithm_module_roots(self.root / "algorithm")
+        entry_roots = {
+            symbol.split(".", 1)[0]
+            for tool in plan.tools
+            for symbol in tool.get("sourceSymbols", [])
+            if isinstance(symbol, str) and symbol
+        }
         loader_index: int | None = None
+        entry_import_line: int | None = None
         legacy_imports: list[tuple[int, str]] = []
         top_level_import_ids: set[int] = set()
         for index, node in enumerate(tree.body):
@@ -365,6 +377,12 @@ class ArtifactVerifier:
                 root = module.split(".", 1)[0]
                 if root in source_roots and root != "algorithm":
                     legacy_imports.append((index, module))
+                if root in entry_roots:
+                    entry_import_line = (
+                        node.lineno
+                        if entry_import_line is None
+                        else min(entry_import_line, node.lineno)
+                    )
         nested_legacy = {
             module
             for node in ast.walk(tree)
@@ -383,6 +401,14 @@ class ArtifactVerifier:
             report.errors.append(
                 "源码模块导入前必须先 `from algorithm_loader import ALGORITHM_DIR`，"
                 "确保原仓库及其旧式绝对导入从 algorithm/ 解析: " + ", ".join(invalid)
+            )
+        late_shims = _late_guarded_compatibility_shims(tree, entry_import_line)
+        if late_shims:
+            report.errors.append(
+                "第三方兼容映射必须在源码入口模块导入前生效；当前先导入了源码，"
+                "随后才为缺失属性安装 shim，无法修复 import-time 失败。请移动这些映射，"
+                "再导入 main/predictor/api 等源码模块。违规行: "
+                + ", ".join(str(line) for line in late_shims)
             )
 
     def _check_container_files(self, report: VerificationReport) -> None:
@@ -742,6 +768,46 @@ def _algorithm_module_roots(root: Path) -> set[str]:
     result = {path.name for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")}
     result.update(path.stem for path in root.glob("*.py") if path.stem != "__init__")
     return result
+
+
+def _late_guarded_compatibility_shims(
+    tree: ast.Module,
+    entry_import_line: int | None,
+) -> list[int]:
+    """Find ``if not hasattr(module, name): module.name = ...`` after source import."""
+
+    if entry_import_line is None:
+        return []
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or node.lineno <= entry_import_line:
+            continue
+        guarded = {
+            (call.args[0].id, call.args[1].value)
+            for call in ast.walk(node.test)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "hasattr"
+            and len(call.args) >= 2
+            and isinstance(call.args[0], ast.Name)
+            and isinstance(call.args[1], ast.Constant)
+            and isinstance(call.args[1].value, str)
+        }
+        if not guarded:
+            continue
+        for statement in node.body:
+            for child in ast.walk(statement):
+                if not isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    continue
+                targets = child.targets if isinstance(child, ast.Assign) else [child.target]
+                if any(
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and (target.value.id, target.attr) in guarded
+                    for target in targets
+                ):
+                    lines.add(child.lineno)
+    return sorted(lines)
 
 
 def _imported_modules(node: ast.Import | ast.ImportFrom) -> list[str]:
