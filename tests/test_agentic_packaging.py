@@ -1012,6 +1012,29 @@ async def test_save_plan_enforces_reference_free_interface_quality_when_enabled(
     assert not store.interface_quality.passed
 
 
+async def test_save_plan_requires_independent_smoke_evidence_for_adapted_templates(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(
+        tmp_path / "plan.json",
+        ir.known_symbols,
+        known_files={file.path for file in ir.files} | {"main.py"},
+        require_independent_smoke_evidence=True,
+    )
+    raw = _plan(ir).to_dict()
+    for tool in raw["services"][0]["tools"]:
+        tool["smokeTest"]["evidence"] = ["main.py: generated template example"]
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert result.error
+    assert "smoke 证据门禁失败" in result.error
+    assert store.plan is None
+    assert store.last_errors is not None
+    assert all("只引用了生成的 main.py" in error for error in store.last_errors)
+
+
 async def test_save_plan_json_discards_only_unknown_excluded_symbols(tmp_path):
     """Provider hallucinations in audit-only exclusions must not block a valid plan."""
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))

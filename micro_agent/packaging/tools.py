@@ -113,6 +113,7 @@ class PlanStore:
     symbol_dispatch_branches: dict[str, list[dict[str, Any]]] | None = None
     candidate_symbols: set[str] | None = None
     enforce_interface_quality: bool = False
+    require_independent_smoke_evidence: bool = False
     plan: PackagingPlan | None = None
     last_errors: list[str] | None = None
     interface_quality: InterfaceQualityReport | None = None
@@ -181,6 +182,22 @@ class SavePackagingPlan(Tool):
                         "必须依据仓库证据补齐描述、真实约束与输出语义后，"
                         "重新提交完整规划:\n- "
                         + "\n- ".join(quality.errors)
+                    )
+                )
+        if plan.decision == "package" and self.store.require_independent_smoke_evidence:
+            smoke_errors = _independent_smoke_evidence_errors(
+                plan,
+                self.store.known_files or set(),
+            )
+            if smoke_errors:
+                self.store.plan = None
+                self.store.last_errors = smoke_errors
+                return ToolResult(
+                    error=(
+                        "模板适配仓库的 smoke 证据门禁失败。main.py 是后加的薄适配层，"
+                        "不能自行证明示意输入可执行；必须引用原仓库测试、doctest 或示例，"
+                        "并重新提交完整规划:\n- "
+                        + "\n- ".join(smoke_errors)
                     )
                 )
         if plan.decision == "package" and self.store.symbol_dispatch_branches:
@@ -345,6 +362,36 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
                 root_exclusions,
                 nested_exclusions,
             )
+
+
+def _independent_smoke_evidence_errors(
+    plan: PackagingPlan,
+    known_files: set[str],
+) -> list[str]:
+    generated_files = {
+        "main.py",
+        "README.ioeb.md",
+        "template_adaptation.json",
+    }
+    independent_files = known_files - generated_files
+    errors: list[str] = []
+    for tool in plan.tools:
+        smoke = tool.get("smokeTest", {})
+        if not smoke.get("enabled"):
+            continue
+        evidence = smoke.get("evidence", [])
+        if any(
+            isinstance(item, str)
+            and any(path in item for path in independent_files)
+            for item in evidence
+        ):
+            continue
+        errors.append(
+            f"{tool.get('name', '<unnamed>')}.smokeTest.evidence "
+            "只引用了生成的 main.py/README.ioeb.md/template_adaptation.json；"
+            "请从原仓库可执行测试、doctest 或示例核对输入，找不到时应设 enabled=false"
+        )
+    return errors
 
 
 def _merge_excluded_symbols(root: list[Any], nested: list[Any]) -> list[Any]:

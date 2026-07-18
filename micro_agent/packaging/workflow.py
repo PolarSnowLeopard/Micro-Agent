@@ -72,6 +72,9 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 8. smokeTest 只能使用仓库中真实存在、可执行的 fixture，或从源码中明确的字段约束机械选择输入；enabled=true 时 evidence 必须引用对应仓库文件/行号。没有可追溯输入时必须 enabled=false 并写 rationale，绝不能编造 Base64、文件路径或预期输出。
    每个工具都必须显式提供 smokeTest，不能省略后让系统默认跳过。纯 JSON/标量输入且仓库已有示例时必须 enabled=true；
    只有确实缺少可执行 fixture 的复杂文件/模型输入才允许 enabled=false。
+   若仓库包含 template_adaptation.json，说明根目录 main.py 是后加的模板薄适配层；其注释和 docstring
+   不能单独证明样例可执行。必须再从原仓库测试、doctest 或示例中核对底层 API 的真实输入语法，
+   并优先引用这些可执行证据，避免把适配层中未经运行验证的示意字符串当成 smoke fixture。
 9. 普通仓库中每个公开函数/方法都必须可审计：被工具使用的写入 sourceSymbols，其余写入 excludedSymbols 并逐项说明为什么它只是内部实现或不适合远程调用。
    独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
    excludedSymbols 必须位于规划 JSON 根节点，和 services 同级；绝不能写入 services[i] 内。
@@ -186,6 +189,9 @@ class AgenticAnalysisWorkflow:
             symbol_dispatch_branches=planning_dispatch_branches(ir),
             candidate_symbols=planning_candidate_symbols(ir),
             enforce_interface_quality=True,
+            require_independent_smoke_evidence=(
+                self.project_dir / "template_adaptation.json"
+            ).is_file(),
         )
         self.agent = _build_planning_agent(self.project_dir, ir, self.plan_store)
 
@@ -278,6 +284,9 @@ class AgenticPackagingWorkflow:
                 symbol_dispatch_branches=planning_dispatch_branches(self.ir),
                 candidate_symbols=planning_candidate_symbols(self.ir),
                 enforce_interface_quality=True,
+                require_independent_smoke_evidence=(
+                    self.project_dir / "template_adaptation.json"
+                ).is_file(),
             )
             planner = _build_planning_agent(self.project_dir, self.ir, plan_store)
             self._active_agent = planner
