@@ -147,6 +147,8 @@ def assess_interface_quality(
         )
     selector_contract_errors = _selector_output_contract_errors(tools)
     errors.extend(selector_contract_errors)
+    required_default_errors = _required_parameter_default_errors(tools)
+    errors.extend(required_default_errors)
     service_boundary_errors, shared_source_pairs = _service_boundary_errors(plan)
     errors.extend(service_boundary_errors)
 
@@ -279,6 +281,36 @@ def _selector_output_contract_errors(tools: list[dict[str, Any]]) -> list[str]:
                 f"仍把这些条件字段声明为必返: {', '.join(unstable_required)}；"
                 "请将选择性字段设为非 required，或改为带 additionalProperties 的领域映射，"
                 "不能要求适配器伪造未请求结果"
+            )
+    return errors
+
+
+def _required_parameter_default_errors(tools: list[dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    for tool in tools:
+        input_schema = tool.get("inputSchema")
+        if not isinstance(input_schema, dict):
+            continue
+        properties = input_schema.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        required = input_schema.get("required", [])
+        if not isinstance(required, list):
+            continue
+        contradictory = sorted(
+            name
+            for name in required
+            if isinstance(name, str)
+            and isinstance(properties.get(name), dict)
+            and "default" in properties[name]
+        )
+        if contradictory:
+            errors.append(
+                "[interface_quality] "
+                f"{tool['name']} 同时把参数声明为 required 和 default: "
+                + ", ".join(contradictory)
+                + "；这会误导 Agent 和自动调用器。若缺省值确实可用，请从 required "
+                "移除参数并让适配器采用该缺省值；否则删除 default"
             )
     return errors
 

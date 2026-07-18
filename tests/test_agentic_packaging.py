@@ -539,6 +539,22 @@ def test_reference_free_interface_quality_gate_accepts_evidence_rich_contract(tm
     assert report.metrics["referenceFreeGoE"] >= 0.72
 
 
+def test_reference_free_interface_quality_gate_rejects_required_defaults(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    tool = raw["services"][0]["tools"][0]
+    tool["inputSchema"]["properties"]["value"]["default"] = 0.5
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+
+    report = assess_interface_quality(plan, min_goe=0)
+
+    assert not report.passed
+    assert any(
+        "predict_risk 同时把参数声明为 required 和 default: value" in error
+        for error in report.errors
+    )
+
+
 def test_reference_free_interface_quality_gate_rejects_dispatcher_envelopes(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()
