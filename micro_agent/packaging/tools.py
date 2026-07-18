@@ -419,6 +419,18 @@ def _parse_structured_string(value: str) -> Any | None:
         return None
 
 
+def _agent_writable_path(relative: str) -> bool:
+    return relative in {
+        "adapters.py",
+        "requirements.txt",
+        "requirements-cpu.txt",
+        "system-packages.txt",
+        "README.generated.md",
+    } or (
+        relative.startswith("tests/") and relative.endswith((".py", ".json", ".md"))
+    )
+
+
 class WriteArtifactFile(Tool):
     name = "write_artifact_file"
     description = (
@@ -444,16 +456,7 @@ class WriteArtifactFile(Tool):
     async def execute(self, **kwargs: Any) -> ToolResult:
         relative = str(kwargs.get("path", ""))
         content = str(kwargs.get("content", ""))
-        allowed = relative in {
-            "adapters.py",
-            "requirements.txt",
-            "requirements-cpu.txt",
-            "system-packages.txt",
-            "README.generated.md",
-        } or (
-            relative.startswith("tests/") and relative.endswith((".py", ".json", ".md"))
-        )
-        if not allowed:
+        if not _agent_writable_path(relative):
             return ToolResult(error=f"不允许 Agent 写入该路径: {relative}")
         if len(content) > self.max_chars:
             return ToolResult(error=f"文件内容超过限制: {len(content)} > {self.max_chars}")
@@ -464,6 +467,59 @@ class WriteArtifactFile(Tool):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return ToolResult(output=f"已写入 {relative} ({len(content)} chars)")
+
+
+class PatchArtifactFile(Tool):
+    name = "patch_artifact_file"
+    description = (
+        "对 Agent 可写产物做一次精确局部替换。old_text 必须非空且在目标文件中恰好出现一次；"
+        "修复验收错误时优先使用此工具，避免重写已通过验证的代码和依赖。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "old_text": {
+                "type": "string",
+                "description": "目标文件中恰好出现一次的原始连续文本，必须非空",
+            },
+            "new_text": {
+                "type": "string",
+                "description": "替换后的文本；可为空以删除 old_text",
+            },
+        },
+        "required": ["path", "old_text", "new_text"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, artifact_dir: str | Path, *, max_chars: int = 250_000) -> None:
+        self.root = Path(artifact_dir).resolve()
+        self.writer = WriteArtifactFile(self.root, max_chars=max_chars)
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        relative = str(kwargs.get("path", ""))
+        old_text = str(kwargs.get("old_text", ""))
+        new_text = str(kwargs.get("new_text", ""))
+        if not _agent_writable_path(relative):
+            return ToolResult(error=f"不允许 Agent 修改该路径: {relative}")
+        if not old_text:
+            return ToolResult(error="old_text 不能为空；空文件或整文件初始化请使用 write_artifact_file")
+        path = _contained_path(self.root, relative)
+        if not path.is_file() or path.is_symlink():
+            return ToolResult(error=f"产物文件不存在或不可修改: {relative}")
+        content = path.read_text(encoding="utf-8", errors="replace")
+        occurrences = content.count(old_text)
+        if occurrences != 1:
+            return ToolResult(
+                error=(
+                    f"old_text 必须在 {relative} 中恰好出现一次，"
+                    f"当前出现 {occurrences} 次；请扩大上下文后重试"
+                )
+            )
+        return await self.writer.execute(
+            path=relative,
+            content=content.replace(old_text, new_text, 1),
+        )
 
 
 def _validate_agent_dependency_file(relative: str, content: str) -> str:

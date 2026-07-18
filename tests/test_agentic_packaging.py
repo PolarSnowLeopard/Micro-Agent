@@ -27,6 +27,7 @@ from micro_agent.packaging.runtime_verifier import (
     _runtime_probe_source,
 )
 from micro_agent.packaging.tools import (
+    PatchArtifactFile,
     PlanStore,
     SavePackagingPlan,
     SavePackagingPlanJson,
@@ -37,6 +38,8 @@ from micro_agent.packaging.workflow import (
     AgenticAnalysisWorkflow,
     AgenticPackagingWorkflow,
     AnalysisCache,
+    _repair_artifact_snapshot,
+    _repair_prompt,
     planning_candidate_symbols,
     _extract_planning_json,
 )
@@ -1477,6 +1480,86 @@ async def test_dependency_writer_allows_only_safe_package_manifests(tmp_path):
 
     immutable = await writer.execute(path="Dockerfile", content="FROM busybox\n")
     assert immutable.error
+
+
+async def test_artifact_patcher_requires_one_exact_safe_match(tmp_path):
+    (tmp_path / "adapters.py").write_text(
+        "def calculate(value):\n    return value\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements.txt").write_text("numpy>=1.26\n", encoding="utf-8")
+    patcher = PatchArtifactFile(tmp_path)
+
+    patched = await patcher.execute(
+        path="adapters.py",
+        old_text="    return value\n",
+        new_text="    return float(value)\n",
+    )
+    assert not patched.error
+    assert "return float(value)" in (tmp_path / "adapters.py").read_text(encoding="utf-8")
+
+    missing = await patcher.execute(
+        path="adapters.py",
+        old_text="return missing",
+        new_text="return fixed",
+    )
+    assert "出现 0 次" in missing.error
+
+    repeated = await patcher.execute(
+        path="adapters.py",
+        old_text="value",
+        new_text="item",
+    )
+    assert "出现 2 次" in repeated.error
+
+    empty = await patcher.execute(path="adapters.py", old_text="", new_text="pass\n")
+    assert "不能为空" in empty.error
+
+    invalid_requirement = await patcher.execute(
+        path="requirements.txt",
+        old_text="numpy>=1.26",
+        new_text="-i https://example.test/simple",
+    )
+    assert "禁止 pip 命令行选项" in invalid_requirement.error
+    assert (tmp_path / "requirements.txt").read_text(encoding="utf-8") == "numpy>=1.26\n"
+
+    immutable = await patcher.execute(
+        path="server.py",
+        old_text="old",
+        new_text="new",
+    )
+    assert "不允许" in immutable.error
+
+
+def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
+    (tmp_path / "adapters.py").write_text("a" * 30, encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("numpy\n", encoding="utf-8")
+    (tmp_path / "requirements-cpu.txt").write_text("", encoding="utf-8")
+    (tmp_path / "system-packages.txt").write_text("", encoding="utf-8")
+    snapshot = _repair_artifact_snapshot(
+        tmp_path,
+        max_file_chars=20,
+        max_total_chars=40,
+    )
+    report = VerificationReport(
+        passed=False,
+        checks={},
+        errors=["[runtime] failure"],
+    )
+    prompt = _repair_prompt(
+        report,
+        1,
+        failure_phase="runtime",
+        phase_attempt=1,
+        artifact_snapshot=snapshot,
+    )
+
+    assert snapshot["adapters.py"] == "aaaaa\n...(truncated)"
+    assert '"requirements.txt": "numpy\\n"' in prompt
+    assert sum(len(value) for value in snapshot.values()) <= 40
+    assert "第一项工具操作必须是 patch_artifact_file" in prompt
+    assert "不得先调用 inspect_repository 或 read_project_file" in prompt
+    assert "[runtime] failure" in prompt
 
 
 async def test_container_runtime_verifier_builds_and_discovers_tools(tmp_path):
