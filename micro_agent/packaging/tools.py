@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import difflib
 import io
 import json
 import re
@@ -161,13 +162,16 @@ class SavePackagingPlan(Tool):
             )
         except PlanValidationError as exc:
             self.store.plan = None
-            self.store.last_errors = exc.errors
+            self.store.last_errors = _augment_unknown_symbol_errors(
+                exc.errors,
+                self.store.known_symbols,
+            )
             self.store.interface_quality = None
             return ToolResult(
                 error=(
                     "规划校验失败。save_packaging_plan 不是 PATCH；下一次必须重新提交包含 "
                     "schemaVersion、decision、analysisSummary、services 在内的完整规划:\n- "
-                    + "\n- ".join(exc.errors)
+                    + "\n- ".join(self.store.last_errors)
                 )
             )
         if self.store.enforce_interface_quality and plan.decision == "package":
@@ -270,6 +274,48 @@ class SavePackagingPlanJson(Tool):
         _canonicalize_nonsemantic_shape(raw)
         _drop_unknown_exclusions(raw, self.store.known_symbols)
         return await SavePackagingPlan(self.store).execute(**raw)
+
+
+def _augment_unknown_symbol_errors(
+    errors: list[str],
+    known_symbols: set[str],
+) -> list[str]:
+    known = sorted(known_symbols)
+    augmented: list[str] = []
+    for error in errors:
+        match = re.search(r"包含未知符号:\s*(.+)$", error)
+        if match is None:
+            augmented.append(error)
+            continue
+        suggestions: list[str] = []
+        for unknown in (item.strip() for item in match.group(1).split(",")):
+            if not unknown:
+                continue
+            candidates: list[str] = []
+            parent = unknown.rpartition(".")[0]
+            if parent in known_symbols:
+                candidates.append(parent)
+            candidates.extend(
+                symbol
+                for symbol in known
+                if symbol.rsplit(".", 1)[-1] == unknown.rsplit(".", 1)[-1]
+            )
+            candidates.extend(
+                difflib.get_close_matches(unknown, known, n=5, cutoff=0.45)
+            )
+            unique = list(dict.fromkeys(candidates))[:5]
+            if unique:
+                suggestions.append(f"{unknown} -> {unique}")
+        augmented.append(
+            error
+            + (
+                "；可用仓库符号候选（必须核对源码后选择）: "
+                + "; ".join(suggestions)
+                if suggestions
+                else ""
+            )
+        )
+    return augmented
 
 
 def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:

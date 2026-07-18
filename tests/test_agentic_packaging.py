@@ -640,6 +640,22 @@ def test_plan_rejects_unknown_source_symbol(tmp_path):
         raise AssertionError("unknown source symbol should fail validation")
 
 
+async def test_plan_tool_suggests_real_symbols_for_unknown_source_reference(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(tmp_path / "plan.json", ir.known_symbols)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"][0]["sourceSymbols"] = ["core.predcit"]
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert result.error
+    assert "core.predict" in result.error
+    assert "必须核对源码后选择" in result.error
+    assert store.plan is None
+
+
 def test_plan_rejects_server_paths_and_duplicate_semantic_tools(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()
