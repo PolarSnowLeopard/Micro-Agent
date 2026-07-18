@@ -147,6 +147,8 @@ def assess_interface_quality(
         )
     selector_contract_errors = _selector_output_contract_errors(tools)
     errors.extend(selector_contract_errors)
+    service_boundary_errors, shared_source_pairs = _service_boundary_errors(plan)
+    errors.extend(service_boundary_errors)
 
     if goe < min_goe:
         errors.append(
@@ -172,6 +174,8 @@ def assess_interface_quality(
         "argumentConstructionSupport": round(acs, 4),
         "referenceFreeGoE": round(goe, 4),
         "outputDescriptionCoverage": round(output_description_coverage, 4),
+        "serviceCount": len(plan.data.get("services", [])),
+        "crossServiceSharedSourcePairs": shared_source_pairs,
     }
     return InterfaceQualityReport(
         passed=not errors,
@@ -277,6 +281,102 @@ def _selector_output_contract_errors(tools: list[dict[str, Any]]) -> list[str]:
                 "不能要求适配器伪造未请求结果"
             )
     return errors
+
+
+def _service_boundary_errors(plan: PackagingPlan) -> tuple[list[str], int]:
+    """Reject service splits contradicted by the plan's own implementation evidence.
+
+    A service is a lifecycle/dependency boundary, not another label for a Tool.
+    Tools that share a source entry point necessarily share implementation state
+    inside the generated artifact and cannot honestly claim independent service
+    boundaries. Multiple boundaries also need distinct, user-readable reasons;
+    the canonical fallback text is intentionally insufficient here.
+    """
+
+    services = plan.data.get("services", [])
+    if not isinstance(services, list) or len(services) <= 1:
+        return [], 0
+
+    errors: list[str] = []
+    shared_pairs: list[tuple[str, str, list[str]]] = []
+    for left_index, left in enumerate(services):
+        if not isinstance(left, dict):
+            continue
+        left_symbols = {
+            symbol
+            for tool in left.get("tools", [])
+            if isinstance(tool, dict)
+            for symbol in tool.get("sourceSymbols", [])
+            if isinstance(symbol, str)
+        }
+        for right in services[left_index + 1 :]:
+            if not isinstance(right, dict):
+                continue
+            right_symbols = {
+                symbol
+                for tool in right.get("tools", [])
+                if isinstance(tool, dict)
+                for symbol in tool.get("sourceSymbols", [])
+                if isinstance(symbol, str)
+            }
+            shared = sorted(left_symbols & right_symbols)
+            if shared:
+                shared_pairs.append(
+                    (
+                        str(left.get("id", "<unnamed>")),
+                        str(right.get("id", "<unnamed>")),
+                        shared,
+                    )
+                )
+
+    if shared_pairs:
+        rendered = "; ".join(
+            f"{left} / {right}: {', '.join(shared)}"
+            for left, right, shared in shared_pairs
+        )
+        errors.append(
+            "[interface_quality] 以下跨服务工具共享同一源码入口，说明它们共享实现、"
+            "依赖或生命周期，不能按 Tool 机械拆成独立服务: "
+            + rendered
+            + "；请合并到同一逻辑服务，服务内保留多个可独立选择的 Tool"
+        )
+
+    descriptions: list[tuple[str, str, str]] = []
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        service_id = str(service.get("id", "<unnamed>"))
+        name = str(service.get("name", "")).strip()
+        description = str(service.get("description", "")).strip()
+        rationale = str(service.get("rationale", "")).strip()
+        descriptions.append((service_id, description, rationale))
+        if _normalized_boundary_text(description) == _normalized_boundary_text(name):
+            errors.append(
+                "[interface_quality] "
+                f"逻辑服务 {service_id} 的 description 只是重复服务名称；"
+                "必须说明该边界包含哪些内聚能力、共享什么状态或依赖"
+            )
+
+    rationale_owners: dict[str, list[str]] = {}
+    for service_id, _, rationale in descriptions:
+        rationale_owners.setdefault(_normalized_boundary_text(rationale), []).append(service_id)
+    duplicated_rationales = [
+        owners
+        for normalized, owners in rationale_owners.items()
+        if normalized and len(owners) > 1
+    ]
+    if duplicated_rationales:
+        errors.append(
+            "[interface_quality] 多个逻辑服务使用了完全相同的边界理由: "
+            + "; ".join(", ".join(owners) for owners in duplicated_rationales)
+            + "；若无法分别说明不同状态、依赖或生命周期，应合并为一个服务"
+        )
+
+    return errors, len(shared_pairs)
+
+
+def _normalized_boundary_text(value: str) -> str:
+    return " ".join(value.lower().replace("_", " ").replace("-", " ").split())
 
 
 __all__ = ["InterfaceQualityReport", "assess_interface_quality"]

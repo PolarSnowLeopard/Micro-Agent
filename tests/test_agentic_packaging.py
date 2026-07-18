@@ -573,6 +573,57 @@ def test_reference_free_interface_quality_gate_rejects_required_selector_outputs
     )
 
 
+def test_reference_free_interface_quality_gate_rejects_mechanical_service_splits(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    predict, evaluate = raw["services"][0]["tools"]
+    predict["sourceSymbols"].append("core.evaluate")
+    evaluate["sourceSymbols"].append("core.predict")
+    raw["services"] = [
+        {
+            "id": "prediction_service",
+            "name": "Prediction service",
+            "description": "Prediction service",
+            "rationale": (
+                "These tools share the same algorithm contract, runtime dependencies, "
+                "and lifecycle."
+            ),
+            "tools": [predict],
+        },
+        {
+            "id": "evaluation_service",
+            "name": "Evaluation service",
+            "description": "Evaluation service",
+            "rationale": (
+                "These tools share the same algorithm contract, runtime dependencies, "
+                "and lifecycle."
+            ),
+            "tools": [evaluate],
+        },
+    ]
+    for tool in (predict, evaluate):
+        tool["description"] = (
+            f"{tool['description']} Use this operation for its distinct audited "
+            "algorithm workflow and structured result contract."
+        )
+        for name, schema in tool["inputSchema"]["properties"].items():
+            schema["description"] = f"Validated {name} input for the audited operation."
+        for name, schema in tool["outputSchema"]["properties"].items():
+            schema["description"] = f"Structured {name} produced by the audited operation."
+    predict["inputSchema"]["properties"]["value"]["minimum"] = 0
+    evaluate["inputSchema"]["properties"]["values"]["minItems"] = 1
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+
+    report = assess_interface_quality(plan)
+
+    assert not report.passed
+    assert report.metrics["serviceCount"] == 2
+    assert report.metrics["crossServiceSharedSourcePairs"] == 1
+    assert any("跨服务工具共享同一源码入口" in error for error in report.errors)
+    assert any("description 只是重复服务名称" in error for error in report.errors)
+    assert any("完全相同的边界理由" in error for error in report.errors)
+
+
 def test_plan_rejects_unknown_source_symbol(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()
