@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import AsyncIterator, Any, Optional
 
 from loguru import logger
@@ -56,6 +57,8 @@ class Agent:
     async def run(self, request: str) -> AsyncIterator[AgentEvent]:
         """主循环。每个 step 产出 think/tool_call/tool_result 事件，最终产出 done。"""
         self.memory.add(Message.user(request))
+        tool_call_signatures: set[str] = set()
+        duplicate_tool_call_blocks = 0
 
         # RAG：第一步前检索相关文档，注入 system prompt，并 yield 可见事件
         if self.retriever:
@@ -115,6 +118,47 @@ class Agent:
                 return
 
             # === Act ===
+            signatures = {
+                json.dumps(
+                    {
+                        "name": tool_call.name,
+                        "arguments": tool_call.parse_arguments(),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+                for tool_call in response.tool_calls
+            }
+            duplicated = sorted(signatures & tool_call_signatures)
+            if duplicated:
+                duplicate_tool_call_blocks += 1
+                warning = (
+                    "[重复工具调用阻断] 完全相同的工具与参数已执行过，"
+                    "本次不会再次写入对话或执行。请使用已有结果，改用不同参数，"
+                    "或直接提交当前阶段要求的结构化结果。"
+                )
+                self.memory.add(Message.user(warning))
+                yield AgentEvent(
+                    type="think",
+                    step=step,
+                    data={
+                        "thought": warning,
+                        "duplicateToolCalls": duplicated,
+                    },
+                )
+                if duplicate_tool_call_blocks >= 2:
+                    yield AgentEvent(
+                        type="done",
+                        step=step,
+                        data={
+                            "result": "重复工具调用已连续阻断，结束本轮并交由外层质量循环处理。",
+                            "reason": "repeated_tool_call",
+                        },
+                    )
+                    return
+                continue
+            tool_call_signatures.update(signatures)
             self.memory.add(
                 Message.assistant(
                     content=response.content,

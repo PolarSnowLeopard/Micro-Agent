@@ -139,12 +139,79 @@ async def test_agent_cancel():
     print("[PASS] Agent cancel")
 
 
+async def test_agent_blocks_identical_tool_calls_before_provider_history_repeats():
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.llm import LLMResponse
+    from micro_agent.core.schema import ToolCall
+    from micro_agent.tool.base import Tool, ToolResult
+    from micro_agent.tool.registry import ToolRegistry
+
+    class CountingTool(Tool):
+        name = "count_once"
+        description = "Count one deterministic invocation."
+        parameters = {
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+            "required": ["value"],
+        }
+
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, **kwargs):
+            self.calls += 1
+            return ToolResult(output=str(kwargs["value"]))
+
+    class RepeatingLLM:
+        def __init__(self):
+            self.calls = 0
+            self.histories = []
+
+        async def complete(self, messages, **kwargs):
+            self.calls += 1
+            self.histories.append(messages)
+            if self.calls <= 2:
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id=f"call-{self.calls}",
+                            name="count_once",
+                            arguments='{"value": 1}',
+                        )
+                    ]
+                )
+            return LLMResponse(content="used the existing result")
+
+    tool = CountingTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    llm = RepeatingLLM()
+    agent = Agent(llm=llm, tools=registry, max_steps=4)
+
+    events = [event async for event in agent.run("run once")]
+
+    assert tool.calls == 1
+    assert any(
+        event.type == "think" and "重复工具调用阻断" in event.data.get("thought", "")
+        for event in events
+    )
+    assert events[-1].type == "done"
+    assert events[-1].data["result"] == "used the existing result"
+    assistant_tool_messages = [
+        message
+        for message in llm.histories[-1]
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    ]
+    assert len(assistant_tool_messages) == 1
+
+
 async def main():
     await test_bash_tool()
     await test_tool_registry_namespace()
     await test_mcp_connection_manager_init()
     await test_mcp_agent_init()
     await test_agent_cancel()
+    await test_agent_blocks_identical_tool_calls_before_provider_history_repeats()
     print("\n=== ALL PHASE 2 TESTS PASSED ===")
 
 
