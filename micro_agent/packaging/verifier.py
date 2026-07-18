@@ -814,7 +814,14 @@ def _calls_source_capability(
         if not call_name:
             continue
         tail = call_name.rsplit(".", 1)[-1]
-        if call_name in source_call_names or tail in source_call_names:
+        if (
+            call_name in source_call_names
+            or tail in source_call_names
+            or any(
+                call_name.startswith(source_name + ".")
+                for source_name in source_call_names
+            )
+        ):
             return True
         helper = adapter_functions.get(tail)
         if helper is not None and helper.name not in seen:

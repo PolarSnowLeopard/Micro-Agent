@@ -1327,6 +1327,37 @@ def test_verifier_rejects_reimplementing_source_with_another_library(tmp_path):
     assert any("禁止用另一个库重写算法" in error for error in report.errors)
 
 
+def test_verifier_accepts_reviewed_source_classmethod_invocation(tmp_path):
+    project = _sample_project(tmp_path)
+    core = project / "core.py"
+    core.write_text(
+        core.read_text(encoding="utf-8")
+        + "\nclass RiskModel:\n"
+        + "    @classmethod\n"
+        + "    def from_value(cls, value: float) -> dict[str, float]:\n"
+        + "        return {'score': float(value)}\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"][0]["sourceSymbols"] = ["core.RiskModel"]
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    adapters = _valid_adapters().replace(
+        "from algorithm.core import predict as algorithm_predict",
+        "from algorithm.core import RiskModel as algorithm_predict",
+    ).replace(
+        "return algorithm_predict(float(value))",
+        "return algorithm_predict.from_value(float(value))",
+    )
+    (artifact / "adapters.py").write_text(adapters, encoding="utf-8")
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert report.passed, report.to_json()
+
+
 def test_scaffold_splits_cpu_wheels_and_drops_unsafe_source_requirements(tmp_path):
     project = _sample_project(tmp_path)
     (project / "requirements.txt").write_text(
