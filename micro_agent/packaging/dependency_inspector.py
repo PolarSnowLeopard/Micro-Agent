@@ -33,7 +33,13 @@ def unresolved_import_dependencies(
     adapter_path: str | Path | None = None,
     requirement_paths: Iterable[str | Path] = (),
 ) -> dict[str, dict[str, object]]:
-    """Find undeclared imports reachable from exposed local source modules."""
+    """Find undeclared eager imports reachable from exposed source modules.
+
+    Function-local imports are runtime-path dependent and are intentionally
+    delegated to the mandatory per-tool container smoke tests. Treating every
+    deferred optional backend as eager forces unrelated compilers and packages
+    into otherwise valid services.
+    """
     root = Path(algorithm_root).resolve()
     module_files = _module_file_index(root)
     queue: deque[str] = deque()
@@ -131,6 +137,8 @@ def _imports_from_file(path: Path, *, module_name: str) -> list[str]:
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
+        if _is_function_local_import(node, parents):
+            continue
         if _is_optional_or_type_only_import(node, parents, optional_import_guards):
             continue
         if isinstance(node, ast.Import):
@@ -148,6 +156,19 @@ def _imports_from_file(path: Path, *, module_name: str) -> list[str]:
             if alias.name != "*":
                 imports.append(".".join(part for part in (base, alias.name) if part))
     return sorted(set(imports))
+
+
+def _is_function_local_import(
+    node: ast.Import | ast.ImportFrom,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    current: ast.AST = node
+    while current in parents:
+        parent = parents[current]
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return True
+        current = parent
+    return False
 
 
 def _resolve_from_base(

@@ -283,7 +283,7 @@ class ArtifactVerifier:
                 for name, item in unresolved.items()
             ]
             report.errors.append(
-                "受工具源码导入链使用、但依赖清单未声明的第三方模块: "
+                "受工具源码模块导入阶段使用、但依赖清单未声明的第三方模块: "
                 + "; ".join(details)
             )
 

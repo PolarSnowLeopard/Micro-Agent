@@ -1419,6 +1419,9 @@ def test_dependency_inspector_follows_local_import_chain_once(tmp_path):
         "    import optional_accelerator\n"
         "except ImportError:\n"
         "    optional_accelerator = None\n"
+        "def deferred_backend():\n"
+        "    import runtime_selected_backend\n"
+        "    return runtime_selected_backend\n"
         "def run():\n"
         "    return Image, lmdb\n",
         encoding="utf-8",
