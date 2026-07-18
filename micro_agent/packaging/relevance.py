@@ -408,6 +408,7 @@ def _detailed_file(
                 "signature": symbol.signature,
                 "docstring": symbol.docstring[:400],
                 "calls": symbol.calls[:30],
+                "dispatchBranches": symbol.dispatchBranches,
                 "isGenerator": symbol.isGenerator,
                 "failureReturns": symbol.failureReturns,
                 "isPublic": symbol.isPublic,

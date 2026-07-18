@@ -64,6 +64,10 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
    独立的 predict/infer/evaluate/calculate/score/dose 等业务能力不能只以“非核心、内部使用、未来支持”为理由排除；只有调用图证明它已被某个端到端 sourceSymbol 组合时，才可作为内部子流程。
    excludedSymbols 必须位于规划 JSON 根节点，和 services 同级；绝不能写入 services[i] 内。
    若索引声明 templateContract=true，则根目录 main.main_process 是用户提交模板的公共契约和审计边界；底层公开符号是实现证据，不要求逐项写入 excludedSymbols。索引已内嵌完整模板入口和 README 摘要，最多再读取 6 个必要的底层文件。必须阅读 main_process 及其调用的底层代码，并可按其中稳定 operation/工作流分支抽象成多个 Tool；不得因为只有一个契约入口就机械地只生成一个 Tool。
+   索引中 dispatchBranches 是 AST 直接提取的字面量分派证据。若同一入口参数存在两个以上分支值，
+   必须为每个分支规划独立 Tool；每个 Tool 的 adapterStrategy 都要明确写成
+   `operation='parse'` 这类固定赋值，且不得再在 inputSchema 暴露该分派参数。
+   不得把多个不同输入/输出语义的分支重新压回一个带 operation/mode 枚举的万能 Tool。
 10. 必须用 save_packaging_plan_json 提交一段无 Markdown fence 的完整严格 JSON。每次调用都是完整替换，不是局部 PATCH；校验失败后外层流程会反馈错误并开启下一轮，仍必须重发包含非空 services 的完整规划，不能只发送修改字段。调用 save_packaging_plan_json 后本轮即结束，无需再调用 terminate。
     顶层结构固定为 {"schemaVersion": ..., "decision": ..., "analysisSummary": ..., "services": [...], "excludedSymbols": [...], "assumptions": [...], "riskNotes": [...]}。
     提交后还会执行 reference-free 接口质量门禁；它只检查当前仓库证据、描述、真实约束与输出语义，
@@ -155,6 +159,7 @@ class AgenticAnalysisWorkflow:
             },
             symbol_calls={symbol.qualifiedName: symbol.calls for symbol in ir.symbols},
             symbol_is_generator={symbol.qualifiedName: symbol.isGenerator for symbol in ir.symbols},
+            symbol_dispatch_branches=planning_dispatch_branches(ir),
             candidate_symbols=planning_candidate_symbols(ir),
             enforce_interface_quality=True,
         )
@@ -246,6 +251,7 @@ class AgenticPackagingWorkflow:
                 symbol_is_generator={
                     symbol.qualifiedName: symbol.isGenerator for symbol in self.ir.symbols
                 },
+                symbol_dispatch_branches=planning_dispatch_branches(self.ir),
                 candidate_symbols=planning_candidate_symbols(self.ir),
                 enforce_interface_quality=True,
             )
@@ -588,6 +594,15 @@ def planning_candidate_symbols(ir: RepositoryIR) -> set[str]:
     if len(entries) == 1:
         return entries
     return ir.public_callable_symbols
+
+
+def planning_dispatch_branches(ir: RepositoryIR) -> dict[str, list[dict]]:
+    candidates = planning_candidate_symbols(ir)
+    return {
+        symbol.qualifiedName: symbol.dispatchBranches
+        for symbol in ir.symbols
+        if symbol.dispatchBranches and symbol.qualifiedName in candidates
+    }
 
 
 def _template_contract_entries(ir: RepositoryIR) -> set[str]:

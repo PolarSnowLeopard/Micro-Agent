@@ -14,6 +14,7 @@ from typing import Any
 from packaging.requirements import InvalidRequirement, Requirement
 
 from micro_agent.packaging.analyzer import RepositoryIR
+from micro_agent.packaging.capability_coverage import assess_dispatch_coverage
 from micro_agent.packaging.interface_quality import (
     InterfaceQualityReport,
     assess_interface_quality,
@@ -109,6 +110,7 @@ class PlanStore:
     symbol_required_parameters: dict[str, list[str]] | None = None
     symbol_calls: dict[str, list[str]] | None = None
     symbol_is_generator: dict[str, bool] | None = None
+    symbol_dispatch_branches: dict[str, list[dict[str, Any]]] | None = None
     candidate_symbols: set[str] | None = None
     enforce_interface_quality: bool = False
     plan: PackagingPlan | None = None
@@ -179,6 +181,20 @@ class SavePackagingPlan(Tool):
                         "必须依据仓库证据补齐描述、真实约束与输出语义后，"
                         "重新提交完整规划:\n- "
                         + "\n- ".join(quality.errors)
+                    )
+                )
+        if plan.decision == "package" and self.store.symbol_dispatch_branches:
+            dispatch_errors = assess_dispatch_coverage(
+                plan, self.store.symbol_dispatch_branches
+            )
+            if dispatch_errors:
+                self.store.plan = None
+                self.store.last_errors = dispatch_errors
+                return ToolResult(
+                    error=(
+                        "分支能力覆盖门禁失败。必须依据静态分派分支拆分 Agent 可选择的 Tool，"
+                        "并在 adapterStrategy 中写明固定参数值后重新提交完整规划:\n- "
+                        + "\n- ".join(dispatch_errors)
                     )
                 )
         self.store.path.parent.mkdir(parents=True, exist_ok=True)

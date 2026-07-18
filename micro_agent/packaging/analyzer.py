@@ -51,6 +51,7 @@ class SymbolInfo:
     docstring: str
     decorators: list[str] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
+    dispatchBranches: list[dict[str, Any]] = field(default_factory=list)
     isGenerator: bool = False
     failureReturns: list[str] = field(default_factory=list)
     isPublic: bool = True
@@ -255,6 +256,7 @@ def _inspect_module(tree: ast.Module, module: str, rel: str) -> tuple[list[str],
                     docstring=(ast.get_docstring(node) or "")[:1000],
                     decorators=[_safe_unparse(item) for item in node.decorator_list],
                     calls=[],
+                    dispatchBranches=[],
                     isGenerator=False,
                     failureReturns=[],
                     isPublic=not node.name.startswith("_"),
@@ -290,6 +292,7 @@ def _symbol_from_function(
         docstring=(ast.get_docstring(node) or "")[:1000],
         decorators=[_safe_unparse(item) for item in node.decorator_list],
         calls=_function_calls(node),
+        dispatchBranches=_function_dispatch_branches(node),
         isGenerator=any(isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(node)),
         failureReturns=_failure_return_texts(node),
         isPublic=not node.name.startswith("_"),
@@ -334,6 +337,85 @@ def _function_calls(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
         if name:
             calls.add(name)
     return sorted(calls)
+
+
+def _function_dispatch_branches(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[dict[str, Any]]:
+    """Extract stable literal branches controlled directly by public parameters."""
+
+    parameters = set(_function_parameter_names(node))
+    branches: dict[tuple[str, str], dict[str, Any]] = {}
+    for child in ast.walk(node):
+        if not isinstance(child, ast.If):
+            continue
+        for parameter, value in _dispatch_comparisons(child.test, parameters):
+            key = (parameter, json.dumps(value, ensure_ascii=False, sort_keys=True))
+            calls: set[str] = set()
+            for statement in child.body:
+                for nested in ast.walk(statement):
+                    if not isinstance(nested, ast.Call):
+                        continue
+                    name = _call_name(nested.func)
+                    if name:
+                        calls.add(name)
+            branches[key] = {
+                "parameter": parameter,
+                "value": value,
+                "line": child.lineno,
+                "calls": sorted(calls),
+            }
+    return sorted(
+        branches.values(),
+        key=lambda item: (item["parameter"], str(item["value"]), item["line"]),
+    )
+
+
+def _dispatch_comparisons(
+    expression: ast.expr,
+    parameters: set[str],
+) -> list[tuple[str, Any]]:
+    if isinstance(expression, ast.BoolOp):
+        return [
+            comparison
+            for value in expression.values
+            for comparison in _dispatch_comparisons(value, parameters)
+        ]
+    if not isinstance(expression, ast.Compare) or len(expression.ops) != 1:
+        return []
+    operator = expression.ops[0]
+    right = expression.comparators[0]
+    if isinstance(operator, ast.Eq):
+        if isinstance(expression.left, ast.Name) and expression.left.id in parameters:
+            literal = _literal_value(right)
+            return [(expression.left.id, literal)] if literal is not _NO_LITERAL else []
+        if isinstance(right, ast.Name) and right.id in parameters:
+            literal = _literal_value(expression.left)
+            return [(right.id, literal)] if literal is not _NO_LITERAL else []
+    if (
+        isinstance(operator, ast.In)
+        and isinstance(expression.left, ast.Name)
+        and expression.left.id in parameters
+        and isinstance(right, (ast.List, ast.Tuple, ast.Set))
+    ):
+        result = []
+        for item in right.elts:
+            literal = _literal_value(item)
+            if literal is not _NO_LITERAL:
+                result.append((expression.left.id, literal))
+        return result
+    return []
+
+
+_NO_LITERAL = object()
+
+
+def _literal_value(node: ast.expr) -> Any:
+    if isinstance(node, ast.Constant) and isinstance(
+        node.value, (str, int, float, bool, type(None))
+    ):
+        return node.value
+    return _NO_LITERAL
 
 
 def _failure_return_texts(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:

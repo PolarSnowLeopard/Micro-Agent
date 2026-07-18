@@ -13,6 +13,7 @@ from pathlib import Path
 
 from micro_agent.core.schema import AgentEvent
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
+from micro_agent.packaging.capability_coverage import assess_dispatch_coverage
 from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
 from micro_agent.packaging.interface_quality import assess_interface_quality
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
@@ -256,6 +257,91 @@ def test_darp_propagates_intent_relevance_through_internal_dependencies(tmp_path
     assert scores["features.py"] >= 0.36
     assert "unrelated.py" not in scores
     assert evidence["overview"]["belowThresholdFileCount"] == 1
+
+
+def test_analyzer_extracts_literal_dispatch_branches_and_gate_requires_split_tools(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "from core import evaluate, predict\n\n"
+        "def main_process(operation: str, value: float) -> dict:\n"
+        "    if operation == 'predict':\n"
+        "        return predict(value)\n"
+        "    elif operation == 'evaluate':\n"
+        "        return evaluate([value])\n"
+        "    raise ValueError('unsupported operation')\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    entry = next(
+        symbol for symbol in ir.symbols if symbol.qualifiedName == "main.main_process"
+    )
+
+    assert [
+        (branch["parameter"], branch["value"])
+        for branch in entry.dispatchBranches
+    ] == [("operation", "evaluate"), ("operation", "predict")]
+    raw = _plan(ir).to_dict()
+    for tool in raw["services"][0]["tools"]:
+        tool["sourceSymbols"] = ["main.main_process"]
+        tool["inputSchema"]["properties"]["operation"] = {
+            "type": "string",
+            "enum": ["predict", "evaluate"],
+        }
+        tool["adapterStrategy"] = "Pass operation through to main_process."
+    generic_plan = PackagingPlan(raw)
+
+    errors = assess_dispatch_coverage(
+        generic_plan, {"main.main_process": entry.dispatchBranches}
+    )
+
+    assert any("仍把分派参数暴露" in error for error in errors)
+    assert any("未被独立 Tool 覆盖" in error for error in errors)
+
+    for tool, value in zip(raw["services"][0]["tools"], ("predict", "evaluate")):
+        tool["inputSchema"]["properties"].pop("operation")
+        tool["adapterStrategy"] = (
+            f"Validate public inputs, set operation='{value}', and call main_process."
+        )
+    split_plan = PackagingPlan(raw)
+
+    assert not assess_dispatch_coverage(
+        split_plan, {"main.main_process": entry.dispatchBranches}
+    )
+
+
+async def test_plan_store_applies_dispatch_coverage_gate(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "from core import evaluate, predict\n\n"
+        "def main_process(operation: str, value: float) -> dict:\n"
+        "    if operation == 'predict':\n"
+        "        return predict(value)\n"
+        "    if operation == 'evaluate':\n"
+        "        return evaluate([value])\n"
+        "    raise ValueError('unsupported operation')\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    entry = next(
+        symbol for symbol in ir.symbols if symbol.qualifiedName == "main.main_process"
+    )
+    raw = _plan(ir).to_dict()
+    for tool in raw["services"][0]["tools"]:
+        tool["sourceSymbols"] = ["main.main_process"]
+        tool["adapterStrategy"] = "Pass the selected operation through to main_process."
+    store = PlanStore(
+        tmp_path / "plan.json",
+        ir.known_symbols,
+        symbol_dispatch_branches={"main.main_process": entry.dispatchBranches},
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert result.error
+    assert store.plan is None
+    assert "分支能力覆盖门禁失败" in result.error
 
 
 def test_bage_retains_budgeted_inventory_without_promoting_unrelated_files(tmp_path):
