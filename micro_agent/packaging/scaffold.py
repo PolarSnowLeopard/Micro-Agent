@@ -45,9 +45,13 @@ def prepare_artifact(project_dir: str | Path, artifact_dir: str | Path, plan: Pa
     (algorithm_root / "__init__.py").touch(exist_ok=True)
 
     source_owned_distributions = _source_owned_distributions(source_root)
+    declared_requirements = _merge_requirements(
+        _read_requirements(source_root),
+        _read_project_dependencies(source_root),
+    )
     source_requirements = [
         requirement
-        for requirement in _read_requirements(source_root)
+        for requirement in declared_requirements
         if canonicalize_name(_requirement_name(requirement))
         not in source_owned_distributions
     ]
@@ -194,6 +198,192 @@ def _read_requirements(root: Path) -> list[str]:
     return requirements
 
 
+def _read_project_dependencies(root: Path) -> list[str]:
+    """Read install dependencies from packaging metadata without executing it."""
+
+    candidates: list[str] = []
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            dependencies = tomllib.loads(
+                pyproject.read_text(encoding="utf-8", errors="replace")
+            ).get("project", {}).get("dependencies", [])
+            if isinstance(dependencies, list):
+                candidates.extend(item for item in dependencies if isinstance(item, str))
+        except (OSError, tomllib.TOMLDecodeError):
+            pass
+
+    setup_cfg = root / "setup.cfg"
+    if setup_cfg.is_file():
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read(setup_cfg, encoding="utf-8")
+            raw = parser.get("options", "install_requires", fallback="")
+            candidates.extend(raw.splitlines())
+        except (OSError, configparser.Error):
+            pass
+
+    setup_py = root / "setup.py"
+    if setup_py.is_file():
+        try:
+            tree = ast.parse(setup_py.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError):
+            tree = None
+        if tree is not None:
+            for node in ast.walk(tree):
+                dependency_node: ast.AST | None = None
+                if isinstance(node, ast.keyword) and node.arg == "install_requires":
+                    dependency_node = node.value
+                elif isinstance(node, ast.Dict):
+                    for key, value in zip(node.keys, node.values):
+                        if (
+                            isinstance(key, ast.Constant)
+                            and key.value == "install_requires"
+                        ):
+                            dependency_node = value
+                            break
+                elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = (
+                        node.targets
+                        if isinstance(node, ast.Assign)
+                        else [node.target]
+                    )
+                    if any(
+                        isinstance(target, ast.Name)
+                        and target.id == "install_requires"
+                        for target in targets
+                    ):
+                        dependency_node = node.value
+                if dependency_node is not None:
+                    candidates.extend(_static_requirement_values(dependency_node))
+
+    valid: list[str] = []
+    for raw in candidates:
+        line = raw.strip()
+        if not line or line.startswith(("#", "-")):
+            continue
+        try:
+            requirement = Requirement(line)
+        except InvalidRequirement:
+            continue
+        if requirement.url:
+            continue
+        valid.append(line)
+    return _merge_requirements([], valid)
+
+
+def _static_requirement_values(node: ast.AST) -> list[str]:
+    """Extract literal requirement strings, selecting the Python 3.11 branch."""
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        values: list[str] = []
+        for element in node.elts:
+            values.extend(_static_requirement_values(element))
+        return values
+    if isinstance(node, ast.IfExp):
+        condition = _static_python_version_condition(node.test)
+        if condition is True:
+            return _static_requirement_values(node.body)
+        if condition is False:
+            return _static_requirement_values(node.orelse)
+        return (
+            _static_requirement_values(node.body)
+            + _static_requirement_values(node.orelse)
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return (
+            _static_requirement_values(node.left)
+            + _static_requirement_values(node.right)
+        )
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"list", "tuple", "set"}
+        and len(node.args) == 1
+    ):
+        return _static_requirement_values(node.args[0])
+    return []
+
+
+def _static_python_version_condition(node: ast.AST) -> bool | None:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        value = _static_python_version_condition(node.operand)
+        return None if value is None else not value
+    if isinstance(node, ast.BoolOp):
+        values = [_static_python_version_condition(value) for value in node.values]
+        if any(value is None for value in values):
+            return None
+        if isinstance(node.op, ast.And):
+            return all(values)
+        if isinstance(node.op, ast.Or):
+            return any(values)
+        return None
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+        return None
+    left = _static_python_version_value(node.left)
+    right = _static_python_version_value(node.comparators[0])
+    if left is None or right is None:
+        return None
+    operation = node.ops[0]
+    try:
+        if isinstance(operation, ast.Eq):
+            return left == right
+        if isinstance(operation, ast.NotEq):
+            return left != right
+        if isinstance(operation, ast.Gt):
+            return left > right
+        if isinstance(operation, ast.GtE):
+            return left >= right
+        if isinstance(operation, ast.Lt):
+            return left < right
+        if isinstance(operation, ast.LtE):
+            return left <= right
+    except TypeError:
+        return None
+    return None
+
+
+def _static_python_version_value(node: ast.AST) -> int | tuple[int, ...] | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if (
+        isinstance(node, (ast.Tuple, ast.List))
+        and all(
+            isinstance(element, ast.Constant) and isinstance(element.value, int)
+            for element in node.elts
+        )
+    ):
+        return tuple(element.value for element in node.elts)
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "sys"
+        and node.value.attr == "version_info"
+    ):
+        return {"major": 3, "minor": 11, "micro": 0}.get(node.attr)
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "sys"
+        and node.value.attr == "version_info"
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, int)
+    ):
+        return (3, 11, 0)[node.slice.value] if 0 <= node.slice.value < 3 else None
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "sys"
+        and node.attr == "version_info"
+    ):
+        return (3, 11, 0)
+    return None
+
+
 def _source_owned_distributions(root: Path) -> set[str]:
     """Find pure-Python distributions that should run from the submitted source.
 
@@ -230,7 +420,7 @@ def _declared_project_names(root: Path) -> set[str]:
 
     setup_cfg = root / "setup.cfg"
     if setup_cfg.is_file():
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(interpolation=None)
         try:
             parser.read(setup_cfg, encoding="utf-8")
             value = parser.get("metadata", "name", fallback="").strip()
@@ -246,7 +436,49 @@ def _declared_project_names(root: Path) -> set[str]:
         except (OSError, SyntaxError):
             tree = None
         if tree is not None:
+            unpacked_setup_kwargs: set[str] = set()
             for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not (
+                    (isinstance(node.func, ast.Name) and node.func.id == "setup")
+                    or (
+                        isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "setup"
+                    )
+                ):
+                    continue
+                unpacked_setup_kwargs.update(
+                    keyword_arg.value.id
+                    for keyword_arg in node.keywords
+                    if keyword_arg.arg is None
+                    and isinstance(keyword_arg.value, ast.Name)
+                )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Name)
+                    and target.id in unpacked_setup_kwargs
+                    for target in node.targets
+                ):
+                    if (
+                        isinstance(node.value, ast.Call)
+                        and isinstance(node.value.func, ast.Name)
+                        and node.value.func.id == "dict"
+                    ):
+                        for keyword_arg in node.value.keywords:
+                            if (
+                                keyword_arg.arg == "name"
+                                and isinstance(keyword_arg.value, ast.Constant)
+                                and isinstance(keyword_arg.value.value, str)
+                            ):
+                                names.add(keyword_arg.value.value.strip())
+                    elif isinstance(node.value, ast.Dict):
+                        for key, value in zip(node.value.keys, node.value.values):
+                            if (
+                                isinstance(key, ast.Constant)
+                                and key.value == "name"
+                                and isinstance(value, ast.Constant)
+                                and isinstance(value.value, str)
+                            ):
+                                names.add(value.value.strip())
                 if not isinstance(node, ast.Call):
                     continue
                 if not (
@@ -308,6 +540,7 @@ def _merge_requirements(original: list[str], required: list[str]) -> list[str]:
         name = re.split(r"[<>=!~\[]", requirement, maxsplit=1)[0].lower().replace("_", "-")
         if name not in package_names:
             result.append(requirement)
+            package_names.add(name)
     return result
 
 

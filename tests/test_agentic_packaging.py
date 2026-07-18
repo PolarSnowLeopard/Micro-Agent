@@ -454,6 +454,20 @@ async def test_project_reader_corrects_artifact_prefixed_source_path(tmp_path):
     assert "请改用 core.py" in result.error
 
 
+async def test_project_reader_exhaustion_requires_current_stage_completion(tmp_path):
+    project = _sample_project(tmp_path)
+    reader = ReadProjectFile(project, max_reads=1)
+
+    first = await reader.execute(path="core.py")
+    exhausted = await reader.execute(path="core.py")
+
+    assert not first.error
+    assert exhausted.error
+    assert "不得再次调用 read_project_file" in exhausted.error
+    assert "完成当前阶段要求的规划或产物" in exhausted.error
+    assert "结构化规划" not in exhausted.error
+
+
 def test_non_template_repository_retains_full_public_symbol_audit(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
 
@@ -1086,6 +1100,52 @@ async def test_save_plan_requires_independent_smoke_evidence_for_adapted_templat
     assert all("只引用了生成的 main.py" in error for error in store.last_errors)
 
 
+async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_path):
+    project = _sample_project(tmp_path)
+    examples = project / "examples"
+    examples.mkdir()
+    (examples / "fixture.py").write_text(
+        'SCENARIO = "documented risk fixture"\n',
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    predict_tool = raw["services"][0]["tools"][0]
+    predict_tool["inputSchema"]["properties"]["scenario"] = {"type": "string"}
+    predict_tool["smokeTest"]["input"]["scenario"] = "invented placeholder"
+    predict_tool["smokeTest"]["evidence"] = ["examples/fixture.py:1"]
+
+    rejected_store = PlanStore(
+        tmp_path / "rejected-plan.json",
+        ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        require_independent_smoke_evidence=True,
+        smoke_evidence_root=project,
+    )
+    rejected = await SavePackagingPlanJson(rejected_store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert rejected.error
+    assert "未在所引测试/doctest/示例中出现" in rejected.error
+    assert "invented placeholder" in rejected.error
+
+    predict_tool["smokeTest"]["input"]["scenario"] = "documented risk fixture"
+    accepted_store = PlanStore(
+        tmp_path / "accepted-plan.json",
+        ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        require_independent_smoke_evidence=True,
+        smoke_evidence_root=project,
+    )
+    accepted = await SavePackagingPlanJson(accepted_store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert not accepted.error
+    assert accepted_store.plan is not None
+
+
 async def test_save_plan_json_discards_only_unknown_excluded_symbols(tmp_path):
     """Provider hallucinations in audit-only exclusions must not block a valid plan."""
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
@@ -1444,6 +1504,74 @@ def test_scaffold_uses_reviewed_pure_python_source_instead_of_pypi_copy(tmp_path
     requirements = (artifact / "requirements.txt").read_text(encoding="utf-8")
     assert "risk-model" not in requirements
     assert "numpy>=1.26" in requirements
+
+
+def test_scaffold_preserves_pure_python_project_install_dependencies(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "setup.py").write_text(
+        "import sys\n"
+        "from setuptools import setup\n"
+        "setup_kwargs = dict(\n"
+        "    name='risk-model',\n"
+        "    install_requires=[\n"
+        "        'numpy>=1.20',\n"
+        "        'quantities>=0.12.1',\n"
+        "        'pyodesys>=0.14.5' if sys.version_info[0] >= 3 else 'pyodesys<0.12',\n"
+        "        'unsafe @ https://example.test/unsafe.whl',\n"
+        "    ],\n"
+        ")\n"
+        "setup(**setup_kwargs)\n",
+        encoding="utf-8",
+    )
+    package = project / "risk_model"
+    package.mkdir()
+    (package / "__init__.py").write_text("VALUE = 'submitted-source'\n", encoding="utf-8")
+    (project / "requirements.txt").write_text("risk-model>=9\nnumpy>=1.26\n", encoding="utf-8")
+    ir = RepositoryAnalyzer().analyze(project)
+
+    artifact = prepare_artifact(project, tmp_path / "artifact", _plan(ir))
+
+    requirements = (artifact / "requirements.txt").read_text(encoding="utf-8")
+    assert "risk-model" not in requirements
+    assert "numpy>=1.26" in requirements
+    assert "numpy>=1.20" not in requirements
+    assert "quantities>=0.12.1" in requirements
+    assert "pyodesys>=0.14.5" in requirements
+    assert "pyodesys<0.12" not in requirements
+    assert "example.test" not in requirements
+
+
+def test_scaffold_reads_static_pyproject_and_setup_cfg_dependencies(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "pyproject.toml").write_text(
+        '[project]\n'
+        'name = "risk-model"\n'
+        'version = "1.0.0"\n'
+        'dependencies = ["pydantic>=2", "torch==2.4.1"]\n',
+        encoding="utf-8",
+    )
+    (project / "setup.cfg").write_text(
+        "[metadata]\n"
+        "name = risk-model\n"
+        "[options]\n"
+        "install_requires =\n"
+        "    scipy>=1.11\n"
+        "    Pillow>=10\n",
+        encoding="utf-8",
+    )
+    package = project / "risk_model"
+    package.mkdir()
+    (package / "__init__.py").write_text("VALUE = 'submitted-source'\n", encoding="utf-8")
+    ir = RepositoryAnalyzer().analyze(project)
+
+    artifact = prepare_artifact(project, tmp_path / "artifact", _plan(ir))
+
+    general = (artifact / "requirements.txt").read_text(encoding="utf-8")
+    cpu = (artifact / "requirements-cpu.txt").read_text(encoding="utf-8")
+    assert "pydantic>=2" in general
+    assert "scipy>=1.11" in general
+    assert "Pillow>=10" in general
+    assert "torch==2.4.1" in cpu
 
 
 def test_scaffold_keeps_wheel_dependency_for_compiled_source_wrapper(tmp_path):

@@ -88,7 +88,7 @@ class ReadProjectFile(Tool):
             return ToolResult(
                 error=(
                     f"本轮源码读取上限为 {self.max_reads} 个文件，额度已用完；"
-                    "请根据已有证据提交结构化规划"
+                    "不得再次调用 read_project_file，必须立即完成当前阶段要求的规划或产物"
                 )
             )
         path = _contained_path(self.root, str(kwargs.get("path", "")))
@@ -123,6 +123,7 @@ class PlanStore:
     candidate_symbols: set[str] | None = None
     enforce_interface_quality: bool = False
     require_independent_smoke_evidence: bool = False
+    smoke_evidence_root: Path | None = None
     plan: PackagingPlan | None = None
     last_errors: list[str] | None = None
     interface_quality: InterfaceQualityReport | None = None
@@ -200,6 +201,7 @@ class SavePackagingPlan(Tool):
             smoke_errors = _independent_smoke_evidence_errors(
                 plan,
                 self.store.known_files or set(),
+                evidence_root=self.store.smoke_evidence_root,
             )
             if smoke_errors:
                 self.store.plan = None
@@ -421,6 +423,8 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
 def _independent_smoke_evidence_errors(
     plan: PackagingPlan,
     known_files: set[str],
+    *,
+    evidence_root: Path | None = None,
 ) -> list[str]:
     generated_files = {
         "main.py",
@@ -434,18 +438,89 @@ def _independent_smoke_evidence_errors(
         if not smoke.get("enabled"):
             continue
         evidence = smoke.get("evidence", [])
-        if any(
-            isinstance(item, str)
-            and any(path in item for path in independent_files)
-            for item in evidence
-        ):
+        cited_files = {
+            path
+            for path in independent_files
+            if any(isinstance(item, str) and path in item for item in evidence)
+        }
+        if not cited_files:
+            errors.append(
+                f"{tool.get('name', '<unnamed>')}.smokeTest.evidence "
+                "只引用了生成的 main.py/README.ioeb.md/template_adaptation.json；"
+                "请从原仓库可执行测试、doctest 或示例核对输入，找不到时应设 enabled=false"
+            )
             continue
-        errors.append(
-            f"{tool.get('name', '<unnamed>')}.smokeTest.evidence "
-            "只引用了生成的 main.py/README.ioeb.md/template_adaptation.json；"
-            "请从原仓库可执行测试、doctest 或示例核对输入，找不到时应设 enabled=false"
+        if evidence_root is None:
+            continue
+        corpus = _read_smoke_evidence_corpus(evidence_root, cited_files)
+        ungrounded = _ungrounded_smoke_strings(
+            smoke.get("input", {}),
+            tool.get("inputSchema", {}),
+            corpus,
         )
+        if ungrounded:
+            rendered = ", ".join(repr(value[:120]) for value in ungrounded[:5])
+            errors.append(
+                f"{tool.get('name', '<unnamed>')}.smokeTest.input 包含未在所引测试/"
+                f"doctest/示例中出现的自由文本值: {rendered}；"
+                "必须改用被引用文件中的真实可执行 fixture，不能依据模板注释编造"
+            )
     return errors
+
+
+def _read_smoke_evidence_corpus(root: Path, paths: set[str]) -> str:
+    resolved_root = root.resolve()
+    chunks: list[str] = []
+    remaining = 1_000_000
+    for relative in sorted(paths):
+        if remaining <= 0:
+            break
+        try:
+            path = _contained_path(resolved_root, relative)
+        except ValueError:
+            continue
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")[:remaining]
+        except OSError:
+            continue
+        chunks.append(text)
+        remaining -= len(text)
+    return "\n".join(chunks)
+
+
+def _ungrounded_smoke_strings(value: Any, schema: Any, corpus: str) -> list[str]:
+    schema = schema if isinstance(schema, dict) else {}
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        properties = properties if isinstance(properties, dict) else {}
+        result: list[str] = []
+        for name, child in value.items():
+            result.extend(
+                _ungrounded_smoke_strings(child, properties.get(name, {}), corpus)
+            )
+        return result
+    if isinstance(value, list):
+        result: list[str] = []
+        item_schema = schema.get("items", {})
+        for child in value:
+            result.extend(_ungrounded_smoke_strings(child, item_schema, corpus))
+        return result
+    if not isinstance(value, str) or len(value.strip()) < 4:
+        return []
+    if (
+        value in schema.get("enum", [])
+        or schema.get("const") == value
+        or any(
+            key in schema
+            for key in ("pattern", "format", "contentEncoding", "contentMediaType")
+        )
+    ):
+        return []
+    normalized_value = " ".join(value.split())
+    normalized_corpus = " ".join(corpus.split())
+    return [] if normalized_value in normalized_corpus else [value]
 
 
 def _merge_excluded_symbols(root: list[Any], nested: list[Any]) -> list[Any]:

@@ -192,6 +192,7 @@ class AgenticAnalysisWorkflow:
             require_independent_smoke_evidence=(
                 self.project_dir / "template_adaptation.json"
             ).is_file(),
+            smoke_evidence_root=self.project_dir,
         )
         self.agent = _build_planning_agent(self.project_dir, ir, self.plan_store)
 
@@ -302,6 +303,7 @@ class AgenticPackagingWorkflow:
                 require_independent_smoke_evidence=(
                     self.project_dir / "template_adaptation.json"
                 ).is_file(),
+                smoke_evidence_root=self.project_dir,
             )
             planner = _build_planning_agent(self.project_dir, self.ir, plan_store)
             self._active_agent = planner
