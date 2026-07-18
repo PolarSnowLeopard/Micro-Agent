@@ -125,6 +125,7 @@ class PlanStore:
     require_independent_smoke_evidence: bool = False
     smoke_evidence_root: Path | None = None
     plan: PackagingPlan | None = None
+    last_candidate: dict[str, Any] | None = None
     last_errors: list[str] | None = None
     interface_quality: InterfaceQualityReport | None = None
 
@@ -154,11 +155,15 @@ class SavePackagingPlan(Tool):
                     if re.sub(r"^\s*(?:[-*]|\d+[.)、])\s*", "", line).strip()
                 ]
         if isinstance(normalized.get("services"), str):
+            self.store.last_candidate = normalized
             self.store.plan = None
             self.store.last_errors = [
                 "services 被模型序列化成了无法解析的字符串；请改用 save_packaging_plan_json 提交整份严格 JSON"
             ]
             return ToolResult(error=self.store.last_errors[0])
+        self.store.last_candidate = json.loads(
+            json.dumps(normalized, ensure_ascii=False)
+        )
         try:
             plan = PackagingPlan.validate(
                 normalized,
@@ -231,6 +236,7 @@ class SavePackagingPlan(Tool):
         self.store.path.parent.mkdir(parents=True, exist_ok=True)
         self.store.path.write_text(plan.to_json() + "\n", encoding="utf-8")
         self.store.plan = plan
+        self.store.last_candidate = plan.to_dict()
         self.store.last_errors = None
         return ToolResult(
             output=(

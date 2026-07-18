@@ -522,22 +522,39 @@ async def _run_planner(
 ) -> AsyncIterator[AgentEvent]:
     step_offset = 0
     initial_prompt = _planner_prompt(ir, user_request)
-    for attempt in range(5):
+    for attempt in range(8):
         if attempt and fresh_agent_factory is not None:
             agent = fresh_agent_factory()
         text_candidates: list[str] = []
-        prompt = initial_prompt if attempt == 0 else (
-            initial_prompt
-            + "\n\n上一次独立质量门禁未接受规划。请从上述原始仓库证据重新提交完整严格 JSON；"
-            "这不是 PATCH，decision=package 时 services 绝对不能省略或为空。"
-            "excludedSymbols 必须位于 JSON 根节点并与 services 同级，不能放进任一 service。"
-            "每个工具都必须显式提交 smokeTest；仓库已有可追溯示例时不能省略或关闭。"
-            + (
-                "\n上次校验错误：\n- " + "\n- ".join(store.last_errors)
-                if store.last_errors
-                else ""
+        if attempt == 0:
+            prompt = initial_prompt
+        else:
+            previous_candidate = (
+                json.dumps(
+                    store.last_candidate,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                if store.last_candidate is not None
+                else "未捕获到可恢复的上一版规划"
             )
-        )
+            prompt = (
+                initial_prompt
+                + "\n\n上一次独立质量门禁未接受规划。下面提供上一版完整候选工件；"
+                "先保留其中已通过的服务边界、Tool、Schema 与证据，只针对校验错误修订，"
+                "然后重新提交一份完整严格 JSON。这不是 PATCH，decision=package 时 services "
+                "绝对不能省略或为空。excludedSymbols 必须位于 JSON 根节点并与 services 同级，"
+                "不能放进任一 service。每个工具都必须显式提交 smokeTest；仓库已有可追溯示例时"
+                "不能省略或关闭。若错误指出 smoke 自由文本没有证据，必须先读取候选中引用的"
+                "原仓库测试/doctest/示例并使用其中逐字存在的 fixture，不能再次猜测。\n"
+                "上一版完整候选工件：\n"
+                + previous_candidate
+                + (
+                    "\n上次校验错误：\n- " + "\n- ".join(store.last_errors)
+                    if store.last_errors
+                    else ""
+                )
+            )
         async for event in agent.run(prompt):
             if event.type == "think" and isinstance(event.data.get("thought"), str):
                 text_candidates.append(event.data["thought"])

@@ -1037,6 +1037,65 @@ async def test_planner_can_repair_multiple_quality_gate_failures(tmp_path):
     assert len([event for event in events if event.type == "think"]) == 3
 
 
+async def test_planner_retry_receives_previous_candidate_artifact(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+    )
+    prompts: list[str] = []
+
+    class FakePlanner:
+        max_steps = 1
+
+        def __init__(self, attempt: int):
+            self.attempt = attempt
+
+        async def run(self, prompt):
+            prompts.append(prompt)
+            if self.attempt == 0:
+                rejected = _plan(ir).to_dict()
+                rejected["analysisSummary"] = "previous candidate marker"
+                rejected["services"] = []
+                await SavePackagingPlanJson(store).execute(
+                    content=json.dumps(rejected, ensure_ascii=False)
+                )
+            else:
+                assert "上一版完整候选工件" in prompt
+                assert "previous candidate marker" in prompt
+                assert "services" in prompt
+                await SavePackagingPlanJson(store).execute(
+                    content=_plan(ir).to_json(indent=None)
+                )
+            yield AgentEvent(type="done", step=1, data={"result": "complete"})
+
+    attempts = [FakePlanner(0)]
+
+    def fresh_planner():
+        planner = FakePlanner(len(attempts))
+        attempts.append(planner)
+        return planner
+
+    events = [
+        event
+        async for event in _run_planner(
+            attempts[0],
+            store,
+            ir,
+            "package it",
+            fresh_agent_factory=fresh_planner,
+        )
+    ]
+
+    assert len(attempts) == 2
+    assert len(prompts) == 2
+    assert store.plan is not None
+    assert store.last_candidate == store.plan.to_dict()
+    assert any(event.type == "think" for event in events)
+
+
 async def test_save_plan_json_recovers_service_scoped_excluded_symbols(tmp_path):
     """Regression for the GNN plan that nested the repository audit in a service."""
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
