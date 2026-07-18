@@ -268,7 +268,7 @@ def _render_server(plan: PackagingPlan) -> str:
         "from typing import Annotated, Any, Literal",
         "from typing_extensions import NotRequired, Required, TypedDict",
         "",
-        "from pydantic import Field, create_model",
+        "from pydantic import BaseModel, Field, create_model",
         "",
         "import uvicorn",
         "from mcp.server.fastmcp import FastMCP",
@@ -276,6 +276,12 @@ def _render_server(plan: PackagingPlan) -> str:
         "import adapters",
         "",
         f"mcp = FastMCP({service_name!r}, host=\"0.0.0.0\", port=8000, sse_path=\"/sse\", message_path=\"/messages/\")",
+        "",
+        "class _IOEBOutputModel(BaseModel):",
+        '    """Preserve optional-but-non-null JSON Schema fields on serialization."""',
+        "    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:",
+        '        kwargs.setdefault("exclude_unset", True)',
+        "        return super().model_dump(*args, **kwargs)",
         "",
     ]
     if type_renderer.definitions:
@@ -435,7 +441,8 @@ class _SchemaTypeRenderer:
                 default = repr(child.get("default"))
             entries.append(f"{property_name!r}: ({annotation}, {default})")
         self.definitions.append(
-            f"{name} = create_model({name!r}, **{{{', '.join(entries)}}})"
+            f"{name} = create_model({name!r}, __base__=_IOEBOutputModel, "
+            f"**{{{', '.join(entries)}}})"
         )
         return name
 

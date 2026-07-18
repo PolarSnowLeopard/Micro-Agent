@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import base64
+import asyncio
 import io
 import subprocess
 import sys
@@ -933,6 +934,10 @@ def test_scaffold_preserves_agent_facing_schema_descriptions_and_constraints(
     predict["outputSchema"]["properties"]["score"]["description"] = (
         "Normalized risk score in the inclusive range from zero to one."
     )
+    predict["outputSchema"]["properties"]["error"] = {
+        "type": "string",
+        "description": "Failure detail returned only when risk scoring cannot complete.",
+    }
     plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
     artifact = prepare_artifact(project, tmp_path / "artifact", plan)
     (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
@@ -957,6 +962,11 @@ def test_scaffold_preserves_agent_facing_schema_descriptions_and_constraints(
     assert generated.output_schema["properties"]["score"]["description"].startswith(
         "Normalized risk score"
     )
+    assert "error" not in generated.output_schema["required"]
+    _, structured = asyncio.run(
+        generated.run({"value": 0.5}, convert_result=True)
+    )
+    assert structured == {"score": 0.5}
     assert "Args:" in generated.description
     assert "Returns:" in generated.description
     assert "value: Observation value" in generated.description
