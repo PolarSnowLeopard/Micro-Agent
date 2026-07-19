@@ -16,7 +16,10 @@ from packaging.utils import canonicalize_name
 from micro_agent.packaging.analyzer import RepositoryAnalyzer, RepositoryIR
 from micro_agent.packaging.dependency_inspector import unresolved_import_dependencies
 from micro_agent.packaging.models import PackagingPlan, PlanValidationError
-from micro_agent.packaging.scaffold import _source_owned_distributions
+from micro_agent.packaging.scaffold import (
+    _runtime_requirement_contract,
+    _source_owned_distributions,
+)
 
 
 REQUIRED_FILES = {
@@ -236,15 +239,24 @@ class ArtifactVerifier:
         if not path.is_file():
             return
         parsed: dict[str, Requirement] = {}
-        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
+        for requirement_path in (
+            path,
+            self.root / "requirements-cpu.txt",
+        ):
+            if not requirement_path.is_file():
                 continue
-            try:
-                requirement = Requirement(line)
-            except InvalidRequirement:
-                continue
-            parsed[canonicalize_name(requirement.name)] = requirement
+            for raw_line in requirement_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    requirement = Requirement(line)
+                except InvalidRequirement:
+                    continue
+                parsed[canonicalize_name(requirement.name)] = requirement
         source_owned = _source_owned_distributions(self.root / "algorithm")
         report.checks["sourceOwnedDistributions"] = sorted(source_owned)
         shadowing = sorted(source_owned & set(parsed))
@@ -254,6 +266,18 @@ class ArtifactVerifier:
                 "否则 site-packages 会覆盖已审核源码: "
                 + ", ".join(shadowing)
                 + "；请保留其 install_requires 依赖，但移除同名项目自身"
+            )
+        template_contract = _runtime_requirement_contract(
+            self.root / "algorithm",
+            source_owned_distributions=source_owned,
+        )
+        report.checks["templateDeclaredDependencies"] = sorted(template_contract)
+        missing_template = sorted(set(template_contract) - set(parsed))
+        if missing_template:
+            report.errors.append(
+                "requirements.txt/requirements-cpu.txt 删除了提交模板声明的运行依赖: "
+                + ", ".join(missing_template)
+                + "；修复只能新增或调整兼容版本，不能移除模板运行契约"
             )
         missing = [name for name in PROTOCOL_REQUIREMENTS if name not in parsed]
         if missing:

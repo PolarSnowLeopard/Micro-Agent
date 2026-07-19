@@ -27,7 +27,10 @@ from micro_agent.packaging.models import (
     PackagingPlan,
     PlanValidationError,
 )
-from micro_agent.packaging.scaffold import _source_owned_distributions
+from micro_agent.packaging.scaffold import (
+    _runtime_requirement_contract,
+    _source_owned_distributions,
+)
 from micro_agent.packaging.verifier import ArtifactVerifier
 from micro_agent.tool.base import Tool, ToolResult
 
@@ -896,6 +899,13 @@ class WriteArtifactFile(Tool):
         )
         if shadowing_error:
             return ToolResult(error=shadowing_error)
+        contract_error = _template_contract_dependency_error(
+            self.root,
+            relative,
+            content,
+        )
+        if contract_error:
+            return ToolResult(error=contract_error)
         path = _contained_path(self.root, relative)
         if (
             not self.allow_nonempty_overwrite
@@ -1033,6 +1043,48 @@ def _source_shadowing_dependency_error(
         "site-packages 会覆盖已审核源码: "
         + ", ".join(shadowing)
         + "；请保留其 install_requires 依赖，但移除同名项目自身"
+    )
+
+
+def _template_contract_dependency_error(
+    artifact_root: Path,
+    relative: str,
+    content: str,
+) -> str:
+    if relative not in {"requirements.txt", "requirements-cpu.txt"}:
+        return ""
+    contract = _runtime_requirement_contract(artifact_root / "algorithm")
+    if not contract:
+        return ""
+    declared: set[str] = set()
+    for requirement_file in ("requirements.txt", "requirements-cpu.txt"):
+        text = (
+            content
+            if requirement_file == relative
+            else (
+                (artifact_root / requirement_file).read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if (artifact_root / requirement_file).is_file()
+                else ""
+            )
+        )
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                declared.add(canonicalize_name(Requirement(line).name))
+            except InvalidRequirement:
+                continue
+    missing = sorted(set(contract) - declared)
+    if not missing:
+        return ""
+    return (
+        "不得删除提交模板声明的运行依赖: "
+        + ", ".join(missing)
+        + "；可调整兼容版本或新增依赖，但必须保留模板运行契约"
     )
 
 

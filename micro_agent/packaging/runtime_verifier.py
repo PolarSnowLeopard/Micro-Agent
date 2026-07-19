@@ -426,6 +426,7 @@ def imported_attribute_gaps():
 
     gaps = {{}}
     suggestions = {{}}
+    objects = {{}}
     for (module_name, _), module in modules.items():
         module_file = getattr(module, "__file__", None)
         if not module_file:
@@ -455,13 +456,21 @@ def imported_attribute_gaps():
             ):
                 missing_name = f"{{node.value.id}}.{{node.attr}}"
                 missing.add(missing_name)
+                value = namespace[node.value.id]
+                objects.setdefault(
+                    missing_name,
+                    {{
+                        "type": f"{{type(value).__module__}}.{{type(value).__qualname__}}",
+                        "isNone": value is None,
+                    }},
+                )
                 suggestions.setdefault(
                     missing_name,
-                    compatibility_candidates(namespace[node.value.id], node.attr),
+                    compatibility_candidates(value, node.attr),
                 )
         if missing:
             gaps[f"{{module_name}} ({{path.relative_to(algorithm_root)}})"] = sorted(missing)
-    return gaps, suggestions
+    return gaps, suggestions, objects
 
 async def verify():
     plan = json.load(open("/app/packaging_plan.json", encoding="utf-8"))
@@ -512,7 +521,7 @@ async def verify():
             "runtime schema contract mismatch: "
             + json.dumps(schema_mismatches, sort_keys=True)
         )
-    api_gaps, api_suggestions = imported_attribute_gaps()
+    api_gaps, api_suggestions, api_objects = imported_attribute_gaps()
     if api_gaps:
         payload = {{
             "registeredTools": registered,
@@ -521,6 +530,7 @@ async def verify():
             "smokeTestFailures": {{}},
             "runtimeApiCompatibilityFailures": api_gaps,
             "runtimeApiCompatibilitySuggestions": api_suggestions,
+            "runtimeApiCompatibilityObjects": api_objects,
         }}
         print({PROBE_MARKER!r} + json.dumps(payload, sort_keys=True))
         raise RuntimeError(

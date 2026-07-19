@@ -1691,6 +1691,35 @@ def test_verifier_rejects_unbounded_protocol_dependencies(tmp_path):
     assert any("必须保留平台已验证的 MCP 协议依赖范围" in error for error in report.errors)
 
 
+def test_verifier_rejects_removing_template_runtime_dependency(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "requirements.txt").write_text(
+        "numpy>=1.26\nquantities>=0.14\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+    (artifact / "requirements.txt").write_text(
+        "numpy>=1.26\n"
+        "mcp>=1.28.0,<2\n"
+        "starlette>=0.37.0,<2\n"
+        "uvicorn[standard]>=0.30.0,<1\n",
+        encoding="utf-8",
+    )
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert report.checks["templateDeclaredDependencies"] == ["numpy", "quantities"]
+    assert any(
+        "删除了提交模板声明的运行依赖: quantities" in error
+        for error in report.errors
+    )
+
+
 def test_verifier_rejects_reimplementing_source_with_another_library(tmp_path):
     project = _sample_project(tmp_path)
     ir = RepositoryAnalyzer().analyze(project)
@@ -2423,6 +2452,30 @@ async def test_dependency_writer_allows_only_safe_package_manifests(tmp_path):
     assert immutable.error
 
 
+async def test_dependency_writer_blocks_removing_template_runtime_contract(tmp_path):
+    algorithm = tmp_path / "algorithm"
+    algorithm.mkdir()
+    (algorithm / "requirements.txt").write_text(
+        "numpy>=1.26\nquantities>=0.14\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements.txt").write_text(
+        "numpy>=1.26\nquantities>=0.14\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements-cpu.txt").write_text("", encoding="utf-8")
+    writer = WriteArtifactFile(tmp_path)
+
+    result = await writer.execute(
+        path="requirements.txt",
+        content="numpy>=1.26\n",
+    )
+
+    assert result.error
+    assert "不得删除提交模板声明的运行依赖: quantities" in result.error
+    assert "quantities" in (tmp_path / "requirements.txt").read_text(encoding="utf-8")
+
+
 async def test_artifact_patcher_requires_one_exact_safe_match(tmp_path):
     (tmp_path / "adapters.py").write_text(
         "def calculate(value):\n    return value\n",
@@ -2580,6 +2633,8 @@ def test_runtime_probe_is_valid_python_and_checks_smoke_output_schema():
     assert "imported_attribute_gaps()" in source
     assert '"runtimeApiCompatibilityFailures": api_gaps' in source
     assert '"runtimeApiCompatibilitySuggestions": api_suggestions' in source
+    assert '"runtimeApiCompatibilityObjects": api_objects' in source
+    assert '"isNone": value is None' in source
     assert "def compatibility_candidates(module, missing_name):" in source
     assert "smoke output schema mismatch" in source
     assert '"smokeTestFailures": smoke_failures' in source

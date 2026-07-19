@@ -45,16 +45,12 @@ def prepare_artifact(project_dir: str | Path, artifact_dir: str | Path, plan: Pa
     (algorithm_root / "__init__.py").touch(exist_ok=True)
 
     source_owned_distributions = _source_owned_distributions(source_root)
-    declared_requirements = _merge_requirements(
-        _read_requirements(source_root),
-        _read_project_dependencies(source_root),
+    source_requirements = list(
+        _runtime_requirement_contract(
+            source_root,
+            source_owned_distributions=source_owned_distributions,
+        ).values()
     )
-    source_requirements = [
-        requirement
-        for requirement in declared_requirements
-        if canonicalize_name(_requirement_name(requirement))
-        not in source_owned_distributions
-    ]
     cpu_requirements = [
         requirement
         for requirement in source_requirements
@@ -196,6 +192,34 @@ def _read_requirements(root: Path) -> list[str]:
             continue
         requirements.append(line)
     return requirements
+
+
+def _runtime_requirement_contract(
+    source_root: Path,
+    *,
+    source_owned_distributions: set[str] | None = None,
+) -> dict[str, str]:
+    """Return dependencies declared by the submitted runtime template.
+
+    These declarations are part of the accepted submission contract. Builder
+    repairs may add or adjust constraints, but may not silently remove a
+    declared distribution and turn a working optional feature into ``None``.
+    """
+
+    owned = (
+        source_owned_distributions
+        if source_owned_distributions is not None
+        else _source_owned_distributions(source_root)
+    )
+    declared = _merge_requirements(
+        _read_requirements(source_root),
+        _read_project_dependencies(source_root),
+    )
+    return {
+        canonicalize_name(_requirement_name(requirement)): requirement
+        for requirement in declared
+        if canonicalize_name(_requirement_name(requirement)) not in owned
+    }
 
 
 def _read_project_dependencies(root: Path) -> list[str]:

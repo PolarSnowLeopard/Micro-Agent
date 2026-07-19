@@ -121,6 +121,8 @@ BUILDER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务实现 Agent。你收到的
    验收后的定向修复应优先用 patch_artifact_file 对现有文件做精确局部替换，保留已经通过验收的实现；
    只有目标文件当前为空时，才可再次用 write_artifact_file 初始化；非空文件必须用 patch_artifact_file。
    requirements.txt 与 requirements-cpu.txt 只允许合法 PEP 508 包依赖，禁止 URL、VCS、本地路径和 pip 参数；
+   algorithm/requirements.txt 与项目元数据中已声明的运行依赖（排除由提交源码自身提供的同名包）
+   是模板运行契约；首轮生成与后续修复都不得删除，只能在确有兼容证据时调整版本约束或新增依赖；
    torch/torchvision/torchaudio 必须写入 requirements-cpu.txt，以固定 CPU wheel 源安装；system-packages.txt 每行只能是一个 Debian 包名。
    scaffold 已写入 mcp>=1.28.0,<2、starlette>=0.37.0,<2 与 uvicorn[standard]>=0.30.0,<1；
    修改算法依赖时必须原样保留这三个经过平台验证的协议依赖范围，不能降级成无版本约束。
@@ -914,6 +916,8 @@ def _repair_prompt(
         "独立验收报告如下。"
         "根据错误只修复 adapters.py、requirements.txt、requirements-cpu.txt 或 system-packages.txt；"
         "不得改变 server.py、Dockerfile、packaging_plan.json 或删除计划中的工具。"
+        "提交模板已声明的运行依赖是不可删除的基线；不能因为某次 smoke 输入失败就删减依赖，"
+        "只能根据缺包、冲突或源码兼容证据调整版本约束或增加依赖。"
         "若报告来自容器构建/运行阶段，必须依据具体缺包、导入栈、系统库或 smoke test 错误修复，"
         "不得绕过运行验收或吞掉异常。若原仓库在模块导入阶段引用已迁移/删除的第三方符号，"
         "只能在 adapters.py 导入源码模块之前增加最小兼容处理，并且必须能由调用关系证明该符号"
@@ -922,6 +926,8 @@ def _repair_prompt(
         "中最先报错的一个属性。runtimeApiCompatibilitySuggestions 是隔离容器对已安装包做运行时"
         "内省得到的候选，不是猜测；应结合源码调用语义选择等价 API，不能只按字符串相似度盲选。"
         "若候选位于另一个已安装子模块，必须从该模块导入后在算法模块导入前完成兼容映射。"
+        "若 runtimeApiCompatibilityObjects 显示缺失属性的承载对象为 None，优先检查并恢复提交模板"
+        "已声明的可选运行依赖；这通常是缺依赖而不是 API 改名，禁止为 None 对象伪造属性。"
         "若容器构建因编译工具链超时或失败，先沿 sourceSymbols 可达路径核对该依赖是否真的参与"
         "计划工具执行；对于源码以可选导入或纯 Python fallback 保护、且 smoke 路径不使用的"
         "加速后端，应移除该可选依赖，不能不断追加编译器。实际必需的编译依赖则必须保留并修复。"
