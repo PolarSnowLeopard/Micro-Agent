@@ -433,6 +433,80 @@ def test_contract():
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 
+def test_contract_runtime_records_installed_distribution_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "compiledlib"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "def run(value: float) -> float:\n    return value * 2\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from compiledlib import run
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the compiled library operation.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(value)}
+''',
+    )
+    (project / "requirements.txt").write_text(
+        "compiledlib>=1\n",
+        encoding="utf-8",
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def test_contract():
+    result = main_process(value=2.0)
+    assert result["result"] == 4.0
+''',
+        encoding="utf-8",
+    )
+    docker_runs = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal docker_runs
+        if command[:2] == ["docker", "run"]:
+            docker_runs += 1
+            if docker_runs == 1:
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr=(
+                        "ImportError: compiled extension missing "
+                        "(/workspace/compiledlib/__init__.py)"
+                    ),
+                )
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(template_adapter.subprocess, "run", fake_run)
+
+    report = verify_template_contract_runtime(project)
+
+    assert report.passed, report.to_json()
+    assert docker_runs == 2
+    assert report.checks["executionMode"] == "installed_distribution_fallback"
+    assert report.checks["sourceTestExitCode"] == 1
+    assert report.checks["installedDistributionTestExitCode"] == 0
+    assert report.checks["installedDistributionFallbackCandidates"] == [
+        "compiledlib"
+    ]
+    assert any("同名发行包" in warning for warning in report.warnings)
+
+
 @pytest.mark.asyncio
 async def test_template_writer_creates_only_reviewed_contract_path(
     tmp_path: Path,

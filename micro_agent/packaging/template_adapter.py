@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 from micro_agent.core.agent import Agent
 from micro_agent.core.config import config
@@ -688,8 +689,13 @@ def verify_template_contract_runtime(
     checks: dict[str, Any] = {
         "runtimeBackend": "docker",
         "networkDuringTest": False,
+        "executionMode": "repository_source",
+        "installedDistributionFallbackCandidates": [],
         "buildExitCode": None,
         "buildSeconds": None,
+        "sourceTestExitCode": None,
+        "installedDistributionTestExitCode": None,
+        "installedDistributionTestSeconds": None,
         "testExitCode": None,
         "testSeconds": None,
         "functionalVerified": False,
@@ -715,6 +721,17 @@ def verify_template_contract_runtime(
             warnings,
             checks,
         )
+    requirement_names = _runtime_requirement_names(root / "requirements.txt")
+    evidence_modules = static_report.checks.get(
+        "repositoryEvidenceModules",
+        [],
+    )
+    fallback_candidates = sorted(
+        module
+        for module in evidence_modules
+        if canonicalize_name(module) in requirement_names
+    )
+    checks["installedDistributionFallbackCandidates"] = fallback_candidates
     try:
         docker = subprocess.run(
             ["docker", "version", "--format", "{{.Server.Version}}"],
@@ -740,16 +757,20 @@ def verify_template_contract_runtime(
         "FROM python:3.11-slim-bookworm\n"
         "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
-        "PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONPATH=/app:/app/src\n"
-        "WORKDIR /app\n"
+        "PIP_DISABLE_PIP_VERSION_CHECK=1 "
+        "PYTHONPATH=/ioeb:/workspace:/workspace/src\n"
+        "WORKDIR /workspace\n"
         "COPY requirements.txt /tmp/requirements.txt\n"
         "RUN python -m pip install --no-cache-dir --index-url "
         "\"${PIP_INDEX_URL}\" --timeout 120 --retries 5 "
         "\"pytest>=8,<9\" -r /tmp/requirements.txt\n"
-        "COPY . /app\n"
+        "COPY . /workspace\n"
+        "RUN mkdir -p /ioeb && cp /workspace/main.py /ioeb/main.py "
+        "&& cp -R /workspace/tests_ioeb /ioeb/tests_ioeb\n"
         "RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin ioeb\n"
         "USER 10001:10001\n"
-        "CMD [\"python\", \"-m\", \"pytest\", \"-q\", "
+        "WORKDIR /ioeb\n"
+        "CMD [\"python\", \"-m\", \"pytest\", \"-p\", \"no:cacheprovider\", \"-q\", "
         "\"tests_ioeb/test_template_contract.py\"]\n",
         encoding="utf-8",
     )
@@ -806,31 +827,37 @@ def verify_template_contract_runtime(
             )
 
         run_started = time.perf_counter()
+
+        def runtime_command(python_path: str) -> list[str]:
+            return [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--read-only",
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,size=512m",
+                "--tmpfs",
+                "/home/ioeb:rw,noexec,nosuid,size=64m",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--pids-limit",
+                "256",
+                "--memory",
+                "4g",
+                "--cpus",
+                "2",
+                "--env",
+                f"PYTHONPATH={python_path}",
+                image,
+            ]
+
         try:
             runtime = subprocess.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--read-only",
-                    "--tmpfs",
-                    "/tmp:rw,noexec,nosuid,size=512m",
-                    "--tmpfs",
-                    "/home/ioeb:rw,noexec,nosuid,size=64m",
-                    "--cap-drop",
-                    "ALL",
-                    "--security-opt",
-                    "no-new-privileges",
-                    "--pids-limit",
-                    "256",
-                    "--memory",
-                    "4g",
-                    "--cpus",
-                    "2",
-                    image,
-                ],
+                runtime_command("/ioeb:/workspace:/workspace/src"),
                 capture_output=True,
                 text=True,
                 timeout=runtime_timeout,
@@ -850,14 +877,68 @@ def verify_template_contract_runtime(
                 checks,
             )
         checks["testSeconds"] = round(time.perf_counter() - run_started, 3)
+        checks["sourceTestExitCode"] = runtime.returncode
         checks["testExitCode"] = runtime.returncode
-        if runtime.returncode != 0:
+        if runtime.returncode == 0:
+            checks["functionalVerified"] = True
+        elif fallback_candidates and _looks_like_local_distribution_shadow(
+            runtime.stdout,
+            runtime.stderr,
+            fallback_candidates,
+        ):
+            fallback_started = time.perf_counter()
+            try:
+                fallback = subprocess.run(
+                    runtime_command("/ioeb"),
+                    capture_output=True,
+                    text=True,
+                    timeout=runtime_timeout,
+                )
+            except subprocess.TimeoutExpired:
+                checks["testSeconds"] = round(
+                    time.perf_counter() - run_started,
+                    3,
+                )
+                errors.append(
+                    "[contract_distribution_fallback_timeout] "
+                    f"同名发行包回退测试超过 {runtime_timeout} 秒"
+                )
+                return TemplateContractRuntimeReport(
+                    False,
+                    errors,
+                    warnings,
+                    checks,
+                )
+            checks["installedDistributionTestExitCode"] = fallback.returncode
+            checks["testSeconds"] = round(
+                time.perf_counter() - run_started,
+                3,
+            )
+            checks["installedDistributionTestSeconds"] = round(
+                time.perf_counter() - fallback_started,
+                3,
+            )
+            checks["testExitCode"] = fallback.returncode
+            if fallback.returncode == 0:
+                checks["executionMode"] = "installed_distribution_fallback"
+                checks["functionalVerified"] = True
+                warnings.append(
+                    "仓库源码包缺少可导入的编译产物；契约改用 requirements.txt "
+                    "中的同名发行包验证，源码优先尝试及回退模式均已记录"
+                )
+            else:
+                errors.append(
+                    "[contract_test] 仓库源码模式与同名发行包回退模式均失败。"
+                    "\n源码模式:\n"
+                    + _safe_process_tail(runtime.stdout, runtime.stderr)
+                    + "\n发行包回退模式:\n"
+                    + _safe_process_tail(fallback.stdout, fallback.stderr)
+                )
+        else:
             errors.append(
                 "[contract_test] 无网络只读容器中的模板契约测试失败:\n"
                 + _safe_process_tail(runtime.stdout, runtime.stderr)
             )
-        else:
-            checks["functionalVerified"] = True
     finally:
         dockerfile.unlink(missing_ok=True)
         dockerignore.unlink(missing_ok=True)
@@ -914,6 +995,40 @@ def _runtime_requirement_errors(path: Path) -> list[str]:
                 f"line={line_number}, package={requirement.name}"
             )
     return errors
+
+
+def _runtime_requirement_names(path: Path) -> set[str]:
+    names: set[str] = set()
+    if not path.is_file():
+        return names
+    for raw in path.read_text(
+        encoding="utf-8",
+        errors="replace",
+    ).splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        try:
+            requirement = Requirement(line)
+        except InvalidRequirement:
+            continue
+        if not requirement.url:
+            names.add(canonicalize_name(requirement.name))
+    return names
+
+
+def _looks_like_local_distribution_shadow(
+    stdout: str,
+    stderr: str,
+    candidates: list[str],
+) -> bool:
+    text = stdout + "\n" + stderr
+    if "ImportError" not in text and "ModuleNotFoundError" not in text:
+        return False
+    if "/workspace/" not in text:
+        return False
+    lowered = text.lower()
+    return any(candidate.lower() in lowered for candidate in candidates)
 
 
 def _safe_process_tail(stdout: str, stderr: str, *, limit: int = 4_000) -> str:
