@@ -19,6 +19,7 @@ from scripts.prepare_amq_template_subset import (
     acquire_output_lock,
     _candidate_requires_replan,
     _is_l0,
+    _template_repair_needs_source,
     ensure_output_outside_source_repo,
     load_mini30,
     recover_last_template_writes,
@@ -827,6 +828,24 @@ def main_process(value: float) -> float:
     assert agent.tools.get("read_project_file").max_reads == 4
     assert agent.max_steps == 16
     assert "当前 main.py" in agent.system_prompt
+
+    local_only = build_template_adapter_agent(
+        tmp_path,
+        ir,
+        repair=True,
+        repair_source_reads=False,
+    )
+    assert local_only.tools.get("read_project_file") is None
+    assert "源码读取工具已关闭" in local_only.system_prompt
+    assert not _template_repair_needs_source(
+        [
+            "main_process 必须使用 Google 风格 docstring",
+            "模板契约 fixture 过多",
+        ]
+    )
+    assert _template_repair_needs_source(
+        ["AttributeError: module has no attribute 'run'"]
+    )
 
 
 def test_template_validator_rejects_stdlib_only_facade(tmp_path: Path) -> None:

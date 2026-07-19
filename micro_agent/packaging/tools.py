@@ -427,18 +427,33 @@ def _contract_branch_records(
             or not all(isinstance(item, str) and item for item in evidence)
         ):
             continue
-        parameter = record.get("dispatchParameter")
-        if parameter is None:
+        raw_bindings = record.get("dispatchBindings")
+        if isinstance(raw_bindings, list):
+            bindings = [
+                binding
+                for binding in raw_bindings
+                if isinstance(binding, dict)
+                and isinstance(binding.get("parameter"), str)
+                and "value" in binding
+            ]
+        else:
+            parameter = record.get("dispatchParameter")
+            bindings = (
+                [{"parameter": parameter, "value": record.get("dispatchValue")}]
+                if isinstance(parameter, str)
+                else []
+            )
+        if not bindings:
             matched.append(record)
             continue
-        if (
-            isinstance(parameter, str)
-            and parameter not in properties
+        if all(
+            binding["parameter"] not in properties
             and strategy_fixes_dispatch_value(
                 strategy,
-                parameter,
-                record.get("dispatchValue"),
+                binding["parameter"],
+                binding["value"],
             )
+            for binding in bindings
         ):
             matched.append(record)
     return matched

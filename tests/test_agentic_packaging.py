@@ -665,25 +665,16 @@ def test_template_main_process_is_planning_audit_boundary_not_only_possible_sour
     (project / "main.py").write_text(
         '''from core import evaluate, predict
 
-def main_process(
-    operation: str,
-    model_variant: str,
-    value: float,
-) -> dict[str, float]:
+def main_process(operation: str, value: float) -> dict[str, float]:
     """Dispatch the supported algorithm operations.
 
     Args:
         operation: Operation name.
-        model_variant: Non-capability model configuration.
         value: Input value.
 
     Returns:
         Algorithm result.
     """
-    if model_variant == "double":
-        value *= 2
-    elif model_variant != "plain":
-        raise ValueError("unsupported model variant")
     if operation == "predict":
         return predict(value)
     return evaluate([value])
@@ -826,16 +817,33 @@ def test_planner_embeds_verified_contract_fixture_by_dispatch_branch(tmp_path):
     (project / "main.py").write_text(
         '''from core import evaluate, predict
 
-def main_process(operation: str, value: float) -> dict[str, float]:
+def main_process(
+    operation: str,
+    output_type: str,
+    model_variant: str,
+    value: float,
+) -> dict[str, float]:
     """Dispatch a repository operation.
 
     Args:
         operation: Operation name.
+        output_type: Agent-visible output capability.
+        model_variant: Non-capability model configuration.
         value: Input value.
 
     Returns:
         Repository result.
     """
+    if model_variant == "double":
+        value *= 2
+    elif model_variant != "plain":
+        raise ValueError("unsupported model variant")
+    if output_type == "structured":
+        pass
+    elif output_type == "summary":
+        value = round(value, 2)
+    else:
+        raise ValueError("unsupported output type")
     if operation == "predict":
         return predict(value)
     if operation == "evaluate":
@@ -851,12 +859,22 @@ def main_process(operation: str, value: float) -> dict[str, float]:
 from main import main_process
 
 def test_predict_contract():
-    result = main_process(operation="predict", model_variant="plain", value=0.5)
+    result = main_process(
+        operation="predict",
+        output_type="structured",
+        model_variant="plain",
+        value=0.5,
+    )
     assert result["score"] == 0.5
 
 def test_invalid_contract():
     with pytest.raises(ValueError):
-        main_process(operation="invalid", model_variant="plain", value=0.5)
+        main_process(
+            operation="invalid",
+            output_type="structured",
+            model_variant="plain",
+            value=0.5,
+        )
 ''',
         encoding="utf-8",
     )
@@ -871,14 +889,16 @@ def test_invalid_contract():
                                 "line": 5,
                                 "input": {
                                     "operation": "predict",
+                                    "output_type": "structured",
                                     "model_variant": "plain",
                                     "value": 0.5,
                                 },
                             },
                             {
-                                "line": 10,
+                                "line": 15,
                                 "input": {
                                     "operation": "invalid",
+                                    "output_type": "structured",
                                     "model_variant": "plain",
                                     "value": 0.5,
                                 },
@@ -906,8 +926,11 @@ def test_invalid_contract():
     relevance = build_relevance_evidence(ir, "wrap the submitted contract")
 
     assert '"runtimePassed": true' in prompt
-    assert '"dispatchParameter": "operation"' in prompt
-    assert '"dispatchValue": "predict"' in prompt
+    assert '"dispatchBindings": [' in prompt
+    assert '"parameter": "operation"' in prompt
+    assert '"value": "predict"' in prompt
+    assert '"parameter": "output_type"' in prompt
+    assert '"value": "structured"' in prompt
     assert '"toolSmokeInput": {' in prompt
     assert '"value": 0.5' in prompt
     assert "tests_ioeb/test_template_contract.py:5" in prompt
@@ -918,6 +941,7 @@ def test_invalid_contract():
         "mainProcessInput"
     ] == {
         "operation": "predict",
+        "output_type": "structured",
         "model_variant": "plain",
         "value": 0.5,
     }
@@ -958,7 +982,8 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
     tool = raw["services"][0]["tools"][0]
     tool["sourceSymbols"] = ["main.main_process"]
     tool["adapterStrategy"] = (
-        "Validate value, set operation='predict', and call main.main_process."
+        "Validate value, set operation='predict' and output_type='structured', "
+        "then call main.main_process."
     )
     tool["smokeTest"] = {
         "enabled": True,
@@ -980,9 +1005,17 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
         smoke_evidence_root=project,
         verified_contract_records=[
             {
-                "dispatchParameter": "operation",
-                "dispatchValue": "predict",
-                "mainProcessInput": {"operation": "predict", "value": 0.5},
+                "dispatchBindings": [
+                    {"parameter": "operation", "value": "predict"},
+                    {"parameter": "output_type", "value": "structured"},
+                ],
+                "dispatchParameter": None,
+                "dispatchValue": None,
+                "mainProcessInput": {
+                    "operation": "predict",
+                    "output_type": "structured",
+                    "value": 0.5,
+                },
                 "toolSmokeInput": {"value": 0.5},
                 "evidence": ["tests_ioeb/test_template_contract.py:4"],
             }

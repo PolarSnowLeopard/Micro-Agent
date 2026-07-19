@@ -1408,11 +1408,18 @@ def build_template_adapter_agent(
     ir: RepositoryIR,
     *,
     repair: bool = False,
+    repair_source_reads: bool = True,
 ) -> Agent:
     tools = ToolRegistry()
     if not repair:
         tools.register(BudgetedInspectRepository(ir))
-    tools.register(BudgetedReadProjectFile(project_dir, max_reads=4 if repair else 12))
+    if not repair or repair_source_reads:
+        tools.register(
+            BudgetedReadProjectFile(
+                project_dir,
+                max_reads=4 if repair else 12,
+            )
+        )
     tools.register(WriteTemplateFile(project_dir))
     tools.register(VerifyTemplate(project_dir))
     tools.register(Terminate())
@@ -1428,6 +1435,13 @@ def build_template_adapter_agent(
                 "已通过的部分，只覆盖写入错误涉及的 main.py、requirements.txt 或契约测试，"
                 "随后调用 verify_template。"
                 if repair
+                else ""
+            )
+            + (
+                "\n当前错误完全位于生成候选的结构、docstring 或契约 fixture；"
+                "源码读取工具已关闭。必须直接依据请求中完整候选修复并提交，"
+                "不得尝试读取任何文件。"
+                if repair and not repair_source_reads
                 else ""
             )
         ),

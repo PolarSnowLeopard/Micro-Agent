@@ -312,17 +312,39 @@ def _candidate_requires_replan(
     )
 
 
-def _discard_template_candidate(project: Path) -> None:
-    (project / "main.py").unlink(missing_ok=True)
-    (project / "tests_ioeb" / "test_template_contract.py").unlink(
-        missing_ok=True
+def _template_candidate_digest(project: Path) -> str:
+    digest = hashlib.sha256()
+    for relative in (
+        "main.py",
+        "requirements.txt",
+        "tests_ioeb/test_template_contract.py",
+    ):
+        path = project / relative
+        digest.update(relative.encode("utf-8"))
+        digest.update(path.read_bytes() if path.is_file() else b"<missing>")
+    return digest.hexdigest()
+
+
+def _template_repair_needs_source(errors: list[str]) -> bool:
+    """Reserve repository reads for source/API/runtime failures only."""
+
+    text = "\n".join(errors).lower()
+    markers = (
+        "不存在的成员",
+        "未调用任何从原仓库导入",
+        "cannot import",
+        "importerror",
+        "modulenotfounderror",
+        "no module named",
+        "attributeerror",
+        "has no attribute",
+        "requirements",
+        "依赖",
+        "容器构建",
+        "[contract_build]",
+        "[contract_test]",
     )
-    original_requirements = project / "requirements.original.txt"
-    requirements = project / "requirements.txt"
-    if original_requirements.is_file():
-        shutil.copy2(original_requirements, requirements)
-    else:
-        requirements.unlink(missing_ok=True)
+    return any(marker in text for marker in markers)
 
 
 async def adapt_one(
@@ -412,6 +434,8 @@ async def adapt_one(
             static_repair_attempts = 0
             runtime_repair_attempts = 0
             runtime_repair_budget = max(2, (max_attempts + 1) // 2)
+            no_op_attempts = 0
+            no_op_attempt_budget = max(2, (max_attempts + 1) // 2)
             if is_l0:
                 _write_l0_entrypoint(staged, sample["wrap_intent"])
             else:
@@ -427,12 +451,12 @@ async def adapt_one(
                     _write_json_atomic(run_dir / "validation_recovered.json", recovered_report.to_dict())
                     summary["recoveredFromPriorRun"] = True
                 if _candidate_requires_replan(staged, recovered_report):
-                    _discard_template_candidate(staged)
                     summary["candidateReplans"] = 1
                     errors = [
-                        "此前候选包含动态执行、接口过宽或大量契约错误，已丢弃。"
-                        "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数、"
-                        "8 个不同 operation 和 30 个 fixture。"
+                        "此前完整候选的语义边界过宽或含动态执行。候选已保留，"
+                        "必须在其基础上收敛为 1–6 个内聚能力，最多 12 个显式参数、"
+                        "8 个不同 operation 和 30 个 fixture；不得从空白重新开始。",
+                        *recovered_report.errors,
                     ]
                 elif recovered_report.passed:
                     runtime_report = await asyncio.to_thread(
@@ -470,6 +494,11 @@ async def adapt_one(
                         staged,
                         ir,
                         repair=repair_mode,
+                        repair_source_reads=(
+                            _template_repair_needs_source(errors)
+                            if repair_mode
+                            else True
+                        ),
                     )
                     prompt = template_adapter_prompt(ir, sample["wrap_intent"], original_main)
                     if errors:
@@ -479,12 +508,22 @@ async def adapt_one(
                             _template_candidate_context(staged)
                             + "\n只修改上述错误，并用 write_template_file 提交所有受影响文件的完整内容。"
                         )
+                    candidate_before = _template_candidate_digest(staged)
                     with event_path.open("a", encoding="utf-8") as handle:
                         async for event in agent.run(prompt):
                             handle.write(
                                 json.dumps({"attempt": attempt, **event.to_dict()}, ensure_ascii=False, default=str)
                                 + "\n"
                             )
+                    if _template_candidate_digest(staged) == candidate_before:
+                        if runtime_phase:
+                            runtime_repair_attempts -= 1
+                        else:
+                            static_repair_attempts -= 1
+                        no_op_attempts += 1
+                        if no_op_attempts >= no_op_attempt_budget:
+                            break
+                        continue
                     report = validate_algorithm_template(
                         staged,
                         require_contract_test=True,
@@ -494,14 +533,14 @@ async def adapt_one(
                     if not report.passed:
                         runtime_report = None
                         if _candidate_requires_replan(staged, report):
-                            _discard_template_candidate(staged)
                             summary["candidateReplans"] = (
                                 int(summary.get("candidateReplans", 0)) + 1
                             )
                             errors = [
-                                "上一候选包含动态执行、接口过宽或大量契约错误，已丢弃。"
-                                "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数、"
-                                "8 个不同 operation 和 30 个 fixture。"
+                                "当前完整候选的语义边界过宽或含动态执行。候选已保留，"
+                                "必须直接重构为 1–6 个内聚能力，最多 12 个显式参数、"
+                                "8 个不同 operation 和 30 个 fixture；不得从空白重新开始。",
+                                *report.errors,
                             ]
                         continue
                     runtime_report = await asyncio.to_thread(
@@ -519,6 +558,8 @@ async def adapt_one(
                 summary["staticRepairAttempts"] = static_repair_attempts
                 summary["runtimeRepairAttempts"] = runtime_repair_attempts
                 summary["runtimeRepairBudget"] = runtime_repair_budget
+                summary["noOpAttempts"] = no_op_attempts
+                summary["noOpAttemptBudget"] = no_op_attempt_budget
 
             report = validate_algorithm_template(
                 staged,
