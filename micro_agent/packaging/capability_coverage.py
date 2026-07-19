@@ -37,7 +37,7 @@ def assess_dispatch_coverage(
         for parameter, by_value in sorted(groups.items()):
             if len(by_value) < 2:
                 continue
-            if not _is_semantic_dispatch_parameter(parameter):
+            if not is_semantic_dispatch_parameter(parameter):
                 continue
             relevant_tools = [
                 tool for tool in plan.tools if symbol in tool.get("sourceSymbols", [])
@@ -92,7 +92,9 @@ def assess_dispatch_coverage(
     return errors
 
 
-def _is_semantic_dispatch_parameter(parameter: str) -> bool:
+def is_semantic_dispatch_parameter(parameter: str) -> bool:
+    """Return whether a literal selector represents an Agent-visible action."""
+
     normalized = parameter.lower()
     return (
         normalized in {"operation", "action", "task", "task_type", "mode"}
@@ -133,4 +135,8 @@ def strategy_fixes_dispatch_value(
 _strategy_fixes_value = strategy_fixes_dispatch_value
 
 
-__all__ = ["assess_dispatch_coverage", "strategy_fixes_dispatch_value"]
+__all__ = [
+    "assess_dispatch_coverage",
+    "is_semantic_dispatch_parameter",
+    "strategy_fixes_dispatch_value",
+]

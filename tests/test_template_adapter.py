@@ -426,6 +426,58 @@ def main_process(operation: str, value: int) -> dict[str, int]:
     assert _candidate_requires_replan(project, report)
 
 
+def test_template_contract_rejects_selector_that_only_validates_and_echoes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: int) -> int:\n    return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(operation: str, value: int) -> dict[str, object]:
+    """Run one selected operation.
+
+    Args:
+        operation: Claimed operation name.
+        value: Integer input.
+
+    Returns:
+        Computed result.
+    """
+    if operation not in ("first", "second"):
+        raise ValueError("unknown operation")
+    return {"operation": operation, "result": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def test_first_contract():
+    result = main_process(operation="first", value=1)
+    assert result["result"] == 1
+
+def test_second_contract():
+    result = main_process(operation="second", value=2)
+    assert result["result"] == 2
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not report.passed
+    assert report.checks["contractOperationCounts"] == {"operation": 2}
+    assert any(
+        "[contract_selector_semantics]" in error
+        for error in report.errors
+    )
+
+
 def test_fixture_budget_error_preserves_repairable_complete_candidate(
     tmp_path: Path,
 ) -> None:

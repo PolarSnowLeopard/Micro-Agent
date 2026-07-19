@@ -17,6 +17,9 @@ from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.core.schema import AgentEvent
 from micro_agent.packaging.analyzer import RepositoryIR
+from micro_agent.packaging.capability_coverage import (
+    is_semantic_dispatch_parameter,
+)
 from micro_agent.packaging.models import PackagingPlan
 from micro_agent.packaging.relevance import build_relevance_evidence
 from micro_agent.packaging.scaffold import prepare_artifact
@@ -1051,7 +1054,11 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
     for branches in planning_dispatch_branches(ir).values():
         for branch in branches:
             parameter = branch.get("parameter")
-            if isinstance(parameter, str) and "value" in branch:
+            if (
+                isinstance(parameter, str)
+                and is_semantic_dispatch_parameter(parameter)
+                and "value" in branch
+            ):
                 candidate = (parameter, branch["value"])
                 if candidate not in dispatch_values:
                     dispatch_values.append(candidate)

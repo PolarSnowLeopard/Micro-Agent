@@ -665,16 +665,25 @@ def test_template_main_process_is_planning_audit_boundary_not_only_possible_sour
     (project / "main.py").write_text(
         '''from core import evaluate, predict
 
-def main_process(operation: str, value: float) -> dict[str, float]:
+def main_process(
+    operation: str,
+    model_variant: str,
+    value: float,
+) -> dict[str, float]:
     """Dispatch the supported algorithm operations.
 
     Args:
         operation: Operation name.
+        model_variant: Non-capability model configuration.
         value: Input value.
 
     Returns:
         Algorithm result.
     """
+    if model_variant == "double":
+        value *= 2
+    elif model_variant != "plain":
+        raise ValueError("unsupported model variant")
     if operation == "predict":
         return predict(value)
     return evaluate([value])
@@ -842,12 +851,12 @@ def main_process(operation: str, value: float) -> dict[str, float]:
 from main import main_process
 
 def test_predict_contract():
-    result = main_process(operation="predict", value=0.5)
+    result = main_process(operation="predict", model_variant="plain", value=0.5)
     assert result["score"] == 0.5
 
 def test_invalid_contract():
     with pytest.raises(ValueError):
-        main_process(operation="invalid", value=0.5)
+        main_process(operation="invalid", model_variant="plain", value=0.5)
 ''',
         encoding="utf-8",
     )
@@ -862,6 +871,7 @@ def test_invalid_contract():
                                 "line": 5,
                                 "input": {
                                     "operation": "predict",
+                                    "model_variant": "plain",
                                     "value": 0.5,
                                 },
                             },
@@ -869,6 +879,7 @@ def test_invalid_contract():
                                 "line": 10,
                                 "input": {
                                     "operation": "invalid",
+                                    "model_variant": "plain",
                                     "value": 0.5,
                                 },
                             },
@@ -905,7 +916,14 @@ def test_invalid_contract():
     assert context["verifiedTemplateContract"]["runtimePassed"] is True
     assert context["verifiedTemplateContract"]["records"][0][
         "mainProcessInput"
-    ] == {"operation": "predict", "value": 0.5}
+    ] == {
+        "operation": "predict",
+        "model_variant": "plain",
+        "value": 0.5,
+    }
+    assert context["verifiedTemplateContract"]["records"][0][
+        "toolSmokeInput"
+    ] == {"model_variant": "plain", "value": 0.5}
     assert len(context["verifiedTemplateContract"]["records"]) == 1
     assert context["verifiedTemplateContract"]["excludedErrorFixtureCount"] == 1
     assert "tests_ioeb/test_template_contract.py" in {

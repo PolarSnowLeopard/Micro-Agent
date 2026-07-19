@@ -409,7 +409,9 @@ async def adapt_one(
             is_l0 = _is_l0(sample)
             errors: list[str] = []
             runtime_report = None
+            static_repair_attempts = 0
             runtime_repair_attempts = 0
+            runtime_repair_budget = max(2, (max_attempts + 1) // 2)
             if is_l0:
                 _write_l0_entrypoint(staged, sample["wrap_intent"])
             else:
@@ -446,9 +448,21 @@ async def adapt_one(
                 else:
                     errors = recovered_report.errors
                 event_path = run_dir / "events.jsonl"
-                for attempt in range(1, max_attempts + 1) if errors else ():
-                    if runtime_report is not None and not runtime_report.passed:
+                attempt = 0
+                while errors:
+                    runtime_phase = (
+                        runtime_report is not None
+                        and not runtime_report.passed
+                    )
+                    if runtime_phase:
+                        if runtime_repair_attempts >= runtime_repair_budget:
+                            break
                         runtime_repair_attempts += 1
+                    else:
+                        if static_repair_attempts >= max_attempts:
+                            break
+                        static_repair_attempts += 1
+                    attempt += 1
                     ir = await asyncio.to_thread(RepositoryAnalyzer().analyze, staged)
                     repair_candidate = staged / "main.py"
                     repair_mode = bool(errors and repair_candidate.is_file())
@@ -502,7 +516,9 @@ async def adapt_one(
                     if runtime_report.passed:
                         summary["adaptationAttempts"] = attempt
                         break
+                summary["staticRepairAttempts"] = static_repair_attempts
                 summary["runtimeRepairAttempts"] = runtime_repair_attempts
+                summary["runtimeRepairBudget"] = runtime_repair_budget
 
             report = validate_algorithm_template(
                 staged,

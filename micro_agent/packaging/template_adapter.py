@@ -629,6 +629,19 @@ def _validate_template_contract_test(
         if serialized_values:
             operation_counts[selector] = len(serialized_values)
     checks["contractOperationCounts"] = operation_counts
+    unbranched_selectors = sorted(
+        selector
+        for selector, count in operation_counts.items()
+        if count > 1 and selector not in dispatch_cases
+    )
+    if unbranched_selectors:
+        errors.append(
+            "[contract_selector_semantics] 契约把以下字段当作多个公开操作，"
+            "但 main_process 中没有对应的正向字面量分支: "
+            + ", ".join(unbranched_selectors)
+            + "；不得只校验后回显 selector。请让每个操作进入不同源码调用/结果路径，"
+            "或删除这个伪操作参数"
+        )
     overbroad_selectors = {
         selector: count
         for selector, count in operation_counts.items()
