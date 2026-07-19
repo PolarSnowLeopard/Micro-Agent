@@ -36,6 +36,7 @@ from micro_agent.packaging.tools import (
     SavePackagingPlanJson,
     WriteArtifactFile,
     _canonical_smoke_input,
+    _file_path_suggestions,
     _smoke_errors_prove_fixture_grounding,
     _smoke_string_candidates,
 )
@@ -259,6 +260,35 @@ def test_repository_analyzer_does_not_enumerate_the_full_tree(
     assert ir.truncated
     assert len(ir.files) == 5
     assert "main.main_process" in ir.known_symbols
+
+
+def test_file_path_suggestions_does_not_enumerate_the_full_tree(
+    tmp_path,
+    monkeypatch,
+):
+    project = tmp_path / "bounded-suggestions"
+    (project / "src" / "package").mkdir(parents=True)
+    (project / "src" / "package" / "service.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+    for directory_index in range(20):
+        directory = project / f"vendor_{directory_index:02d}"
+        directory.mkdir()
+        (directory / "unrelated.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    def reject_rglob(*args, **kwargs):
+        raise AssertionError("path suggestions must not traverse the complete tree")
+
+    monkeypatch.setattr(Path, "rglob", reject_rglob)
+
+    suggestions = _file_path_suggestions(
+        project,
+        "package/service.py",
+        max_directories=3,
+    )
+
+    assert suggestions == ["src/package/service.py"]
 
 
 def test_darp_propagates_intent_relevance_through_internal_dependencies(tmp_path):

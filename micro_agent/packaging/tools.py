@@ -6,6 +6,7 @@ import ast
 import difflib
 import io
 import json
+import os
 import re
 import tokenize
 from dataclasses import dataclass, replace
@@ -168,6 +169,7 @@ def _file_path_suggestions(
     requested: str,
     *,
     limit: int = 5,
+    max_directories: int = 400,
 ) -> list[str]:
     """Suggest contained files for omitted src/ prefixes or close paths."""
 
@@ -176,31 +178,53 @@ def _file_path_suggestions(
     if not name:
         return []
     candidates: list[tuple[int, float, str]] = []
+    ignored_directories = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".tox",
+        ".venv",
+        "venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+    }
+    visited_directories = 0
     try:
-        matches = root.rglob(name)
-        for path in matches:
-            if (
-                not path.is_file()
-                or path.is_symlink()
-                or any(
-                    part in {".git", ".venv", "venv", "__pycache__"}
-                    for part in path.relative_to(root).parts
-                )
-            ):
-                continue
-            relative = path.relative_to(root).as_posix()
-            suffix_match = int(
-                not (
-                    relative == normalized
-                    or relative.endswith("/" + normalized)
-                )
+        for current, directories, filenames in os.walk(root, topdown=True, followlinks=False):
+            visited_directories += 1
+            directories[:] = sorted(
+                (
+                    directory
+                    for directory in directories
+                    if directory not in ignored_directories
+                    and not (Path(current) / directory).is_symlink()
+                ),
+                key=lambda directory: (
+                    directory not in {"src", "tests", "test", "examples", "docs"},
+                    directory.casefold(),
+                ),
             )
-            similarity = difflib.SequenceMatcher(
-                None,
-                normalized,
-                relative,
-            ).ratio()
-            candidates.append((suffix_match, -similarity, relative))
+            if name in filenames:
+                path = Path(current) / name
+                if path.is_file() and not path.is_symlink():
+                    relative = path.relative_to(root).as_posix()
+                    suffix_match = int(
+                        not (
+                            relative == normalized
+                            or relative.endswith("/" + normalized)
+                        )
+                    )
+                    similarity = difflib.SequenceMatcher(
+                        None,
+                        normalized,
+                        relative,
+                    ).ratio()
+                    candidates.append((suffix_match, -similarity, relative))
+            if visited_directories >= max_directories:
+                directories.clear()
+                break
     except OSError:
         return []
     candidates.sort()
