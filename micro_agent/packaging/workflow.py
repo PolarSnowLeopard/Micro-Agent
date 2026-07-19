@@ -949,6 +949,12 @@ def _configure_smoke_revision_builder(
 def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
     contract_symbols = sorted(planning_candidate_symbols(ir))
     template_contract = bool(_template_contract_entries(ir))
+    template_contract_tests = [
+        path
+        for path in ir.testFiles
+        if path.startswith("tests_ioeb/")
+        or "template_contract" in Path(path).stem.lower()
+    ]
     overview = {
         "fingerprint": ir.fingerprint,
         "fileCount": len(ir.files),
@@ -961,6 +967,7 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "truncated": ir.truncated,
         "templateContract": template_contract,
         "contractEntrySymbols": contract_symbols if template_contract else [],
+        "templateContractEvidenceFiles": template_contract_tests,
         "relevanceEvidence": build_relevance_evidence(ir, user_request),
     }
     if template_contract:
@@ -977,7 +984,15 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         f"用户请求补充：{user_request or '无'}\n"
         "以下索引已使用 DARP 依赖相关度传播和 BAGE 预算自适应编码；"
         "它只负责排序证据，不替你决定 Tool，也不会隐藏 benchmark 答案。"
-        "必须使用工具核对完整仓库并阅读高相关源码后再决策：\n"
+        "必须使用工具核对完整仓库并阅读高相关源码后再决策。"
+        + (
+            "该模板仓库提供了 templateContractEvidenceFiles；它们是已随提交交付的"
+            "端到端契约测试，必须在上游库内部单元测试之前优先读取，并优先用其完整输入"
+            "作为各分支 smokeTest 的 fixture/evidence，不能从低层单元测试拼接另一套输入。"
+            if template_contract_tests
+            else ""
+        )
+        + "仓库索引如下：\n"
         + json.dumps(overview, ensure_ascii=False, indent=2)
     )
 

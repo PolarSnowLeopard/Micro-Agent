@@ -57,6 +57,7 @@ from micro_agent.packaging.workflow import (
     _smoke_revision_retry_prompt,
     planning_candidate_symbols,
     _extract_planning_json,
+    _planner_prompt,
 )
 from api.services.files import extract_zip
 from fastapi import HTTPException
@@ -792,6 +793,23 @@ def test_builder_context_passes_bounded_reviewed_source_artifacts(tmp_path):
     assert "core.py" in context["sourceExcerpts"]
     assert sum(len(value) for value in context["sourceExcerpts"].values()) <= 300
     assert "def predict" in context["sourceExcerpts"]["core.py"]
+
+
+def test_planner_prioritizes_submitted_template_contract_tests(tmp_path):
+    project = _sample_project(tmp_path)
+    contract_tests = project / "tests_ioeb"
+    contract_tests.mkdir()
+    (contract_tests / "test_template_contract.py").write_text(
+        "def test_contract():\n    assert True\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    prompt = _planner_prompt(ir, "wrap the submitted contract")
+
+    assert '"templateContractEvidenceFiles": [' in prompt
+    assert "tests_ioeb/test_template_contract.py" in prompt
+    assert "必须在上游库内部单元测试之前优先读取" in prompt
 
 
 async def test_project_reader_corrects_artifact_prefixed_source_path(tmp_path):
