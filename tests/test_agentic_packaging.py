@@ -42,6 +42,7 @@ from micro_agent.packaging.workflow import (
     AgenticPackagingWorkflow,
     AnalysisCache,
     _build_builder_agent,
+    _builder_implementation_context,
     _configure_repair_builder,
     _repair_artifact_snapshot,
     _repair_prompt,
@@ -439,11 +440,33 @@ def test_repair_builder_has_bounded_evidence_and_patch_only_tools(tmp_path):
     plan = _plan(ir)
     builder = _build_builder_agent(project, tmp_path / "artifact", plan, ir)
 
+    assert builder.tools.get("inspect_repository") is None
+    assert builder.tools.get("read_project_file").max_reads == 6
+
     _configure_repair_builder(builder)
 
     assert builder.tools.get("inspect_repository") is None
     assert builder.tools.get("read_project_file").max_reads == 1
     assert builder.tools.get("write_artifact_file").allow_nonempty_overwrite is False
+
+
+def test_builder_context_passes_bounded_reviewed_source_artifacts(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+
+    context = _builder_implementation_context(
+        plan,
+        ir,
+        max_total_chars=300,
+        max_file_chars=300,
+    )
+
+    assert context["packagingPlan"] == plan.to_dict()
+    assert {"core.predict", "core.evaluate"} <= set(context["sourceSymbols"])
+    assert "core.py" in context["sourceExcerpts"]
+    assert sum(len(value) for value in context["sourceExcerpts"].values()) <= 300
+    assert "def predict" in context["sourceExcerpts"]["core.py"]
 
 
 async def test_project_reader_corrects_artifact_prefixed_source_path(tmp_path):
@@ -2473,6 +2496,7 @@ def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
         failure_phase="runtime",
         phase_attempt=1,
         artifact_snapshot=snapshot,
+        implementation_context={"packagingPlan": {"decision": "package"}},
     )
 
     assert snapshot["adapters.py"] == "aaaaa\n...(truncated)"
@@ -2482,6 +2506,7 @@ def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
     assert "初始化快照中明确为空的目标文件" in prompt
     assert "可选导入或纯 Python fallback" in prompt
     assert "不得先调用 inspect_repository 或 read_project_file" in prompt
+    assert '"decision": "package"' in prompt
     assert "[runtime] failure" in prompt
 
 
