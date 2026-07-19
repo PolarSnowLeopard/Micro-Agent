@@ -229,11 +229,19 @@ class SavePackagingPlan(Tool):
             )
             if smoke_errors:
                 self.store.plan = None
+                smoke_stage = (
+                    "smoke_provenance"
+                    if all(
+                        error.startswith("[smoke_evidence_reference]")
+                        for error in smoke_errors
+                    )
+                    else "smoke"
+                )
                 _record_rejected_candidate(
                     self.store,
                     normalized,
                     smoke_errors,
-                    stage="smoke",
+                    stage=smoke_stage,
                 )
                 return ToolResult(
                     error=(
@@ -299,7 +307,8 @@ def _record_rejected_candidate(
         "structure": 1,
         "interface": 2,
         "smoke": 3,
-        "dispatch": 4,
+        "smoke_provenance": 4,
+        "dispatch": 5,
     }[stage]
     score = (stage_rank, -len(cloned_errors))
     if store.best_score is None or score > store.best_score:
@@ -514,6 +523,7 @@ def _independent_smoke_evidence_errors(
         }
         if not cited_files:
             errors.append(
+                "[smoke_evidence_reference] "
                 f"{tool.get('name', '<unnamed>')}.smokeTest.evidence "
                 "只引用了生成的 main.py/README.ioeb.md/template_adaptation.json；"
                 "请从原仓库可执行测试、doctest 或示例核对输入；"
@@ -534,17 +544,45 @@ def _independent_smoke_evidence_errors(
         )
         if ungrounded:
             rendered = ", ".join(repr(value[:120]) for value in ungrounded[:5])
+            candidate_paths = _smoke_candidate_files(independent_files)
             suggestions = {
                 value: _smoke_string_candidates(suggestion_corpus, value)
                 for value in ungrounded[:5]
             }
+            provenance = _smoke_candidate_provenance(
+                evidence_root,
+                candidate_paths,
+                {
+                    candidate
+                    for candidates in suggestions.values()
+                    for candidate in candidates
+                },
+            )
             rendered_suggestions = "; ".join(
-                f"{value[:80]!r} -> {candidates!r}"
+                f"{value[:80]!r} -> ["
+                + ", ".join(
+                    repr(candidate)
+                    + (
+                        f" (evidence: {provenance[candidate]})"
+                        if candidate in provenance
+                        else ""
+                    )
+                    for candidate in candidates
+                )
+                + "]"
                 for value, candidates in suggestions.items()
                 if candidates
             )
+            all_values_exist_elsewhere = all(
+                value in provenance for value in ungrounded[:5]
+            )
             errors.append(
-                f"{tool.get('name', '<unnamed>')}.smokeTest.input 包含未在所引测试/"
+                (
+                    "[smoke_evidence_reference] "
+                    if all_values_exist_elsewhere
+                    else "[smoke_fixture_grounding] "
+                )
+                + f"{tool.get('name', '<unnamed>')}.smokeTest.input 包含未在所引测试/"
                 f"doctest/示例中出现的自由文本值: {rendered}；"
                 "必须改用被引用文件中的真实可执行 fixture，不能依据模板注释编造"
                 + (
@@ -556,6 +594,38 @@ def _independent_smoke_evidence_errors(
                 )
             )
     return errors
+
+
+def _smoke_candidate_provenance(
+    root: Path,
+    paths: set[str],
+    candidates: set[str],
+) -> dict[str, str]:
+    if not candidates:
+        return {}
+    resolved_root = root.resolve()
+    remaining = set(candidates)
+    result: dict[str, str] = {}
+    for relative in sorted(paths):
+        if not remaining:
+            break
+        try:
+            path = _contained_path(resolved_root, relative)
+        except ValueError:
+            continue
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for candidate in list(remaining):
+            offset = text.find(candidate)
+            if offset < 0:
+                continue
+            result[candidate] = f"{relative}:{text.count(chr(10), 0, offset) + 1}"
+            remaining.remove(candidate)
+    return result
 
 
 def _smoke_candidate_files(paths: set[str]) -> set[str]:

@@ -1288,7 +1288,7 @@ async def test_plan_store_keeps_most_advanced_rejected_candidate(tmp_path):
     assert store.last_candidate["analysisSummary"] == "later structural regression"
     assert store.best_candidate is not None
     assert store.best_candidate["analysisSummary"] == "advanced smoke checkpoint"
-    assert store.best_score is not None and store.best_score[0] == 3
+    assert store.best_score is not None and store.best_score[0] == 4
     assert store.best_errors is not None
     assert all("只引用了生成的 main.py" in error for error in store.best_errors)
 
@@ -1323,9 +1323,27 @@ async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_
     assert "未在所引测试/doctest/示例中出现" in rejected.error
     assert "invented placeholder" in rejected.error
     assert "documented risk fixture" in rejected.error
+    assert "examples/fixture.py:1" in rejected.error
     assert "同步更新 evidence" in rejected.error
+    assert rejected_store.best_score is not None
+    assert rejected_store.best_score[0] == 3
 
     predict_tool["smokeTest"]["input"]["scenario"] = "documented risk fixture"
+    provenance_result = await SavePackagingPlanJson(rejected_store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+    assert provenance_result.error
+    assert "[smoke_evidence_reference]" in provenance_result.error
+    assert rejected_store.best_score is not None
+    assert rejected_store.best_score[0] == 4
+    assert rejected_store.best_candidate is not None
+    assert (
+        rejected_store.best_candidate["services"][0]["tools"][0]["smokeTest"][
+            "input"
+        ]["scenario"]
+        == "documented risk fixture"
+    )
+
     predict_tool["smokeTest"]["evidence"] = ["examples/fixture.py:1"]
     accepted_store = PlanStore(
         tmp_path / "accepted-plan.json",
