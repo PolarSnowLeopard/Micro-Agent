@@ -35,6 +35,7 @@ from micro_agent.packaging.tools import (
     SavePackagingPlan,
     SavePackagingPlanJson,
     WriteArtifactFile,
+    _smoke_errors_prove_fixture_grounding,
     _smoke_string_candidates,
 )
 from micro_agent.packaging.verifier import ArtifactVerifier, VerificationReport
@@ -43,8 +44,10 @@ from micro_agent.packaging.workflow import (
     AgenticPackagingWorkflow,
     AnalysisCache,
     _build_builder_agent,
+    _build_planning_agent,
     _builder_implementation_context,
     _configure_repair_builder,
+    _configure_planner_submission_turn,
     _configure_smoke_revision_builder,
     _repair_artifact_snapshot,
     _repair_prompt,
@@ -452,6 +455,19 @@ async def test_runtime_smoke_revision_rejects_noop_and_unknown_fields(tmp_path):
     assert "不允许字段" in unknown_field.error
 
 
+def test_smoke_fixture_is_frozen_only_with_exact_independent_provenance():
+    generic = [
+        "[smoke_evidence_reference] predict.smokeTest.evidence 只引用了生成的 main.py"
+    ]
+    grounded = [
+        "[smoke_evidence_reference] predict.smokeTest.input 引用错误；"
+        "当前 input 已在候选独立证据中逐字出现，必须保持 input 不变并仅更新 evidence"
+    ]
+
+    assert not _smoke_errors_prove_fixture_grounding(generic)
+    assert _smoke_errors_prove_fixture_grounding(grounded)
+
+
 def test_bage_retains_budgeted_inventory_without_promoting_unrelated_files(tmp_path):
     project = tmp_path / "budget"
     project.mkdir()
@@ -576,6 +592,25 @@ def test_repeated_smoke_failure_routes_to_fixture_only_agent(tmp_path):
         ensure_ascii=False,
         sort_keys=True,
     )
+
+
+def test_planner_submission_turn_reuses_evidence_with_only_save_tool(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+    )
+    planner = _build_planning_agent(project, ir, store)
+
+    configured = _configure_planner_submission_turn(planner)
+
+    assert configured
+    assert set(planner.tools.list_names()) == {"save_packaging_plan_json"}
+    assert planner.terminal_tools == {"save_packaging_plan_json"}
+    assert planner.max_steps == 4
+    assert "立即调用 save_packaging_plan_json" in planner.next_step_prompt
 
 
 def test_builder_context_passes_bounded_reviewed_source_artifacts(tmp_path):
@@ -1440,7 +1475,7 @@ async def test_plan_store_keeps_most_advanced_rejected_candidate(tmp_path):
     assert store.last_candidate["analysisSummary"] == "later structural regression"
     assert store.best_candidate is not None
     assert store.best_candidate["analysisSummary"] == "advanced smoke checkpoint"
-    assert store.best_score is not None and store.best_score[0] == 4
+    assert store.best_score is not None and store.best_score[0] == 3
     assert store.best_errors is not None
     assert all("只引用了生成的 main.py" in error for error in store.best_errors)
 

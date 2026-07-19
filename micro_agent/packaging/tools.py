@@ -236,10 +236,7 @@ class SavePackagingPlan(Tool):
                 self.store.plan = None
                 smoke_stage = (
                     "smoke_provenance"
-                    if all(
-                        error.startswith("[smoke_evidence_reference]")
-                        for error in smoke_errors
-                    )
+                    if _smoke_errors_prove_fixture_grounding(smoke_errors)
                     else "smoke"
                 )
                 _record_rejected_candidate(
@@ -754,6 +751,16 @@ def _independent_smoke_evidence_errors(
                 )
             )
     return errors
+
+
+def _smoke_errors_prove_fixture_grounding(errors: list[str] | None) -> bool:
+    """Only freeze fixtures whose exact values were found in independent evidence."""
+
+    return bool(errors) and all(
+        error.startswith("[smoke_evidence_reference]")
+        and "必须保持 input 不变" in error
+        for error in errors
+    )
 
 
 def _smoke_candidate_provenance(

@@ -29,6 +29,7 @@ from micro_agent.packaging.tools import (
     SavePackagingPlanJson,
     VerifyArtifact,
     WriteArtifactFile,
+    _smoke_errors_prove_fixture_grounding,
 )
 from micro_agent.packaging.verifier import ArtifactVerifier, VerificationReport
 from micro_agent.tool.registry import ToolRegistry
@@ -584,6 +585,8 @@ async def _run_planner(
         if attempt and fresh_agent_factory is not None:
             agent = fresh_agent_factory()
         text_candidates: list[str] = []
+        submitted_plan = False
+        attempt_step_span = agent.max_steps + 1
         if attempt == 0:
             prompt = initial_prompt
         else:
@@ -598,9 +601,8 @@ async def _run_planner(
                 if selected_candidate is not None
                 else "未捕获到可恢复的上一版规划"
             )
-            smoke_reference_only = bool(selected_errors) and all(
-                error.startswith("[smoke_evidence_reference]")
-                for error in selected_errors
+            smoke_reference_only = _smoke_errors_prove_fixture_grounding(
+                selected_errors
             )
             error_specific_guidance = (
                 "当前最佳候选已经通过 smoke fixture 逐字值门禁，错误只在 evidence 引用。"
@@ -632,11 +634,41 @@ async def _run_planner(
                 text_candidates.append(event.data["thought"])
             elif event.type == "done" and isinstance(event.data.get("result"), str):
                 text_candidates.append(event.data["result"])
+            elif (
+                event.type == "tool_call"
+                and event.data.get("tool") == "save_packaging_plan_json"
+            ):
+                submitted_plan = True
             if event.type == "done":
                 continue
             yield AgentEvent(type=event.type, step=step_offset + event.step, data=event.data)
         if store.plan is not None:
             return
+        if not submitted_plan and _configure_planner_submission_turn(agent):
+            nudge_offset = step_offset + attempt_step_span
+            attempt_step_span += agent.max_steps + 1
+            async for event in agent.run(
+                "证据读取阶段已经结束。现在不得继续分析或读取文件；立即调用 "
+                "save_packaging_plan_json 提交完整严格 JSON。若模型无法发起工具调用，"
+                "则输出且只输出同一份完整 JSON，禁止解释、总结或说“接下来提交”。"
+            ):
+                if event.type == "think" and isinstance(
+                    event.data.get("thought"), str
+                ):
+                    text_candidates.append(event.data["thought"])
+                elif event.type == "done" and isinstance(
+                    event.data.get("result"), str
+                ):
+                    text_candidates.append(event.data["result"])
+                if event.type == "done":
+                    continue
+                yield AgentEvent(
+                    type=event.type,
+                    step=nudge_offset + event.step,
+                    data=event.data,
+                )
+            if store.plan is not None:
+                return
         for candidate in reversed(text_candidates):
             recovered = _extract_planning_json(candidate)
             if recovered is None:
@@ -653,12 +685,29 @@ async def _run_planner(
                 return
             if result.error:
                 break
-        step_offset += agent.max_steps + 1
+        step_offset += attempt_step_span
         yield AgentEvent(
             type="think",
             step=step_offset,
             data={"thought": "[规划质量门禁] 未收到有效结构化规划，要求 Agent 根据校验反馈重试。"},
         )
+
+
+def _configure_planner_submission_turn(agent: Agent) -> bool:
+    """Reuse gathered evidence for one tool-only submission turn."""
+
+    tools = getattr(agent, "tools", None)
+    if tools is None or tools.get("save_packaging_plan_json") is None:
+        return False
+    tools.unregister("inspect_repository")
+    tools.unregister("read_project_file")
+    tools.unregister("terminate")
+    agent.terminal_tools = {"save_packaging_plan_json"}
+    agent.next_step_prompt = (
+        "不要解释；现在立即调用 save_packaging_plan_json 提交完整规划。"
+    )
+    agent.max_steps = min(agent.max_steps, 4)
+    return True
 
 
 def _extract_planning_json(text: str) -> str | None:
