@@ -21,6 +21,7 @@ from scripts.prepare_amq_template_subset import (
     acquire_output_lock,
     _candidate_requires_replan,
     _is_l0,
+    _save_template_snapshot,
     _template_repair_needs_source,
     ensure_output_outside_source_repo,
     load_mini30,
@@ -1202,4 +1203,40 @@ def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) 
     assert recover_last_template_writes(tmp_path) == {
         "main.py": "patched\n",
         "tests_ioeb/test_template_contract.py": "contract\n",
+    }
+
+
+def test_template_snapshot_survives_patch_only_followup_run(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    run_dir = tmp_path / "run"
+    project.mkdir()
+    run_dir.mkdir()
+    (project / "main.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (project / "tests_ioeb").mkdir()
+    (project / "tests_ioeb" / "test_template_contract.py").write_text(
+        "assert True\n",
+        encoding="utf-8",
+    )
+    _save_template_snapshot(project, run_dir)
+    (run_dir / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "tool_call",
+                "data": {
+                    "tool": "patch_template_file",
+                    "arguments": {
+                        "path": "main.py",
+                        "old": "VALUE = 1",
+                        "new": "VALUE = 2",
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert recover_last_template_writes(run_dir) == {
+        "main.py": "VALUE = 2\n",
+        "tests_ioeb/test_template_contract.py": "assert True\n",
     }

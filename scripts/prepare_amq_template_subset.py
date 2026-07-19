@@ -249,7 +249,50 @@ def _protected_digest(sample: dict[str, Any]) -> str:
     )
 
 
+_TEMPLATE_CANDIDATE_FILES = (
+    "main.py",
+    "requirements.txt",
+    "tests_ioeb/test_template_contract.py",
+)
+
+
+def _save_template_snapshot(project: Path, run_dir: Path) -> None:
+    """Persist the latest complete candidate independently of event history."""
+
+    files = {
+        relative: path.read_text(encoding="utf-8", errors="replace")
+        for relative in _TEMPLATE_CANDIDATE_FILES
+        if (path := project / relative).is_file() and not path.is_symlink()
+    }
+    if not files:
+        return
+    _write_json_atomic(
+        run_dir / "candidate_snapshot.json",
+        {
+            "schemaVersion": "ioeb.template-candidate-snapshot/v1",
+            "files": files,
+        },
+    )
+
+
 def recover_last_template_writes(run_dir: Path) -> dict[str, str]:
+    snapshot_path = run_dir / "candidate_snapshot.json"
+    if snapshot_path.is_file():
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            files = snapshot.get("files", {})
+            recovered_snapshot = {
+                relative: content.rstrip() + "\n"
+                for relative, content in files.items()
+                if relative in _TEMPLATE_CANDIDATE_FILES
+                and isinstance(content, str)
+                and content.strip()
+            }
+            if recovered_snapshot:
+                return recovered_snapshot
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+
     event_path = run_dir / "events.jsonl"
     recovered: dict[str, str] = {}
     if not event_path.is_file():
@@ -267,11 +310,7 @@ def recover_last_template_writes(run_dir: Path) -> dict[str, str]:
             continue
         arguments = data.get("arguments", {})
         path = arguments.get("path")
-        if path not in {
-            "main.py",
-            "requirements.txt",
-            "tests_ioeb/test_template_contract.py",
-        }:
+        if path not in _TEMPLATE_CANDIDATE_FILES:
             continue
         if tool == "write_template_file":
             content = arguments.get("content")
@@ -463,6 +502,7 @@ async def adapt_one(
                     target = staged / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(content, encoding="utf-8")
+                _save_template_snapshot(staged, run_dir)
                 recovered_report = validate_algorithm_template(
                     staged,
                     require_contract_test=True,
@@ -537,6 +577,7 @@ async def adapt_one(
                                 json.dumps({"attempt": attempt, **event.to_dict()}, ensure_ascii=False, default=str)
                                 + "\n"
                             )
+                    _save_template_snapshot(staged, run_dir)
                     if _template_candidate_digest(staged) == candidate_before:
                         if runtime_phase:
                             runtime_repair_attempts -= 1

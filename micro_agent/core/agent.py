@@ -18,6 +18,7 @@ from micro_agent.core.memory.base import MemoryProvider
 from micro_agent.core.memory.short_term import ShortTermMemory
 from micro_agent.core.rag.base import Retriever
 from micro_agent.core.schema import AgentEvent, Message, Role
+from micro_agent.tool.base import ToolResult
 from micro_agent.tool.registry import ToolRegistry
 
 
@@ -148,7 +149,7 @@ class Agent:
             no_tool_response_blocks = 0
 
             # === Act ===
-            signatures = {
+            response_signatures = [
                 json.dumps(
                     {
                         "name": tool_call.name,
@@ -159,14 +160,27 @@ class Agent:
                     default=str,
                 )
                 for tool_call in response.tool_calls
-            }
-            duplicated = sorted(signatures & tool_call_signatures)
+            ]
+            seen_in_response: set[str] = set()
+            duplicate_indexes: set[int] = set()
+            novel_signatures: set[str] = set()
+            for index, signature in enumerate(response_signatures):
+                if (
+                    signature in tool_call_signatures
+                    or signature in seen_in_response
+                ):
+                    duplicate_indexes.add(index)
+                else:
+                    seen_in_response.add(signature)
+                    novel_signatures.add(signature)
+            duplicated = sorted(
+                {response_signatures[index] for index in duplicate_indexes}
+            )
             if duplicated:
-                duplicate_tool_call_blocks += 1
                 warning = (
                     "[重复工具调用阻断] 完全相同的工具与参数已执行过，"
-                    "本次不会再次写入对话或执行。请使用已有结果，改用不同参数，"
-                    "或直接提交当前阶段要求的结构化结果。"
+                    "本次不会再次执行重复项。请使用已有结果，改用不同参数，"
+                    "或继续执行同一响应中的其他新工具调用。"
                 )
                 self.memory.add(Message.user(warning))
                 yield AgentEvent(
@@ -177,7 +191,11 @@ class Agent:
                         "duplicateToolCalls": duplicated,
                     },
                 )
-                if duplicate_tool_call_blocks >= 2:
+                if novel_signatures:
+                    duplicate_tool_call_blocks = 0
+                else:
+                    duplicate_tool_call_blocks += 1
+                if not novel_signatures and duplicate_tool_call_blocks >= 2:
                     yield AgentEvent(
                         type="done",
                         step=step,
@@ -187,8 +205,11 @@ class Agent:
                         },
                     )
                     return
-                continue
-            tool_call_signatures.update(signatures)
+                if not novel_signatures:
+                    continue
+            else:
+                duplicate_tool_call_blocks = 0
+            tool_call_signatures.update(novel_signatures)
             self.memory.add(
                 Message.assistant(
                     content=response.content,
@@ -197,14 +218,27 @@ class Agent:
             )
 
             should_stop = False
-            for tc in response.tool_calls:
+            for index, tc in enumerate(response.tool_calls):
                 yield AgentEvent(
                     type="tool_call",
                     step=step,
                     data={"tool": tc.name, "arguments": tc.parse_arguments()},
                 )
 
-                tool_result = await self.tools.execute(tc.name, **tc.parse_arguments())
+                repeated_call = index in duplicate_indexes
+                tool_result = (
+                    ToolResult(
+                        error=(
+                            "该工具与参数此前已执行；已跳过重复调用，"
+                            "请复用已有结果。"
+                        )
+                    )
+                    if repeated_call
+                    else await self.tools.execute(
+                        tc.name,
+                        **tc.parse_arguments(),
+                    )
+                )
 
                 output = str(tool_result)
                 if len(output) > self.max_observe:
@@ -220,7 +254,7 @@ class Agent:
                     data={"tool": tc.name, "result": output},
                 )
 
-                if self._is_terminal(tc.name):
+                if not repeated_call and self._is_terminal(tc.name):
                     done_data: dict[str, Any] = {"result": output, "tool": tc.name}
                     if tool_result.meta:
                         done_data.update(tool_result.meta)

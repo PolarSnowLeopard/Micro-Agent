@@ -268,6 +268,81 @@ async def test_agent_blocks_identical_tool_calls_before_provider_history_repeats
     assert len(assistant_tool_messages) == 1
 
 
+async def test_agent_skips_duplicate_but_executes_novel_calls_in_same_response():
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.llm import LLMResponse
+    from micro_agent.core.schema import ToolCall
+    from micro_agent.tool.base import Tool, ToolResult
+    from micro_agent.tool.registry import ToolRegistry
+
+    class CountingTool(Tool):
+        name = "count"
+        description = "Count distinct deterministic invocations."
+        parameters = {
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+            "required": ["value"],
+        }
+
+        def __init__(self):
+            self.values = []
+
+        async def execute(self, **kwargs):
+            self.values.append(kwargs["value"])
+            return ToolResult(output=str(kwargs["value"]))
+
+    class MixedDuplicateLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="first",
+                            name="count",
+                            arguments='{"value": 1}',
+                        )
+                    ]
+                )
+            if self.calls == 2:
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="duplicate",
+                            name="count",
+                            arguments='{"value": 1}',
+                        ),
+                        ToolCall(
+                            id="novel",
+                            name="count",
+                            arguments='{"value": 2}',
+                        ),
+                    ]
+                )
+            return LLMResponse(content="done")
+
+    tool = CountingTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    agent = Agent(llm=MixedDuplicateLLM(), tools=registry, max_steps=4)
+
+    events = [event async for event in agent.run("run distinct calls")]
+
+    assert tool.values == [1, 2]
+    duplicate_results = [
+        event.data["result"]
+        for event in events
+        if event.type == "tool_result"
+        and event.data["tool"] == "count"
+        and "跳过重复调用" in event.data["result"]
+    ]
+    assert len(duplicate_results) == 1
+    assert events[-1].data["result"] == "done"
+
+
 async def main():
     await test_bash_tool()
     await test_tool_registry_namespace()
@@ -275,6 +350,7 @@ async def main():
     await test_mcp_agent_init()
     await test_agent_cancel()
     await test_agent_blocks_identical_tool_calls_before_provider_history_repeats()
+    await test_agent_skips_duplicate_but_executes_novel_calls_in_same_response()
     print("\n=== ALL PHASE 2 TESTS PASSED ===")
 
 
