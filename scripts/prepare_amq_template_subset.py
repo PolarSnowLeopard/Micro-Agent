@@ -259,16 +259,36 @@ def recover_last_template_writes(run_dir: Path) -> dict[str, str]:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if event.get("type") != "tool_call" or event.get("data", {}).get("tool") != "write_template_file":
+        if event.get("type") != "tool_call":
             continue
-        arguments = event.get("data", {}).get("arguments", {})
+        data = event.get("data", {})
+        tool = data.get("tool")
+        if tool not in {"write_template_file", "patch_template_file"}:
+            continue
+        arguments = data.get("arguments", {})
         path = arguments.get("path")
-        content = arguments.get("content")
-        if path in {
+        if path not in {
             "main.py",
             "requirements.txt",
             "tests_ioeb/test_template_contract.py",
-        } and isinstance(content, str) and content.strip():
+        }:
+            continue
+        if tool == "write_template_file":
+            content = arguments.get("content")
+            if isinstance(content, str) and content.strip():
+                recovered[path] = content.rstrip() + "\n"
+            continue
+        old = arguments.get("old")
+        new = arguments.get("new")
+        current = recovered.get(path)
+        if (
+            isinstance(current, str)
+            and isinstance(old, str)
+            and old
+            and isinstance(new, str)
+            and current.count(old) == 1
+        ):
+            content = current.replace(old, new, 1)
             recovered[path] = content.rstrip() + "\n"
     return recovered
 

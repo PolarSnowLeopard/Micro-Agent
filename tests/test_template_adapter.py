@@ -1147,6 +1147,17 @@ def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) 
         {
             "type": "tool_call",
             "data": {
+                "tool": "patch_template_file",
+                "arguments": {
+                    "path": "main.py",
+                    "old": "second",
+                    "new": "patched",
+                },
+            },
+        },
+        {
+            "type": "tool_call",
+            "data": {
                 "tool": "write_template_file",
                 "arguments": {
                     "path": "tests_ioeb/test_template_contract.py",
@@ -1160,6 +1171,6 @@ def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) 
     )
 
     assert recover_last_template_writes(tmp_path) == {
-        "main.py": "second\n",
+        "main.py": "patched\n",
         "tests_ioeb/test_template_contract.py": "contract\n",
     }
