@@ -772,6 +772,7 @@ def test_plan_rejects_insufficient_direct_source_parameters(tmp_path):
         )
     except PlanValidationError as exc:
         assert "源码必填参数" in str(exc)
+        assert "`values=None`" in str(exc)
     else:
         raise AssertionError("missing direct source parameters should fail validation")
 

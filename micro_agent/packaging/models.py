@@ -199,7 +199,10 @@ class PackagingPlan:
                         errors.append(
                             f"{prefix}.inputSchema 参数不足以调用 {symbols[0]}："
                             f"源码必填参数为 {symbol_required_parameters[symbols[0]]}；"
-                            f"未暴露且未说明派生方式的参数为 {missing_parameters}"
+                            f"未暴露且未说明派生方式的参数为 {missing_parameters}。"
+                            "若参数语义允许缺省，请在 adapterStrategy 中逐项明确写出"
+                            + "、".join(f"`{item}=None`" for item in missing_parameters)
+                            + "（或真实源码常量）；否则必须把参数加入 inputSchema"
                         )
             output_schema = tool.get("outputSchema")
             if (
