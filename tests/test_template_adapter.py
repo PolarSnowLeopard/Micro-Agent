@@ -523,6 +523,42 @@ def main_process(
     assert report.checks["noServerPathInterface"] is True
 
 
+def test_template_validator_rejects_success_error_control_envelopes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n    return value * 2\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> dict[str, object]:
+    """Run a repository capability.
+
+    Args:
+        value: Numeric input.
+
+    Returns:
+        Wrapped result.
+    """
+    try:
+        return {"success": True, "operation": "predict", "result": run(value)}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert not report.passed
+    assert report.checks["controlEnvelopeReturnLines"] == [13, 15]
+    assert report.checks["noControlEnvelopeReturns"] is False
+    assert any("控制信封" in error for error in report.errors)
+    assert _candidate_requires_replan(project, report)
+
+
 def test_template_validator_rejects_too_many_distinct_operations(
     tmp_path: Path,
 ) -> None:
@@ -1026,6 +1062,11 @@ def main_process(value: float) -> float:
     )
     assert "位置参数和关键字值都必须直接写成" in literal_advice
     assert "不能在测试中临时生成随机模型" in literal_advice
+    envelope_advice = _template_runtime_repair_advice(
+        ['assert result["success"] is True']
+    )
+    assert "异常被控制信封吞掉" in envelope_advice
+    assert "保留原异常" in envelope_advice
 
 
 async def test_patch_template_file_requires_one_exact_match(

@@ -367,6 +367,7 @@ def _candidate_requires_replan(
                 "显式参数过多",
                 "*args 或 **kwargs",
                 "容器内路径",
+                "控制信封",
             )
         )
     )
@@ -422,6 +423,20 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             " main_process 改为接受可内联的 Base64/文本/结构化内容，或在缺少"
             "真实运行资产时拒绝适配；不能在测试中临时生成随机模型、checkpoint"
             "或服务端路径来绕过契约。"
+        )
+    if (
+        "控制信封" in text
+        or (
+            'result["success"]' in text
+            and any(marker in text for marker in ("is true", "== true"))
+        )
+    ):
+        advice.append(
+            "异常被控制信封吞掉：删除 `except ...: return {'success': False, "
+            "'error': ...}` 以及成功结果中的 success/operation/result 包装。"
+            "成功分支直接返回领域字典/数组；失败分支保留原异常或 `raise "
+            "ValueError(... ) from exc`。先让隔离运行输出真实 traceback，再依据"
+            "真实 API/依赖错误修复，禁止继续断言 success=true 掩盖根因。"
         )
     if any(
         marker in text

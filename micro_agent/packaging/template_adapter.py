@@ -51,6 +51,8 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 12. 保持薄封装：main_process 最多 12 个显式参数、最多 8 个不同 operation，契约 fixture
     最多 30 个。通常选择 1–6 个与 wrap_intent 最相关、由仓库示例支持的内聚能力；可以为
     同一能力提供多个边界 fixture，但不要机械暴露整个依赖库 API。
+13. 成功时只返回领域结果；禁止返回 success/operation/result/error 控制信封。底层算法失败
+    必须抛出带上下文的异常，不得在 except 中返回 success=false 或错误字符串伪装成功。
 """
 
 
@@ -117,6 +119,8 @@ def validate_algorithm_template(
         "contractUncollectedCallCount": 0,
         "serverPathParameters": [],
         "noServerPathInterface": False,
+        "controlEnvelopeReturnLines": [],
+        "noControlEnvelopeReturns": False,
     }
     main_path = root / "main.py"
     if not main_path.is_file():
@@ -322,6 +326,19 @@ def validate_algorithm_template(
         for node in ast.walk(reachable)
         if isinstance(node, ast.Name)
     }
+    control_envelope_lines = _control_envelope_return_lines(
+        reachable_functions.values()
+    )
+    checks["controlEnvelopeReturnLines"] = control_envelope_lines
+    if control_envelope_lines:
+        errors.append(
+            "main_process 及其辅助函数不得把成功/失败包装成 "
+            "success/operation/result/error 控制信封后作为正常结果返回，相关行: "
+            + ", ".join(map(str, control_envelope_lines))
+            + "；成功只返回领域载荷，底层失败必须 raise 保留真实 traceback"
+        )
+    else:
+        checks["noControlEnvelopeReturns"] = True
     dynamic_execution = sorted(
         {
             node.func.id
@@ -485,6 +502,34 @@ def _server_path_parameters(
         if name_is_path or description_is_path:
             result.append(name)
     return result
+
+
+def _control_envelope_return_lines(
+    functions: Any,
+) -> list[int]:
+    """Find literal control envelopes that hide domain errors as success."""
+
+    lines: set[int] = set()
+    for function in functions:
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Return) or not isinstance(
+                node.value,
+                ast.Dict,
+            ):
+                continue
+            keys = {
+                key.value
+                for key in node.value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+            control_payload_keys = keys & {"error", "operation", "result"}
+            if (
+                "success" in keys and bool(control_payload_keys)
+            ) or (
+                "error" in keys and bool(keys & {"operation", "result"})
+            ):
+                lines.add(node.lineno)
+    return sorted(lines)
 
 
 def _validate_template_contract_test(
