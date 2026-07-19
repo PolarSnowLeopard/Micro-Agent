@@ -419,11 +419,58 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "保留每个真实公开分支一个最小成功测试。每次 `main_process(...)` 的"
             "位置参数和关键字值必须直接写成 Constant/List/Tuple/Dict 组成的"
             " JSON 字面量；过长输入可先赋给同一测试函数内的局部变量，但变量值"
-            "必须仍是纯 JSON 字面量。禁止模块变量、pytest fixture、helper 返回值、"
-            "`**kwargs`、列表乘法、推导式或函数调用。若真实能力必须依赖文件或模型，应先把"
+            "必须仍是纯 JSON 表达式；允许由常量组成的 list/string 拼接和重复"
+            "（如 `[0.0] * 1024`），禁止模块变量、pytest fixture、helper 返回值、"
+            "`**kwargs`、推导式或函数调用。若真实能力必须依赖文件或模型，应先把"
             " main_process 改为接受可内联的 Base64/文本/结构化内容，或在缺少"
             "真实运行资产时拒绝适配；不能在测试中临时生成随机模型、checkpoint"
             "或服务端路径来绕过契约。"
+        )
+    if any(
+        marker in text
+        for marker in (
+            "size of tensor",
+            "must match the size",
+            "shape mismatch",
+            "output_shape",
+            "expected size",
+            "broadcast_tensors",
+        )
+    ):
+        advice.append(
+            "张量/批次形状不一致：先读取原仓库被调用函数及其现有测试，逐维记录"
+            "输入和输出的 batch/sequence/channel/feature 语义。优先修正测试 fixture "
+            "或 main.py 中多余/缺失的 unsqueeze、transpose、reshape；不得通过"
+            "裁剪、重复、广播 target 或修改领域断言掩盖错误。返回 JSON 时保留原始"
+            "批次语义，并让 output_shape 与真实序列化结果完全一致。"
+        )
+    if any(
+        marker in text
+        for marker in (
+            "temporary failure in name resolution",
+            "urlopen error",
+            "downloading:",
+            "connectionerror",
+        )
+    ):
+        advice.append(
+            "隔离运行触发联网下载：只允许使用仓库已提交或已声明随部署提供的真实"
+            "模型/数据资产，并从仓库相对路径加载。不要关闭无网络验证、不要 mock "
+            "下载，也不能用随机权重替代预训练资产；若仓库没有所需资产，应明确拒绝"
+            "适配该能力。"
+        )
+    if any(
+        marker in text
+        for marker in (
+            "parseexception",
+            "parse error",
+            "invalid formula",
+        )
+    ):
+        advice.append(
+            "领域解析器拒绝 fixture：从原仓库测试、doctest 或文档示例选择一个"
+            "真实可解析的最小输入，并保持 main.py 调用真实解析 API。不要改解析器、"
+            "吞异常或降低断言；先单独核对输入语法，再修正契约 fixture。"
         )
     if (
         "控制信封" in text

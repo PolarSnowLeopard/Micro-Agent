@@ -1189,12 +1189,23 @@ def main_process(value: float) -> float:
     )
     assert "位置参数和关键字值必须直接写成" in literal_advice
     assert "同一测试函数内的局部变量" in literal_advice
+    assert "允许由常量组成的 list/string 拼接和重复" in literal_advice
     assert "不能在测试中临时生成随机模型" in literal_advice
     envelope_advice = _template_runtime_repair_advice(
         ['assert result["success"] is True']
     )
     assert "异常被控制信封吞掉" in envelope_advice
     assert "保留原异常" in envelope_advice
+    runtime_advice = _template_runtime_repair_advice(
+        [
+            "RuntimeError: size of tensor a must match the size of tensor b",
+            "URLError: Temporary failure in name resolution",
+            "ParseException: invalid formula",
+        ]
+    )
+    assert "逐维记录输入和输出" in runtime_advice
+    assert "隔离运行触发联网下载" in runtime_advice
+    assert "真实可解析的最小输入" in runtime_advice
 
 
 async def test_patch_template_file_requires_one_exact_match(
