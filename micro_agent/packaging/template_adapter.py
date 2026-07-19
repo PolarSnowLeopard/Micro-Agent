@@ -46,6 +46,8 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 11. 禁止 eval、exec、compile 或其他动态执行用户文本的方式。将宽泛意图抽象为少量明确的
     operation 分支和 JSON 参数，每个分支必须直接调用已从仓库导入的真实函数/类；不得只把
     函数对象塞进映射后交给动态解释器。
+12. 保持薄封装：main_process 最多 12 个显式参数，契约 fixture 最多 12 个。通常选择
+    1–6 个与 wrap_intent 最相关、由仓库示例支持的内聚能力，不要机械暴露整个依赖库 API。
 """
 
 
@@ -89,6 +91,7 @@ def validate_algorithm_template(
     checks: dict[str, Any] = {
         "mainFile": False,
         "mainProcess": False,
+        "interfaceParameterCount": 0,
         "typedParameters": False,
         "typedReturn": False,
         "googleDocstring": False,
@@ -104,6 +107,7 @@ def validate_algorithm_template(
         "contractTestCallsMainProcess": False,
         "contractTestAssertions": False,
         "contractBranchCoverage": False,
+        "contractFixtureBudget": False,
         "contractFixtures": [],
     }
     main_path = root / "main.py"
@@ -145,8 +149,14 @@ def validate_algorithm_template(
 
     parameters = [*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs]
     parameters = [parameter for parameter in parameters if parameter.arg not in {"self", "cls"}]
+    checks["interfaceParameterCount"] = len(parameters)
     if not parameters:
         errors.append("main_process 至少需要一个业务输入参数")
+    if len(parameters) > 12:
+        errors.append(
+            "main_process 显式参数过多，薄封装最多允许 12 个；"
+            f"当前 {len(parameters)} 个，请收敛为少量内聚能力与结构化 JSON 参数"
+        )
     missing_annotations = [parameter.arg for parameter in parameters if parameter.annotation is None]
     if function.args.vararg or function.args.kwarg:
         errors.append("main_process 不得使用 *args 或 **kwargs 隐藏接口契约")
@@ -385,6 +395,7 @@ def _validate_template_contract_test(
         "contractTestCallsMainProcess": False,
         "contractTestAssertions": False,
         "contractBranchCoverage": False,
+        "contractFixtureBudget": False,
         "contractFixtures": [],
     }
     relative = Path("tests_ioeb") / "test_template_contract.py"
@@ -538,6 +549,13 @@ def _validate_template_contract_test(
         errors.append(
             "模板契约测试必须至少一次直接调用从 main 导入的 main_process，"
             "并使用完整 JSON 字面量输入"
+        )
+    if len(fixtures) <= 12:
+        checks["contractFixtureBudget"] = True
+    else:
+        errors.append(
+            "模板契约 fixture 过多，薄封装最多允许 12 个；"
+            f"当前 {len(fixtures)} 个，请只保留与 wrap_intent 最相关的内聚能力"
         )
 
     assertion_count = sum(

@@ -16,6 +16,7 @@ from micro_agent.packaging.template_adapter import (
     verify_template_contract_runtime,
 )
 from scripts.prepare_amq_template_subset import (
+    _candidate_requires_replan,
     _is_l0,
     ensure_output_outside_source_repo,
     load_mini30,
@@ -254,6 +255,56 @@ def main_process(expression: str) -> dict[str, object]:
     assert not report.passed
     assert report.checks["noDynamicCodeExecution"] is False
     assert any("禁止动态执行用户文本: eval" in error for error in report.errors)
+
+
+def test_template_validator_rejects_overbroad_interface_and_fixture_set(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: int) -> int:\n    return value\n",
+        encoding="utf-8",
+    )
+    parameters = ", ".join(f"value_{index}: int = {index}" for index in range(13))
+    doc_parameters = "\n".join(
+        f"        value_{index}: Input {index}." for index in range(13)
+    )
+    project = _project(
+        tmp_path,
+        f'''from algorithm import run
+
+def main_process({parameters}) -> dict[str, int]:
+    """Run one repository operation.
+
+    Args:
+{doc_parameters}
+
+    Returns:
+        Computed result.
+    """
+    return {{"result": run(value_0)}}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    contract_cases = "\n\n".join(
+        f'''def test_contract_{index}():
+    result = main_process(value_0={index})
+    assert result["result"] == {index}'''
+        for index in range(13)
+    )
+    (tests / "test_template_contract.py").write_text(
+        "from main import main_process\n\n" + contract_cases + "\n",
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not report.passed
+    assert report.checks["interfaceParameterCount"] == 13
+    assert report.checks["contractFixtureBudget"] is False
+    assert any("显式参数过多" in error for error in report.errors)
+    assert any("fixture 过多" in error for error in report.errors)
+    assert _candidate_requires_replan(project, report)
 
 
 def test_contract_runtime_rejects_non_reproducible_requirements(

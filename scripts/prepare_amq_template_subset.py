@@ -30,6 +30,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.template_adapter import (
+    TemplateValidationReport,
     build_template_adapter_agent,
     template_adapter_prompt,
     validate_algorithm_template,
@@ -275,6 +276,46 @@ def _template_candidate_context(project: Path) -> str:
     return "".join(sections)
 
 
+def _candidate_requires_replan(
+    project: Path,
+    report: TemplateValidationReport,
+) -> bool:
+    main_path = project / "main.py"
+    if not main_path.is_file():
+        return False
+    source = main_path.read_text(encoding="utf-8", errors="replace")
+    fixtures = report.checks.get("contractFixtures", [])
+    return (
+        len(report.errors) >= 12
+        or len(fixtures) > 12
+        or (
+            len(source) > 20_000
+            and any(
+                marker in error
+                for error in report.errors
+                for marker in (
+                    "动态执行用户文本",
+                    "显式参数过多",
+                    "*args 或 **kwargs",
+                )
+            )
+        )
+    )
+
+
+def _discard_template_candidate(project: Path) -> None:
+    (project / "main.py").unlink(missing_ok=True)
+    (project / "tests_ioeb" / "test_template_contract.py").unlink(
+        missing_ok=True
+    )
+    original_requirements = project / "requirements.original.txt"
+    requirements = project / "requirements.txt"
+    if original_requirements.is_file():
+        shutil.copy2(original_requirements, requirements)
+    else:
+        requirements.unlink(missing_ok=True)
+
+
 async def adapt_one(
     sample: dict[str, Any],
     *,
@@ -374,7 +415,14 @@ async def adapt_one(
                 if recovered_writes:
                     _write_json_atomic(run_dir / "validation_recovered.json", recovered_report.to_dict())
                     summary["recoveredFromPriorRun"] = True
-                if recovered_report.passed:
+                if _candidate_requires_replan(staged, recovered_report):
+                    _discard_template_candidate(staged)
+                    summary["candidateReplans"] = 1
+                    errors = [
+                        "此前候选包含动态执行、接口过宽或大量契约错误，已丢弃。"
+                        "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数和 12 个 fixture。"
+                    ]
+                elif recovered_report.passed:
                     runtime_report = await asyncio.to_thread(
                         verify_template_contract_runtime,
                         staged,
@@ -421,6 +469,15 @@ async def adapt_one(
                     errors = report.errors
                     if not report.passed:
                         runtime_report = None
+                        if _candidate_requires_replan(staged, report):
+                            _discard_template_candidate(staged)
+                            summary["candidateReplans"] = (
+                                int(summary.get("candidateReplans", 0)) + 1
+                            )
+                            errors = [
+                                "上一候选包含动态执行、接口过宽或大量契约错误，已丢弃。"
+                                "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数和 12 个 fixture。"
+                            ]
                         continue
                     runtime_report = await asyncio.to_thread(
                         verify_template_contract_runtime,
