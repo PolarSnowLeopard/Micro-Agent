@@ -423,12 +423,13 @@ def _ground_plan_smoke_from_verified_contract(
     raw: dict[str, Any],
     store: PlanStore,
 ) -> list[str]:
-    """Replace model-invented smoke fixtures with runtime-verified contracts.
+    """Ground model schemas and smoke fixtures in runtime-verified contracts.
 
     Template adaptation already executes each submitted fixture in an isolated
     container. Planning therefore must not ask the LLM to reproduce the same
-    structured value exactly. This gate maps a Tool's fixed dispatch branch to
-    the corresponding verified public input before any plan validation runs.
+    structured value or remember a shared entrypoint parameter exactly. This
+    gate maps a Tool's fixed dispatch branch to the corresponding verified
+    public input before any plan validation runs.
     """
 
     records = store.verified_contract_records or []
@@ -439,6 +440,35 @@ def _ground_plan_smoke_from_verified_contract(
     services = raw.get("services")
     if not isinstance(services, list):
         return grounded
+    property_catalog: dict[str, dict[str, Any]] = {}
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        for tool in service.get("tools", []):
+            if not isinstance(tool, dict):
+                continue
+            schema = tool.get("inputSchema")
+            properties = (
+                schema.get("properties", {})
+                if isinstance(schema, dict)
+                else {}
+            )
+            if not isinstance(properties, dict):
+                continue
+            for key, property_schema in properties.items():
+                if isinstance(key, str) and isinstance(
+                    property_schema,
+                    dict,
+                ):
+                    property_catalog.setdefault(
+                        key,
+                        json.loads(
+                            json.dumps(
+                                property_schema,
+                                ensure_ascii=False,
+                            )
+                        ),
+                    )
     for service in services:
         if not isinstance(service, dict):
             continue
@@ -463,8 +493,7 @@ def _ground_plan_smoke_from_verified_contract(
             for record in _contract_branch_records(tool, records):
                 smoke_input = record["toolSmokeInput"]
                 if (
-                    not set(smoke_input).issubset(properties)
-                    or not set(required).issubset(smoke_input)
+                    not set(required).issubset(smoke_input)
                     or _contract_record_was_rejected(name, record, rejected)
                 ):
                     continue
@@ -475,15 +504,76 @@ def _ground_plan_smoke_from_verified_contract(
                 candidates,
                 key=lambda item: _canonical_smoke_input(item["toolSmokeInput"]),
             )
+            smoke_input = selected["toolSmokeInput"]
+            for key, value in smoke_input.items():
+                if key in properties:
+                    continue
+                properties[key] = json.loads(
+                    json.dumps(
+                        property_catalog.get(
+                            key,
+                            _contract_value_schema(key, value),
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+            entry_required = set(
+                (store.symbol_required_parameters or {}).get(
+                    "main.main_process",
+                    [],
+                )
+            )
+            for key in smoke_input:
+                if key in entry_required and key not in required:
+                    required.append(key)
             tool["smokeTest"] = {
                 "enabled": True,
                 "input": json.loads(
-                    json.dumps(selected["toolSmokeInput"], ensure_ascii=False)
+                    json.dumps(smoke_input, ensure_ascii=False)
                 ),
                 "evidence": list(selected["evidence"]),
             }
             grounded.append(name)
     return grounded
+
+
+def _contract_value_schema(name: str, value: Any) -> dict[str, Any]:
+    """Infer the narrow JSON type needed to preserve a verified input field."""
+
+    description = (
+        f"Runtime-verified public input `{name}` from the submitted template."
+    )
+    if isinstance(value, bool):
+        return {"type": "boolean", "description": description}
+    if isinstance(value, int):
+        return {"type": "integer", "description": description}
+    if isinstance(value, float):
+        return {"type": "number", "description": description}
+    if isinstance(value, str):
+        return {"type": "string", "description": description}
+    if isinstance(value, list):
+        item_schemas = [
+            _contract_value_schema(name, item)
+            for item in value
+        ]
+        item_types = {
+            schema.get("type")
+            for schema in item_schemas
+            if isinstance(schema.get("type"), str)
+        }
+        items = (
+            {"type": next(iter(item_types))}
+            if len(item_types) == 1
+            else {}
+        )
+        return {
+            "type": "array",
+            "items": items,
+            "description": description,
+        }
+    if isinstance(value, dict):
+        return {"type": "object", "description": description}
+    return {"description": description}
 
 
 def _contract_branch_records(

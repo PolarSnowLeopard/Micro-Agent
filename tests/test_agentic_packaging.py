@@ -997,9 +997,9 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
     project = _sample_project(tmp_path)
     (project / "main.py").write_text(
         "from core import predict\n\n"
-        "def main_process(operation: str, value: float) -> dict:\n"
+        "def main_process(operation: str, value: float, context: list[str]) -> dict:\n"
         "    if operation == 'predict':\n"
-        "        return predict(value)\n"
+        "        return {'score': predict(value), 'context': context}\n"
         "    raise ValueError('unsupported')\n",
         encoding="utf-8",
     )
@@ -1009,7 +1009,8 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
     contract_file.write_text(
         "from main import main_process\n\n"
         "def test_predict_contract():\n"
-        "    assert main_process(operation='predict', value=0.5)['score'] == 0.5\n",
+        "    result = main_process(operation='predict', value=0.5, context=['baseline'])\n"
+        "    assert result['score'] == 0.5\n",
         encoding="utf-8",
     )
     ir = RepositoryAnalyzer().analyze(project)
@@ -1018,8 +1019,8 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
     tool = raw["services"][0]["tools"][0]
     tool["sourceSymbols"] = ["main.main_process"]
     tool["adapterStrategy"] = (
-        "Validate value, set operation='predict' and output_type='structured', "
-        "then call main.main_process."
+        "Validate value and context, set operation='predict' and "
+        "output_type='structured', then call main.main_process."
     )
     tool["smokeTest"] = {
         "enabled": True,
@@ -1030,6 +1031,9 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
         path=tmp_path / "plan.json",
         known_symbols=ir.known_symbols,
         known_files={file.path for file in ir.files},
+        symbol_required_parameters={
+            "main.main_process": ["operation", "value", "context"]
+        },
         symbol_dispatch_branches={
             "main.main_process": next(
                 symbol.dispatchBranches
@@ -1051,8 +1055,12 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
                     "operation": "predict",
                     "output_type": "structured",
                     "value": 0.5,
+                    "context": ["baseline"],
                 },
-                "toolSmokeInput": {"value": 0.5},
+                "toolSmokeInput": {
+                    "value": 0.5,
+                    "context": ["baseline"],
+                },
                 "evidence": ["tests_ioeb/test_template_contract.py:4"],
             }
         ],
@@ -1066,9 +1074,15 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
     assert store.plan is not None
     assert store.plan.tools[0]["smokeTest"] == {
         "enabled": True,
-        "input": {"value": 0.5},
+        "input": {"value": 0.5, "context": ["baseline"]},
         "evidence": ["tests_ioeb/test_template_contract.py:4"],
     }
+    grounded_schema = store.plan.tools[0]["inputSchema"]
+    assert grounded_schema["properties"]["context"]["type"] == "array"
+    assert grounded_schema["properties"]["context"]["items"] == {
+        "type": "string"
+    }
+    assert "context" in grounded_schema["required"]
     assert store.contract_smoke_grounded_tools == ["predict_risk"]
     assert "verifiedContractSmoke=predict_risk" in result.output
 
