@@ -1247,8 +1247,27 @@ async def test_project_reader_invalid_path_does_not_consume_read_budget(tmp_path
     exhausted = await reader.execute(path="README.md")
 
     assert invalid.error
-    assert "不支持目录浏览" in invalid.error
+    assert "真实文件或目录路径" in invalid.error
     assert not valid.error
+    assert exhausted.error
+
+
+async def test_project_reader_lists_one_directory_level_and_spends_budget(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    assets = project / "assets"
+    (assets / "models").mkdir(parents=True)
+    (assets / "weights.bin").write_bytes(b"weights")
+    reader = ReadProjectFile(project, max_reads=1)
+
+    listing = await reader.execute(path="assets")
+    exhausted = await reader.execute(path="core.py")
+
+    assert not listing.error
+    assert "# Directory assets" in listing.output
+    assert "models/" in listing.output
+    assert "weights.bin" in listing.output
     assert exhausted.error
 
 

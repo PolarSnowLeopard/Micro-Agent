@@ -66,7 +66,10 @@ class InspectRepository(Tool):
 
 class ReadProjectFile(Tool):
     name = "read_project_file"
-    description = "按仓库相对路径读取源码、测试、配置或文档；路径严格限制在用户提交目录内。"
+    description = (
+        "按仓库相对路径读取源码、测试、配置或文档；若路径是目录则列出一层内容；"
+        "路径严格限制在用户提交目录内。"
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -102,6 +105,26 @@ class ReadProjectFile(Tool):
             path = _contained_path(self.root, str(kwargs.get("path", "")))
         except ValueError as exc:
             return ToolResult(error=str(exc))
+        if path.is_dir() and not path.is_symlink():
+            self.calls += 1
+            relative = path.relative_to(self.root).as_posix() or "."
+            entries: list[str] = []
+            try:
+                children = sorted(
+                    path.iterdir(),
+                    key=lambda child: (not child.is_dir(), child.name.casefold()),
+                )
+            except OSError as exc:
+                return ToolResult(error=f"目录不可读取: {relative}: {exc}")
+            for child in children[:200]:
+                if child.is_symlink():
+                    continue
+                suffix = "/" if child.is_dir() else ""
+                entries.append(child.name + suffix)
+            if len(children) > 200:
+                entries.append(f"...({len(children) - 200} more entries)")
+            listing = "\n".join(entries) if entries else "(empty directory)"
+            return ToolResult(output=f"# Directory {relative}\n{listing}")
         if not path.is_file() or path.is_symlink():
             requested = str(kwargs.get("path", ""))
             if requested.startswith("algorithm/"):
@@ -112,7 +135,7 @@ class ReadProjectFile(Tool):
                         + (
                             f"请改用 {corrected}"
                             if corrected
-                            else "请直接填写真实文件路径；该工具不支持目录浏览"
+                            else "请直接填写真实文件或目录路径"
                         )
                     )
                 )
