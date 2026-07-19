@@ -363,6 +363,75 @@ class SavePackagingPlanJson(Tool):
         return await SavePackagingPlan(self.store).execute(**raw)
 
 
+class ReviseSmokeTests(Tool):
+    """Allow a runtime repair turn to change only reviewed smoke fixtures."""
+
+    name = "revise_smoke_tests"
+    description = (
+        "提交完整严格 JSON 规划，但只允许修改现有 Tool 的 smokeTest。"
+        "用于容器日志证明原 smoke 输入与真实入口不兼容、且仓库中存在另一组可追溯可执行输入时；"
+        "服务边界、工具名、Schema、adapterStrategy 与其他字段必须保持不变。"
+    )
+    parameters = SavePackagingPlanJson.parameters
+
+    def __init__(self, store: PlanStore, current_plan: PackagingPlan) -> None:
+        self.store = store
+        self.current_plan = current_plan
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        content = str(kwargs.get("content", "")).strip()
+        try:
+            raw = json.loads(content)
+        except json.JSONDecodeError as exc:
+            return ToolResult(
+                error=(
+                    f"完整规划不是严格 JSON: line={exc.lineno}, "
+                    f"column={exc.colno}, {exc.msg}"
+                )
+            )
+        if not isinstance(raw, dict):
+            return ToolResult(error="完整规划 JSON 顶层必须是 object")
+        _canonicalize_nonsemantic_shape(raw)
+        _drop_unknown_exclusions(raw, self.store.known_symbols)
+        try:
+            candidate = PackagingPlan.validate(
+                raw,
+                known_symbols=self.store.known_symbols,
+                known_files=self.store.known_files,
+                symbol_required_parameters=self.store.symbol_required_parameters,
+                symbol_calls=self.store.symbol_calls,
+                symbol_is_generator=self.store.symbol_is_generator,
+                candidate_symbols=self.store.candidate_symbols,
+            )
+        except PlanValidationError as exc:
+            return ToolResult(
+                error="smoke 修订后的完整规划无效:\n- " + "\n- ".join(exc.errors)
+            )
+        if _without_smoke_tests(candidate) != _without_smoke_tests(self.current_plan):
+            return ToolResult(
+                error=(
+                    "运行时 smoke 修订只能改变 tools[*].smokeTest；"
+                    "服务、Tool、Schema、adapterStrategy、证据与其他规划字段必须保持原样"
+                )
+            )
+        result = await SavePackagingPlan(self.store).execute(**raw)
+        if result.error:
+            return result
+        return ToolResult(
+            output=(
+                "smokeTest 已通过全部规划门禁并写回；外层将用新输入重新执行静态与容器验收"
+            )
+        )
+
+
+def _without_smoke_tests(plan: PackagingPlan) -> dict[str, Any]:
+    data = plan.to_dict()
+    for service in data.get("services", []):
+        for tool in service.get("tools", []):
+            tool.pop("smokeTest", None)
+    return data
+
+
 def _augment_unknown_symbol_errors(
     errors: list[str],
     known_symbols: set[str],

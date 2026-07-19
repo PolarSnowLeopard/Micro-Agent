@@ -31,6 +31,7 @@ from micro_agent.packaging.tools import (
     PatchArtifactFile,
     PlanStore,
     ReadProjectFile,
+    ReviseSmokeTests,
     SavePackagingPlan,
     SavePackagingPlanJson,
     WriteArtifactFile,
@@ -362,6 +363,47 @@ async def test_plan_store_applies_dispatch_coverage_gate(tmp_path):
     assert result.error
     assert store.plan is None
     assert "分支能力覆盖门禁失败" in result.error
+
+
+async def test_runtime_smoke_revision_preserves_reviewed_interface(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        enforce_interface_quality=False,
+    )
+    revised = plan.to_dict()
+    revised["services"][0]["tools"][0]["smokeTest"]["input"] = {"value": 0.7}
+
+    result = await ReviseSmokeTests(store, plan).execute(
+        content=json.dumps(revised),
+    )
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.tools[0]["smokeTest"]["input"] == {"value": 0.7}
+
+    rejected_store = PlanStore(
+        path=tmp_path / "rejected_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        enforce_interface_quality=False,
+    )
+    changed_interface = plan.to_dict()
+    changed_interface["services"][0]["tools"][0]["description"] += " Changed."
+    changed_interface["services"][0]["tools"][0]["smokeTest"]["input"] = {
+        "value": 0.9
+    }
+    rejected = await ReviseSmokeTests(rejected_store, plan).execute(
+        content=json.dumps(changed_interface),
+    )
+
+    assert rejected.error
+    assert "只能改变 tools[*].smokeTest" in rejected.error
+    assert rejected_store.plan is None
 
 
 def test_bage_retains_budgeted_inventory_without_promoting_unrelated_files(tmp_path):
@@ -2577,6 +2619,22 @@ def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
     assert "不得先调用 inspect_repository 或 read_project_file" in prompt
     assert '"decision": "package"' in prompt
     assert "[runtime] failure" in prompt
+
+    smoke_prompt = _repair_prompt(
+        VerificationReport(
+            passed=False,
+            checks={},
+            errors=["[smoke_test] invalid fixture"],
+        ),
+        2,
+        failure_phase="runtime",
+        phase_attempt=2,
+        artifact_snapshot=snapshot,
+        implementation_context={"packagingPlan": {"decision": "package"}},
+        allow_smoke_revision=True,
+    )
+    assert "revise_smoke_tests" in smoke_prompt
+    assert "只修改对应 tools[*].smokeTest.input/evidence" in smoke_prompt
 
 
 async def test_container_runtime_verifier_builds_and_discovers_tools(tmp_path):
