@@ -29,6 +29,7 @@ from micro_agent.packaging.tools import (
     SavePackagingPlanJson,
     VerifyArtifact,
     WriteArtifactFile,
+    _canonical_smoke_input,
     _smoke_errors_prove_fixture_grounding,
 )
 from micro_agent.packaging.verifier import ArtifactVerifier, VerificationReport
@@ -381,6 +382,8 @@ class AgenticPackagingWorkflow:
         pending_smoke_store: PlanStore | None = None
         last_smoke_failure_signature: str | None = None
         repeated_smoke_failures = 0
+        rejected_smoke_inputs: dict[str, set[str]] = {}
+        smoke_revision_retries = 0
         while True:
             async for event in builder.run(prompt):
                 if event.type == "done":
@@ -391,6 +394,7 @@ class AgenticPackagingWorkflow:
             if pending_smoke_store is not None and pending_smoke_store.plan is not None:
                 plan = pending_smoke_store.plan
                 self.plan = plan
+                smoke_revision_retries = 0
                 implementation_context = _builder_implementation_context(plan, self.ir)
                 analysis_cache.put(self.ir.fingerprint, plan)
                 yield AgentEvent(
@@ -404,6 +408,51 @@ class AgenticPackagingWorkflow:
                     },
                 )
                 step_offset += 1
+            elif pending_smoke_store is not None:
+                revision_errors = pending_smoke_store.last_errors or [
+                    "本轮没有提交可接受的局部 smoke fixture 修订"
+                ]
+                if smoke_revision_retries < 3:
+                    smoke_revision_retries += 1
+                    yield AgentEvent(
+                        type="think",
+                        step=step_offset,
+                        data={
+                            "thought": (
+                                "[fixture 修订门禁] 候选在进入容器前已被拒绝，"
+                                "保留当前已审核规划并直接要求重新选择证据；"
+                                "不会重新构建或执行已知失败输入。"
+                            ),
+                            "verification_errors": revision_errors,
+                        },
+                    )
+                    step_offset += 1
+                    prompt = _smoke_revision_retry_prompt(
+                        revision_errors,
+                        rejected_smoke_inputs,
+                    )
+                    builder = _build_builder_agent(
+                        self.project_dir,
+                        self.artifact_dir,
+                        plan,
+                        self.ir,
+                    )
+                    pending_smoke_store = _new_plan_store(
+                        self.project_dir,
+                        self.ir,
+                        self.artifact_dir / "packaging_plan.json",
+                        rejected_smoke_inputs=rejected_smoke_inputs,
+                    )
+                    _configure_repair_builder(builder)
+                    _configure_smoke_revision_builder(
+                        builder,
+                        pending_smoke_store,
+                        plan,
+                        force_revision=True,
+                    )
+                    self._active_agent = builder
+                    continue
+                break
             pending_smoke_store = None
             if not initial_generation_complete:
                 _lock_builder_overwrites(builder)
@@ -441,6 +490,30 @@ class AgenticPackagingWorkflow:
                             else:
                                 repeated_smoke_failures = 0
                             last_smoke_failure_signature = smoke_signature
+                        smoke_failures = runtime_report.checks.get(
+                            "smokeTestFailures"
+                        )
+                        if isinstance(smoke_failures, dict):
+                            tools_by_name = {
+                                str(tool.get("name")): tool
+                                for tool in plan.tools
+                            }
+                            for tool_name in smoke_failures:
+                                tool = tools_by_name.get(str(tool_name))
+                                smoke = (
+                                    tool.get("smokeTest")
+                                    if isinstance(tool, dict)
+                                    else None
+                                )
+                                smoke_input = (
+                                    smoke.get("input")
+                                    if isinstance(smoke, dict)
+                                    else None
+                                )
+                                if isinstance(smoke_input, dict):
+                                    rejected_smoke_inputs.setdefault(
+                                        str(tool_name), set()
+                                    ).add(_canonical_smoke_input(smoke_input))
 
             if report.passed and (
                 self.runtime_verifier_factory is None
@@ -512,7 +585,13 @@ class AgenticPackagingWorkflow:
             total_repairs += 1
             force_smoke_revision = (
                 _is_smoke_test_report(report)
-                and repeated_smoke_failures >= 1
+                and (
+                    repeated_smoke_failures >= 1
+                    or any(
+                        len(inputs) >= 2
+                        for inputs in rejected_smoke_inputs.values()
+                    )
+                )
             )
             yield AgentEvent(
                 type="think",
@@ -549,6 +628,7 @@ class AgenticPackagingWorkflow:
                     self.project_dir,
                     self.ir,
                     self.artifact_dir / "packaging_plan.json",
+                    rejected_smoke_inputs=rejected_smoke_inputs,
                 )
                 _configure_smoke_revision_builder(
                     builder,
@@ -783,6 +863,8 @@ def _new_plan_store(
     project_dir: Path,
     ir: RepositoryIR,
     path: Path,
+    *,
+    rejected_smoke_inputs: dict[str, set[str]] | None = None,
 ) -> PlanStore:
     return PlanStore(
         path=path,
@@ -802,6 +884,10 @@ def _new_plan_store(
             project_dir / "template_adaptation.json"
         ).is_file(),
         smoke_evidence_root=project_dir,
+        rejected_smoke_inputs={
+            name: set(inputs)
+            for name, inputs in (rejected_smoke_inputs or {}).items()
+        },
     )
 
 
@@ -1149,6 +1235,33 @@ def _repair_prompt(
         + json.dumps(implementation_context or {}, ensure_ascii=False, indent=2)
         + "\n独立验收报告：\n"
         + (report.to_json() if report else "无验收报告")
+    )
+
+
+def _smoke_revision_retry_prompt(
+    errors: list[str],
+    rejected_smoke_inputs: dict[str, set[str]],
+) -> str:
+    rejected = {
+        tool_name: [
+            json.loads(value)
+            for value in sorted(inputs)
+        ]
+        for tool_name, inputs in rejected_smoke_inputs.items()
+        if inputs
+    }
+    return (
+        "上一轮局部 smoke fixture 修订在进入容器前未通过证据或 Schema 门禁。"
+        "当前服务边界、Tool、Schema、adapterStrategy 和产物代码均已冻结；"
+        "不得修改它们，也不得再次提交任何已被隔离容器执行失败的完整 input。"
+        "请根据错误末尾列出的候选及 file:line，最多读取一个最相关的真实测试、"
+        "doctest 或示例文件，核对反应式/场景字符串以及与其配套的所有映射、数组和数值，"
+        "然后调用 revise_smoke_tests 提交一组新的完整 input/evidence。"
+        "不能只机械替换一个自由文本字段而保留与其不匹配的关联字段。"
+        "\n已知容器失败的完整 input（禁止回退）：\n"
+        + json.dumps(rejected, ensure_ascii=False, indent=2)
+        + "\n上一轮修订门禁错误：\n- "
+        + "\n- ".join(errors)
     )
 
 

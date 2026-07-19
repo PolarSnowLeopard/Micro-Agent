@@ -35,6 +35,7 @@ from micro_agent.packaging.tools import (
     SavePackagingPlan,
     SavePackagingPlanJson,
     WriteArtifactFile,
+    _canonical_smoke_input,
     _smoke_errors_prove_fixture_grounding,
     _smoke_string_candidates,
 )
@@ -53,6 +54,7 @@ from micro_agent.packaging.workflow import (
     _repair_prompt,
     _run_planner,
     _smoke_failure_signature,
+    _smoke_revision_retry_prompt,
     planning_candidate_symbols,
     _extract_planning_json,
 )
@@ -566,6 +568,52 @@ async def test_runtime_smoke_revision_auto_grounds_free_text_from_repository(
     revised = store.plan.tools[0]["smokeTest"]
     assert revised["input"]["scenario"] == "documented risk fixture"
     assert revised["evidence"] == ["examples/fixture.py:1"]
+
+
+async def test_runtime_smoke_revision_never_reuses_container_failed_input(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    failed_input = {"value": 0.7}
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        enforce_interface_quality=False,
+        rejected_smoke_inputs={
+            plan.tool_names[0]: {_canonical_smoke_input(failed_input)}
+        },
+    )
+
+    result = await ReviseSmokeTests(store, plan).execute(
+        revisions=[
+            {
+                "toolName": plan.tool_names[0],
+                "input": failed_input,
+                "evidence": ["tests/test_core.py:4"],
+            }
+        ],
+    )
+
+    assert result.error
+    assert "隔离容器实际执行并判定失败" in result.error
+    assert store.plan is None
+    assert store.last_errors
+
+
+def test_smoke_revision_retry_prompt_forbids_failed_complete_inputs():
+    failed = {"simulate": {"{\"reaction\":\"A -> B\"}"}}
+
+    prompt = _smoke_revision_retry_prompt(
+        ["fixture lacks independent evidence"],
+        failed,
+    )
+
+    assert '"reaction": "A -> B"' in prompt
+    assert "禁止回退" in prompt
+    assert "不能只机械替换一个自由文本字段" in prompt
 
 
 def test_smoke_fixture_is_frozen_only_with_exact_independent_provenance():

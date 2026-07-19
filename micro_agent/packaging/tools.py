@@ -129,6 +129,7 @@ class PlanStore:
     enforce_interface_quality: bool = False
     require_independent_smoke_evidence: bool = False
     smoke_evidence_root: Path | None = None
+    rejected_smoke_inputs: dict[str, set[str]] | None = None
     plan: PackagingPlan | None = None
     last_candidate: dict[str, Any] | None = None
     last_errors: list[str] | None = None
@@ -482,6 +483,15 @@ class ReviseSmokeTests(Tool):
         auto_grounded: list[str] = []
         accepted_quality: InterfaceQualityReport | None = None
         for index, (tool_name, smoke_update) in enumerate(prepared):
+            rejected_inputs = (self.store.rejected_smoke_inputs or {}).get(
+                tool_name, set()
+            )
+            if _canonical_smoke_input(smoke_update["input"]) in rejected_inputs:
+                rejected.append(
+                    f"{tool_name}: 该完整 input 已被外层隔离容器实际执行并判定失败；"
+                    "必须选择不同的、由真实测试/doctest/示例支持的完整 fixture"
+                )
+                continue
             candidate_raw = accepted_plan.to_dict()
             candidate_tool = next(
                 tool
@@ -506,9 +516,13 @@ class ReviseSmokeTests(Tool):
                 result = await SavePackagingPlan(check_store).execute(
                     **candidate_raw
                 )
-                if result.error and (
-                    "[smoke_fixture_grounding]" in result.error
-                    or "[smoke_evidence_reference]" in result.error
+                if (
+                    not rejected_inputs
+                    and result.error
+                    and (
+                        "[smoke_fixture_grounding]" in result.error
+                        or "[smoke_evidence_reference]" in result.error
+                    )
                 ):
                     grounded = _ground_smoke_revision_from_repository(
                         candidate_raw,
@@ -524,7 +538,22 @@ class ReviseSmokeTests(Tool):
                         result = await SavePackagingPlan(check_store).execute(
                             **candidate_raw
                         )
-                        if not result.error and check_store.plan is not None:
+                        grounded_tool = next(
+                            item
+                            for service in candidate_raw.get("services", [])
+                            for item in service.get("tools", [])
+                            if str(item.get("name")) == tool_name
+                        )
+                        grounded_input = grounded_tool["smokeTest"]["input"]
+                        if _canonical_smoke_input(grounded_input) in rejected_inputs:
+                            result = ToolResult(
+                                error=(
+                                    f"{tool_name}: 自动落地候选已被隔离容器实际执行并判定失败，"
+                                    "不能回退到该 fixture"
+                                )
+                            )
+                            check_store.plan = None
+                        elif not result.error and check_store.plan is not None:
                             auto_grounded.append(tool_name)
             finally:
                 check_path.unlink(missing_ok=True)
@@ -538,6 +567,8 @@ class ReviseSmokeTests(Tool):
             accepted_names.append(tool_name)
 
         if not accepted_names:
+            self.store.last_candidate = self.current_plan.to_dict()
+            self.store.last_errors = rejected
             return ToolResult(
                 error=(
                     "没有 smoke fixture 通过规划门禁:\n- "
@@ -578,6 +609,10 @@ class ReviseSmokeTests(Tool):
                 + rejected_note
             )
         )
+
+
+def _canonical_smoke_input(value: dict[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _smoke_check_store(store: PlanStore, path: Path) -> PlanStore:
