@@ -299,9 +299,16 @@ def _candidate_requires_replan(
         return False
     source = main_path.read_text(encoding="utf-8", errors="replace")
     fixtures = report.checks.get("contractFixtures", [])
+    operation_counts = report.checks.get("contractOperationCounts", {})
     return (
         len(report.errors) >= 12
-        or len(fixtures) > 12
+        or len(fixtures) > 30
+        or any(int(count) > 8 for count in operation_counts.values())
+        or any(
+            marker in error
+            for error in report.errors
+            for marker in ("显式参数过多", "*args 或 **kwargs")
+        )
         or (
             len(source) > 20_000
             and any(
@@ -434,7 +441,8 @@ async def adapt_one(
                     summary["candidateReplans"] = 1
                     errors = [
                         "此前候选包含动态执行、接口过宽或大量契约错误，已丢弃。"
-                        "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数和 12 个 fixture。"
+                        "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数、"
+                        "8 个不同 operation 和 30 个 fixture。"
                     ]
                 elif recovered_report.passed:
                     runtime_report = await asyncio.to_thread(
@@ -490,7 +498,8 @@ async def adapt_one(
                             )
                             errors = [
                                 "上一候选包含动态执行、接口过宽或大量契约错误，已丢弃。"
-                                "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数和 12 个 fixture。"
+                                "请从仓库证据重新规划 1–6 个内聚能力，最多 12 个显式参数、"
+                                "8 个不同 operation 和 30 个 fixture。"
                             ]
                         continue
                     runtime_report = await asyncio.to_thread(

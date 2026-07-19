@@ -46,8 +46,9 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 11. 禁止 eval、exec、compile 或其他动态执行用户文本的方式。将宽泛意图抽象为少量明确的
     operation 分支和 JSON 参数，每个分支必须直接调用已从仓库导入的真实函数/类；不得只把
     函数对象塞进映射后交给动态解释器。
-12. 保持薄封装：main_process 最多 12 个显式参数，契约 fixture 最多 12 个。通常选择
-    1–6 个与 wrap_intent 最相关、由仓库示例支持的内聚能力，不要机械暴露整个依赖库 API。
+12. 保持薄封装：main_process 最多 12 个显式参数、最多 8 个不同 operation，契约 fixture
+    最多 30 个。通常选择 1–6 个与 wrap_intent 最相关、由仓库示例支持的内聚能力；可以为
+    同一能力提供多个边界 fixture，但不要机械暴露整个依赖库 API。
 """
 
 
@@ -108,6 +109,7 @@ def validate_algorithm_template(
         "contractTestAssertions": False,
         "contractBranchCoverage": False,
         "contractFixtureBudget": False,
+        "contractOperationCounts": {},
         "contractFixtures": [],
     }
     main_path = root / "main.py"
@@ -396,6 +398,7 @@ def _validate_template_contract_test(
         "contractTestAssertions": False,
         "contractBranchCoverage": False,
         "contractFixtureBudget": False,
+        "contractOperationCounts": {},
         "contractFixtures": [],
     }
     relative = Path("tests_ioeb") / "test_template_contract.py"
@@ -550,11 +553,11 @@ def _validate_template_contract_test(
             "模板契约测试必须至少一次直接调用从 main 导入的 main_process，"
             "并使用完整 JSON 字面量输入"
         )
-    if len(fixtures) <= 12:
+    if len(fixtures) <= 30:
         checks["contractFixtureBudget"] = True
     else:
         errors.append(
-            "模板契约 fixture 过多，薄封装最多允许 12 个；"
+            "模板契约 fixture 过多，薄封装最多允许 30 个；"
             f"当前 {len(fixtures)} 个，请只保留与 wrap_intent 最相关的内聚能力"
         )
 
@@ -577,6 +580,39 @@ def _validate_template_contract_test(
         )
 
     dispatch_cases = _literal_dispatch_cases(main_function)
+    selector_candidates = set(dispatch_cases)
+    selector_candidates.update(
+        name
+        for name in parameter_names
+        if name in {"action", "capability", "mode", "operation"}
+    )
+    operation_counts: dict[str, int] = {}
+    for selector in sorted(selector_candidates):
+        serialized_values = {
+            json.dumps(
+                fixture["input"][selector],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            for fixture in fixtures
+            if selector in fixture["input"]
+        }
+        if serialized_values:
+            operation_counts[selector] = len(serialized_values)
+    checks["contractOperationCounts"] = operation_counts
+    overbroad_selectors = {
+        selector: count
+        for selector, count in operation_counts.items()
+        if count > 8
+    }
+    if overbroad_selectors:
+        errors.append(
+            "模板接口 operation 过多，薄封装最多允许 8 个不同操作: "
+            + ", ".join(
+                f"{selector}={count}"
+                for selector, count in overbroad_selectors.items()
+            )
+        )
     missing_cases: list[str] = []
     for selector, values in dispatch_cases.items():
         observed = {

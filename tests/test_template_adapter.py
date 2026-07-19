@@ -258,7 +258,7 @@ def main_process(expression: str) -> dict[str, object]:
     assert any("禁止动态执行用户文本: eval" in error for error in report.errors)
 
 
-def test_template_validator_rejects_overbroad_interface_and_fixture_set(
+def test_template_validator_rejects_overbroad_parameter_set(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "algorithm.py").write_text(
@@ -302,9 +302,63 @@ def main_process({parameters}) -> dict[str, int]:
 
     assert not report.passed
     assert report.checks["interfaceParameterCount"] == 13
-    assert report.checks["contractFixtureBudget"] is False
+    assert report.checks["contractFixtureBudget"] is True
     assert any("显式参数过多" in error for error in report.errors)
-    assert any("fixture 过多" in error for error in report.errors)
+    assert _candidate_requires_replan(project, report)
+
+
+def test_template_validator_rejects_too_many_distinct_operations(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: int) -> int:\n    return value\n",
+        encoding="utf-8",
+    )
+    branches = "\n".join(
+        (
+            f'    {"if" if index == 0 else "elif"} operation == "op{index}":\n'
+            f"        result = run(value + {index})"
+        )
+        for index in range(9)
+    )
+    project = _project(
+        tmp_path,
+        f'''from algorithm import run
+
+def main_process(operation: str, value: int) -> dict[str, int]:
+    """Run one selected operation.
+
+    Args:
+        operation: Operation name.
+        value: Input value.
+
+    Returns:
+        Computed result.
+    """
+{branches}
+    else:
+        raise ValueError("unknown operation")
+    return {{"result": result}}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    contract_cases = "\n\n".join(
+        f'''def test_contract_{index}():
+    result = main_process(operation="op{index}", value=1)
+    assert result["result"] == {index + 1}'''
+        for index in range(9)
+    )
+    (tests / "test_template_contract.py").write_text(
+        "from main import main_process\n\n" + contract_cases + "\n",
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not report.passed
+    assert report.checks["contractOperationCounts"] == {"operation": 9}
+    assert any("operation 过多" in error for error in report.errors)
     assert _candidate_requires_replan(project, report)
 
 
