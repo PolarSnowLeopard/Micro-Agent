@@ -812,6 +812,42 @@ def test_planner_prioritizes_submitted_template_contract_tests(tmp_path):
     assert "必须在上游库内部单元测试之前优先读取" in prompt
 
 
+def test_analyzer_keeps_contract_evidence_when_inventory_is_truncated(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "def main_process(value: float) -> dict:\n"
+        "    return {'value': value}\n",
+        encoding="utf-8",
+    )
+    (project / "template_adaptation.json").write_text(
+        '{"contractRuntime":{"passed":true}}',
+        encoding="utf-8",
+    )
+    contract_dir = project / "tests_ioeb"
+    contract_dir.mkdir()
+    (contract_dir / "test_template_contract.py").write_text(
+        "from main import main_process\n"
+        "def test_contract():\n"
+        "    assert main_process(1.0)['value'] == 1.0\n",
+        encoding="utf-8",
+    )
+    for index in range(20):
+        (project / f"module_{index:02d}.py").write_text(
+            f"VALUE = {index}\n",
+            encoding="utf-8",
+        )
+
+    ir = RepositoryAnalyzer(max_files=3).analyze(project)
+    paths = {file.path for file in ir.files}
+
+    assert ir.truncated
+    assert paths == {
+        "main.py",
+        "template_adaptation.json",
+        "tests_ioeb/test_template_contract.py",
+    }
+
+
 def test_planner_embeds_verified_contract_fixture_by_dispatch_branch(tmp_path):
     project = _sample_project(tmp_path)
     (project / "main.py").write_text(

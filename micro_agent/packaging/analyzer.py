@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
-import os
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -25,12 +24,13 @@ IGNORED_DIRS = {
 DOC_NAMES = {"readme", "readme.md", "readme.rst", "readme.txt"}
 ROOT_EVIDENCE_PRIORITY = {
     "main.py": 0,
-    "requirements.txt": 1,
-    "pyproject.toml": 2,
-    "readme": 3,
-    "readme.md": 3,
-    "readme.rst": 3,
-    "readme.txt": 3,
+    "template_adaptation.json": 2,
+    "requirements.txt": 3,
+    "pyproject.toml": 4,
+    "readme": 5,
+    "readme.md": 5,
+    "readme.rst": 5,
+    "readme.txt": 5,
 }
 ASSET_SUFFIXES = {
     ".bin", ".ckpt", ".joblib", ".model", ".onnx", ".pkl", ".pickle",
@@ -225,6 +225,8 @@ class RepositoryAnalyzer:
 def _candidate_sort_key(path: Path, root: Path) -> tuple[int, int, str]:
     relative = path.relative_to(root)
     rel = relative.as_posix()
+    if rel == "tests_ioeb/test_template_contract.py":
+        return (0, 1, rel)
     if len(relative.parts) == 1:
         priority = ROOT_EVIDENCE_PRIORITY.get(relative.name.lower())
         if priority is not None:
