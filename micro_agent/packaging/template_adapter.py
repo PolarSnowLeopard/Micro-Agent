@@ -115,6 +115,8 @@ def validate_algorithm_template(
         "contractFixtures": [],
         "contractSuccessFixtureCount": 0,
         "contractUncollectedCallCount": 0,
+        "serverPathParameters": [],
+        "noServerPathInterface": False,
     }
     main_path = root / "main.py"
     if not main_path.is_file():
@@ -183,6 +185,22 @@ def validate_algorithm_template(
         for parameter in parameters:
             if f"{parameter.arg}:" not in docstring and f"{parameter.arg} (" not in docstring:
                 errors.append(f"main_process docstring 未说明参数 {parameter.arg}")
+
+    server_path_parameters = _server_path_parameters(
+        [parameter.arg for parameter in parameters],
+        docstring,
+    )
+    checks["serverPathParameters"] = server_path_parameters
+    if server_path_parameters:
+        errors.append(
+            "main_process 不得要求远程调用者提供容器内路径，相关参数: "
+            + ", ".join(server_path_parameters)
+            + "；请改为 Base64/文本/结构化内容并在函数内部创建临时资源。"
+            "若仓库缺少完成真实算法调用所需的模型或数据资产，应明确拒绝适配，"
+            "不能生成随机权重、伪 checkpoint 或只在测试中临时制造模型"
+        )
+    else:
+        checks["noServerPathInterface"] = True
 
     if _contains_forbidden_pass(function) or any(
         isinstance(node, (ast.Yield, ast.YieldFrom)) for node in ast.walk(function)
@@ -388,6 +406,85 @@ def validate_algorithm_template(
         errors.extend(contract_errors)
         checks.update(contract_checks)
     return TemplateValidationReport(not errors, errors, warnings, checks)
+
+
+_PATH_PARAMETER_TERMINALS = {
+    "path",
+    "paths",
+    "dir",
+    "dirs",
+    "directory",
+    "directories",
+    "folder",
+    "folders",
+    "file",
+    "files",
+}
+_CONTENT_PARAMETER_SUFFIXES = (
+    "_base64",
+    "_bytes",
+    "_content",
+    "_contents",
+    "_csv",
+    "_data",
+    "_json",
+    "_records",
+    "_text",
+    "_zip",
+)
+_PATH_DESCRIPTION_MARKERS = (
+    "file path",
+    "paths to",
+    "path to",
+    "directory containing",
+    "folder containing",
+    "container path",
+)
+
+
+def _server_path_parameters(
+    parameter_names: list[str],
+    docstring: str,
+) -> list[str]:
+    """Find public parameters whose contract requires server-local paths."""
+
+    doc_lines = docstring.lower().splitlines()
+    result: list[str] = []
+    for name in parameter_names:
+        lowered = name.lower()
+        if lowered.endswith(_CONTENT_PARAMETER_SUFFIXES):
+            continue
+        terminal = lowered.rsplit("_", 1)[-1]
+        name_is_path = terminal in _PATH_PARAMETER_TERMINALS
+        description_is_path = False
+        for index, line in enumerate(doc_lines):
+            stripped = line.strip()
+            if not (
+                stripped.startswith(f"{lowered}:")
+                or stripped.startswith(f"{lowered} (")
+            ):
+                continue
+            excerpt_parts = [stripped]
+            for continuation in doc_lines[index + 1 :]:
+                continuation_stripped = continuation.strip()
+                if (
+                    not continuation_stripped
+                    or continuation_stripped in {"returns:", "raises:"}
+                    or re.match(
+                        r"^[a-z_][a-z0-9_]*(?:\s*\([^)]*\))?:",
+                        continuation_stripped,
+                    )
+                ):
+                    break
+                excerpt_parts.append(continuation_stripped)
+            excerpt = " ".join(excerpt_parts)
+            description_is_path = any(
+                marker in excerpt for marker in _PATH_DESCRIPTION_MARKERS
+            )
+            break
+        if name_is_path or description_is_path:
+            result.append(name)
+    return result
 
 
 def _validate_template_contract_test(

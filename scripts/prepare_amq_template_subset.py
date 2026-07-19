@@ -366,6 +366,7 @@ def _candidate_requires_replan(
                 "动态执行用户文本",
                 "显式参数过多",
                 "*args 或 **kwargs",
+                "容器内路径",
             )
         )
     )

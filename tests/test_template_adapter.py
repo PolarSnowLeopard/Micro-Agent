@@ -439,6 +439,83 @@ def main_process({parameters}) -> dict[str, int]:
     assert _candidate_requires_replan(project, report)
 
 
+def test_template_validator_replans_server_path_interfaces(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(values: list[float]) -> float:\n    return sum(values)\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(
+    threshold: float,
+    feature_files: list[str],
+    checkpoint_dir: str,
+) -> dict[str, float]:
+    """Run a repository capability.
+
+    Args:
+        threshold: Numeric decision threshold.
+        feature_files: File paths pointing to feature tensors.
+        checkpoint_dir: Directory containing model checkpoints.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run([threshold, float(len(feature_files)), float(len(checkpoint_dir))])}
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert not report.passed
+    assert report.checks["serverPathParameters"] == [
+        "feature_files",
+        "checkpoint_dir",
+    ]
+    assert report.checks["noServerPathInterface"] is False
+    assert any("容器内路径" in error for error in report.errors)
+    assert _candidate_requires_replan(project, report)
+
+
+def test_template_validator_accepts_content_transport_parameters(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: str) -> int:\n    return len(value)\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(
+    features_base64: str,
+    checkpoint_zip: str,
+) -> dict[str, int]:
+    """Run a repository capability.
+
+    Args:
+        features_base64: Base64-encoded feature tensor content.
+        checkpoint_zip: Base64-encoded ZIP checkpoint content.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(features_base64 + checkpoint_zip)}
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert report.passed, report.to_json()
+    assert report.checks["serverPathParameters"] == []
+    assert report.checks["noServerPathInterface"] is True
+
+
 def test_template_validator_rejects_too_many_distinct_operations(
     tmp_path: Path,
 ) -> None:

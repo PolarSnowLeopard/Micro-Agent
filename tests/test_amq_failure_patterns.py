@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from scripts.analyze_amq_failure_patterns import (
+    build_report,
     classify_adaptation_errors,
+    classify_evaluation_result,
     classify_generation_failure,
 )
 
@@ -46,3 +48,82 @@ def test_generic_plan_failure_is_not_misclassified_as_submission_protocol() -> N
     assert classify_generation_failure(
         "Agent 在有限步骤内未调用 save_packaging_plan_json"
     ) == ["agent_submission_protocol"]
+
+
+def test_evaluation_classifier_separates_cross_sample_failure_stages() -> None:
+    assert classify_evaluation_result({"d1_build_success": False}) == [
+        "availability_build"
+    ]
+    assert classify_evaluation_result(
+        {"d1_build_success": True, "d1_service_health": False}
+    ) == ["availability_health"]
+    assert classify_evaluation_result(
+        {
+            "d1_build_success": True,
+            "d1_service_health": True,
+            "d3_pass": False,
+            "d3_driver_status": "completed",
+            "d3_total_calls": 0,
+            "d3_successful_calls": 0,
+        }
+    ) == ["tool_not_invoked"]
+    assert classify_evaluation_result(
+        {
+            "d1_build_success": True,
+            "d1_service_health": True,
+            "d3_pass": False,
+            "d3_driver_status": "max_turns",
+            "d3_total_calls": 8,
+            "d3_successful_calls": 0,
+        }
+    ) == ["solver_exhaustion", "tool_invocation_failure"]
+    assert classify_evaluation_result(
+        {
+            "d1_build_success": True,
+            "d1_service_health": True,
+            "d3_pass": False,
+            "d3_driver_status": "completed",
+            "d3_total_calls": 2,
+            "d3_successful_calls": 1,
+        }
+    ) == ["semantic_result_gap"]
+
+
+def test_evaluation_report_deduplicates_retried_samples(
+    tmp_path,
+) -> None:
+    first = tmp_path / "first.json"
+    first.write_text(
+        """
+        {"results": [{
+          "sample_id": "sample-a",
+          "d1_build_success": true,
+          "d1_service_health": true,
+          "d3_pass": false,
+          "d3_total_calls": 1,
+          "d3_successful_calls": 0
+        }]}
+        """,
+        encoding="utf-8",
+    )
+    retry = tmp_path / "retry.json"
+    retry.write_text(
+        """
+        {"results": [{
+          "sample_id": "sample-a",
+          "d1_build_success": true,
+          "d1_service_health": true,
+          "d3_pass": true,
+          "d3_total_calls": 1,
+          "d3_successful_calls": 1
+        }]}
+        """,
+        encoding="utf-8",
+    )
+
+    report = build_report([], [], [first, retry])
+    evaluation = report["evaluationCrossSection"]
+
+    assert evaluation["sampleCount"] == 1
+    assert evaluation["duplicateSampleCounts"] == {"sample-a": 1}
+    assert evaluation["failurePatternCounts"] == {"passed": 1}

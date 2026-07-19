@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Aggregate reusable AMQ adaptation and generation failure patterns.
+"""Aggregate reusable AMQ adaptation, generation, and evaluation failures.
 
 The report deliberately avoids benchmark task/ground-truth fields. It reads
-only derived repository contracts, validation reports, and generation-run
-telemetry so repeated experiments do not get mistaken for independent samples.
+only derived repository contracts, validation reports, generation-run
+telemetry, and evaluator outcome telemetry so repeated experiments do not get
+mistaken for independent samples.
 """
 
 from __future__ import annotations
@@ -93,6 +94,13 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Root recursively containing generation_summary.json; repeatable.",
     )
+    parser.add_argument(
+        "--evaluation-result",
+        type=Path,
+        action="append",
+        default=[],
+        help="Strict AMQ result JSON containing a results array; repeatable.",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -144,6 +152,42 @@ def classify_adaptation_errors(errors: list[str]) -> list[str]:
         if any(marker.lower() in text for marker in markers):
             labels.append(label)
     return labels or (["passed"] if not errors else ["unclassified"])
+
+
+def classify_evaluation_result(result: dict[str, Any]) -> list[str]:
+    """Classify a strict evaluator row without reading task or GT fields."""
+
+    if not result.get("d1_build_success"):
+        return ["availability_build"]
+    if not result.get("d1_service_health"):
+        return ["availability_health"]
+    if result.get("d3_pass"):
+        return ["passed"]
+
+    labels: list[str] = []
+    driver_status = str(result.get("d3_driver_status", "")).lower()
+    if driver_status == "provider_error":
+        labels.append("solver_provider")
+    if driver_status == "max_turns":
+        labels.append("solver_exhaustion")
+
+    total_calls = _nonnegative_int(result.get("d3_total_calls"))
+    successful_calls = _nonnegative_int(result.get("d3_successful_calls"))
+    if total_calls == 0:
+        labels.append("tool_not_invoked")
+    elif successful_calls == 0:
+        labels.append("tool_invocation_failure")
+    else:
+        labels.append("semantic_result_gap")
+    return labels
+
+
+def _nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 0
 
 
 def analyze_adaptation_repo(sample_id: str, repo: Path) -> dict[str, Any]:
@@ -314,27 +358,113 @@ def _generation_history(roots: list[Path]) -> dict[str, Any]:
     }
 
 
+def _evaluation_cross_section(paths: list[Path]) -> dict[str, Any]:
+    """Aggregate only the latest row per sample across supplied result files."""
+
+    rows_by_sample: dict[str, dict[str, Any]] = {}
+    source_by_sample: dict[str, str] = {}
+    duplicate_sample_counts: Counter[str] = Counter()
+    loaded_paths: list[str] = []
+    for path in paths:
+        resolved = path.resolve()
+        if not resolved.is_file():
+            continue
+        try:
+            payload = json.loads(
+                resolved.read_text(encoding="utf-8", errors="replace")
+            )
+        except json.JSONDecodeError:
+            continue
+        rows = payload.get("results", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            continue
+        loaded_paths.append(str(resolved))
+        for result in rows:
+            if not isinstance(result, dict):
+                continue
+            sample_id = str(
+                result.get("sample_id") or result.get("sampleId") or ""
+            ).strip()
+            if not sample_id:
+                continue
+            if sample_id in rows_by_sample:
+                duplicate_sample_counts[sample_id] += 1
+            rows_by_sample[sample_id] = result
+            source_by_sample[sample_id] = str(resolved)
+
+    pattern_counts: Counter[str] = Counter()
+    affected_samples: defaultdict[str, set[str]] = defaultdict(set)
+    rows: list[dict[str, Any]] = []
+    for sample_id, result in sorted(rows_by_sample.items()):
+        patterns = classify_evaluation_result(result)
+        for pattern in patterns:
+            pattern_counts[pattern] += 1
+            affected_samples[pattern].add(sample_id)
+        rows.append(
+            {
+                "sampleId": sample_id,
+                "source": source_by_sample[sample_id],
+                "failurePatterns": patterns,
+                "buildPassed": bool(result.get("d1_build_success")),
+                "healthPassed": bool(result.get("d1_service_health")),
+                "d2Score": result.get("d2_score"),
+                "d3Passed": bool(result.get("d3_pass")),
+                "d3DriverStatus": result.get("d3_driver_status"),
+                "d3TotalCalls": _nonnegative_int(
+                    result.get("d3_total_calls")
+                ),
+                "d3SuccessfulCalls": _nonnegative_int(
+                    result.get("d3_successful_calls")
+                ),
+            }
+        )
+    return {
+        "resultFileCount": len(loaded_paths),
+        "resultFiles": loaded_paths,
+        "sampleCount": len(rows),
+        "duplicateSampleCounts": dict(duplicate_sample_counts),
+        "failurePatternCounts": dict(pattern_counts.most_common()),
+        "failurePatternAffectedSamples": {
+            label: sorted(samples)
+            for label, samples in sorted(affected_samples.items())
+        },
+        "samples": rows,
+        "interpretationNote": (
+            "If a sample appears in multiple supplied files, the last supplied "
+            "result wins so retries are not counted as independent samples."
+        ),
+    }
+
+
 def build_report(
     adaptation_roots: list[Path],
     generation_roots: list[Path],
+    evaluation_results: list[Path] | None = None,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": "ioeb.amq-failure-patterns/v1",
         "generatedAt": datetime.now().astimezone().isoformat(),
         "dataPolicy": (
-            "Derived contracts and run telemetry only; benchmark task and "
-            "ground-truth fields are not read."
+            "Derived contracts, run telemetry, and evaluator outcomes only; "
+            "benchmark task and ground-truth fields are not read."
         ),
         "adaptationCrossSection": _adaptation_cross_section(
             adaptation_roots
         ),
         "generationHistory": _generation_history(generation_roots),
+        "evaluationCrossSection": _evaluation_cross_section(
+            evaluation_results or []
+        ),
     }
 
 
 def main() -> int:
     args = parse_args()
-    report = build_report(args.adaptation_root, args.generation_root)
+    report = build_report(
+        args.adaptation_root,
+        args.generation_root,
+        args.evaluation_result,
+    )
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
