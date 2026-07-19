@@ -413,6 +413,15 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
 
     text = "\n".join(errors).lower()
     advice: list[str] = []
+    if "[contract_test]" in text:
+        advice.append(
+            "契约真实执行失败：逐个失败先判断是 wrapper/fixture 与源码 API 不匹配，"
+            "还是候选额外暴露了仓库证据不足的可选模式。每个准备发布的独立能力必须"
+            "保留至少一个真实成功 fixture；对仅是底层可选算法、配置值或错误边界的"
+            "失败用例，不必穷举。若某分支没有可运行证据，应同时从 main_process "
+            "公开接口和契约测试删除该能力，不能只删测试而保留虚假接口；若能力有"
+            "源码证据，则修正输入转换或 fixture，保留领域断言。"
+        )
     if "必须是可审计的 json 字面量" in text:
         advice.append(
             "契约输入不可静态提取：只重写 tests_ioeb/test_template_contract.py，"

@@ -39,8 +39,9 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
 9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process，
-   使用完整 JSON 字面量输入调用每个公开分支；过长输入可以先赋给同一测试函数内的局部变量，
-   但变量值本身必须是纯 JSON 字面量。每个成功 fixture 至少用一个 assert 检查领域输出。
+   至少用一个可静态还原的完整 JSON 输入覆盖每个准备发布的独立能力；不要求穷举底层库的
+   所有可选算法、配置值或错误边界。过长输入可先赋给同一测试函数内的局部变量，并可使用
+   由常量组成的 list/string 拼接或重复表达式。每个成功 fixture 至少用一个 assert 检查领域输出。
    优先复用原仓库测试/doctest/示例中的输入，不得只检查 callable、不得联网、不得启动子进程。
    可选的错误边界 fixture 必须放在 pytest.raises/相关 assertRaises 上下文中；它们不会成为
    服务 smoke 输入，也不能代替任何公开分支的成功 fixture。
@@ -1980,7 +1981,7 @@ class VerifyTemplate(Tool):
     name = "verify_template"
     description = (
         "按 IOEB 提交模板确定性检查 main.py、main_process、注解、docstring、"
-        "真实源码调用以及可执行契约测试的 JSON fixture、断言和分支覆盖。"
+        "真实源码调用以及可执行契约测试的 JSON fixture、断言和能力覆盖。"
     )
     parameters = {"type": "object", "properties": {}, "additionalProperties": False}
 

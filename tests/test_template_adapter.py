@@ -1198,11 +1198,13 @@ def main_process(value: float) -> float:
     assert "保留原异常" in envelope_advice
     runtime_advice = _template_runtime_repair_advice(
         [
+            "[contract_test] 4 failed, 8 passed",
             "RuntimeError: size of tensor a must match the size of tensor b",
             "URLError: Temporary failure in name resolution",
             "ParseException: invalid formula",
         ]
     )
+    assert "不必穷举" in runtime_advice
     assert "逐维记录输入和输出" in runtime_advice
     assert "隔离运行触发联网下载" in runtime_advice
     assert "真实可解析的最小输入" in runtime_advice
