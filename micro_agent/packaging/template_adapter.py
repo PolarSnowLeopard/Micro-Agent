@@ -342,13 +342,25 @@ def _invalid_local_import_members(root: Path, tree: ast.Module) -> list[str]:
         except (OSError, SyntaxError):
             continue
         available = _module_bound_names(module_tree)
+        has_open_exports = any(
+            (
+                isinstance(child, ast.ImportFrom)
+                and any(alias.name == "*" for alias in child.names)
+            )
+            or (
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == "__getattr__"
+            )
+            for child in module_tree.body
+        )
         package_dir = module_path.parent if is_package else None
         for alias in node.names:
-            if alias.name == "*" or alias.name in available:
+            if alias.name == "*" or alias.name in available or has_open_exports:
                 continue
             if package_dir is not None and (
                 (package_dir / f"{alias.name}.py").is_file()
                 or (package_dir / alias.name / "__init__.py").is_file()
+                or any(package_dir.glob(f"{alias.name}.*"))
             ):
                 continue
             invalid.append(f"{node.module}.{alias.name} (main.py:{node.lineno})")

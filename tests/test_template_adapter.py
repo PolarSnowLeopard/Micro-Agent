@@ -92,6 +92,40 @@ def main_process(value: float) -> float:
     )
 
 
+def test_template_validator_allows_package_star_reexports(tmp_path: Path) -> None:
+    package = tmp_path / "solver"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "from .core import *\n",
+        encoding="utf-8",
+    )
+    (package / "core.py").write_text(
+        "def run(value: float) -> float:\n    return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from solver import run
+
+def main_process(value: float) -> float:
+    """Run a re-exported repository function.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Solver output.
+    """
+    return run(value)
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert report.passed, report.to_json()
+    assert report.checks["resolvableRepositoryImports"] is True
+
+
 def test_template_validator_rejects_stdlib_only_facade(tmp_path: Path) -> None:
     project = _project(
         tmp_path,
