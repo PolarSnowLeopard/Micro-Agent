@@ -845,6 +845,7 @@ def test_contract():
     assert "--network" in docker_run and "none" in docker_run
     assert "--read-only" in docker_run
     assert "--cap-drop" in docker_run and "ALL" in docker_run
+    assert "PYTHONPATH=/workspace:/workspace/src:/ioeb" in docker_run
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 

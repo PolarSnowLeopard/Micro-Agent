@@ -1305,7 +1305,7 @@ def verify_template_contract_runtime(
 
         try:
             runtime = subprocess.run(
-                runtime_command("/ioeb:/workspace:/workspace/src"),
+                runtime_command("/workspace:/workspace/src:/ioeb"),
                 capture_output=True,
                 text=True,
                 timeout=runtime_timeout,
