@@ -9,6 +9,7 @@ import pytest
 from micro_agent.packaging import template_adapter
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.template_adapter import (
+    PatchTemplateFile,
     WriteTemplateFile,
     _runtime_requirement_errors,
     build_template_adapter_agent,
@@ -826,7 +827,11 @@ def main_process(value: float) -> float:
 
     assert agent.tools.get("inspect_repository") is None
     assert agent.tools.get("read_project_file").max_reads == 4
+    assert agent.tools.get("patch_template_file") is not None
+    assert agent.tools.get("terminate") is None
     assert agent.max_steps == 16
+    assert agent.require_terminal_tool is True
+    assert agent.terminal_tools == {"verify_template"}
     assert "当前 main.py" in agent.system_prompt
 
     local_only = build_template_adapter_agent(
@@ -846,6 +851,30 @@ def main_process(value: float) -> float:
     assert _template_repair_needs_source(
         ["AttributeError: module has no attribute 'run'"]
     )
+
+
+async def test_patch_template_file_requires_one_exact_match(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "main.py"
+    path.write_text("VALUE = 1\nRESULT = VALUE\n", encoding="utf-8")
+    tool = PatchTemplateFile(tmp_path)
+
+    result = await tool.execute(
+        path="main.py",
+        old="VALUE = 1",
+        new="VALUE = 2",
+    )
+    ambiguous = await tool.execute(
+        path="main.py",
+        old="VALUE",
+        new="INPUT",
+    )
+
+    assert not result.error
+    assert path.read_text(encoding="utf-8") == "VALUE = 2\nRESULT = VALUE\n"
+    assert ambiguous.error
+    assert "当前 2 次" in ambiguous.error
 
 
 def test_template_validator_rejects_stdlib_only_facade(tmp_path: Path) -> None:

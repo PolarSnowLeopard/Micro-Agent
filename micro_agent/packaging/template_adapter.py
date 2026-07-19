@@ -24,7 +24,6 @@ from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.tools import InspectRepository, ReadProjectFile
 from micro_agent.tool.base import Tool, ToolResult
 from micro_agent.tool.registry import ToolRegistry
-from micro_agent.tool.terminate import Terminate
 
 
 TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent。你的任务是给现有仓库增加一个最薄的、真实可调用的模板入口，而不是重写算法或生成演示实现。
@@ -1370,6 +1369,66 @@ class WriteTemplateFile(Tool):
         return ToolResult(output=f"已写入 {relative} ({len(content)} chars)")
 
 
+class PatchTemplateFile(Tool):
+    name = "patch_template_file"
+    description = (
+        "定向修复已有模板文件中的一处精确文本；old 必须在目标文件中恰好出现一次。"
+        "适合修复单个 API、docstring、fixture 或断言，避免重写整个文件。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "enum": [
+                    "main.py",
+                    "requirements.txt",
+                    "tests_ioeb/test_template_contract.py",
+                ],
+            },
+            "old": {"type": "string"},
+            "new": {"type": "string"},
+        },
+        "required": ["path", "old", "new"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, project_dir: str | Path) -> None:
+        self.root = Path(project_dir).resolve()
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        relative = str(kwargs.get("path", ""))
+        old = str(kwargs.get("old", ""))
+        new = str(kwargs.get("new", ""))
+        if relative not in {
+            "main.py",
+            "requirements.txt",
+            "tests_ioeb/test_template_contract.py",
+        }:
+            return ToolResult(error=f"不允许修改: {relative}")
+        if not old or old == new or "\x00" in old or "\x00" in new:
+            return ToolResult(error="old 必须非空且与 new 不同，内容不能包含 NUL")
+        path = self.root / relative
+        if not path.is_file() or path.is_symlink():
+            return ToolResult(error=f"目标文件不存在或不可修改: {relative}")
+        content = path.read_text(encoding="utf-8", errors="replace")
+        count = content.count(old)
+        if count != 1:
+            return ToolResult(
+                error=f"old 在 {relative} 中必须恰好出现一次，当前 {count} 次"
+            )
+        updated = content.replace(old, new, 1)
+        limit = 200_000 if relative == "main.py" else 50_000
+        if not updated.strip() or len(updated) > limit:
+            return ToolResult(
+                error=f"修改后 {relative} 为空或超过 {limit} 字符"
+            )
+        path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+        return ToolResult(
+            output=f"已精确修改 {relative} ({len(old)} -> {len(new)} chars)"
+        )
+
+
 class VerifyTemplate(Tool):
     name = "verify_template"
     description = (
@@ -1421,8 +1480,9 @@ def build_template_adapter_agent(
             )
         )
     tools.register(WriteTemplateFile(project_dir))
+    if repair:
+        tools.register(PatchTemplateFile(project_dir))
     tools.register(VerifyTemplate(project_dir))
-    tools.register(Terminate())
     return Agent(
         name="ioeb_template_adapter",
         llm=LLM(config.get_llm("reasoning")),
@@ -1432,7 +1492,8 @@ def build_template_adapter_agent(
             + (
                 "\n这是已有模板候选的定向修复轮次。当前 main.py 和确定性错误已在请求中完整提供；"
                 "禁止重新调用 inspect_repository。只读取错误指向的真实源码模块，保留候选中"
-                "已通过的部分，只覆盖写入错误涉及的 main.py、requirements.txt 或契约测试，"
+                "已通过的部分，优先用 patch_template_file 精确修改；仅在需要整体重构时才用"
+                " write_template_file 覆盖错误涉及的 main.py、requirements.txt 或契约测试，"
                 "随后调用 verify_template。"
                 if repair
                 else ""
@@ -1447,7 +1508,13 @@ def build_template_adapter_agent(
         ),
         max_steps=16 if repair else 24,
         max_observe=50_000,
-        terminal_tools={"verify_template", "terminate"},
+        terminal_tools={"verify_template"},
+        require_terminal_tool=True,
+        no_tool_retry_limit=3,
+        next_step_prompt=(
+            "纯文本说明不算修复。必须调用 patch_template_file/write_template_file，"
+            "完成后调用 verify_template。"
+        ),
     )
 
 

@@ -37,6 +37,8 @@ class Agent:
         max_steps: int = 30,
         max_observe: int = 10000,
         terminal_tools: Optional[set[str]] = None,
+        require_terminal_tool: bool = False,
+        no_tool_retry_limit: int = 2,
     ):
         self.name = name
         self.llm = llm
@@ -48,6 +50,8 @@ class Agent:
         self.max_steps = max_steps
         self.max_observe = max_observe
         self.terminal_tools = terminal_tools or {"terminate"}
+        self.require_terminal_tool = require_terminal_tool
+        self.no_tool_retry_limit = max(1, no_tool_retry_limit)
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -59,6 +63,7 @@ class Agent:
         self.memory.add(Message.user(request))
         tool_call_signatures: set[str] = set()
         duplicate_tool_call_blocks = 0
+        no_tool_response_blocks = 0
 
         # RAG：第一步前检索相关文档，注入 system prompt，并 yield 可见事件
         if self.retriever:
@@ -108,6 +113,30 @@ class Agent:
 
             # 没有工具调用 → 任务结束
             if not response.tool_calls:
+                if (
+                    self.require_terminal_tool
+                    and no_tool_response_blocks < self.no_tool_retry_limit
+                ):
+                    no_tool_response_blocks += 1
+                    if response.content:
+                        self.memory.add(
+                            Message.assistant(content=response.content)
+                        )
+                    warning = (
+                        "[终止工具契约] 纯文本不能完成当前任务。必须实际调用工具修改产物，"
+                        "并最终调用以下终止工具之一: "
+                        + ", ".join(sorted(self.terminal_tools))
+                    )
+                    self.memory.add(Message.user(warning))
+                    yield AgentEvent(
+                        type="think",
+                        step=step,
+                        data={
+                            "thought": warning,
+                            "noToolResponseBlocks": no_tool_response_blocks,
+                        },
+                    )
+                    continue
                 if response.content:
                     self.memory.add(Message.assistant(content=response.content))
                 yield AgentEvent(
@@ -116,6 +145,7 @@ class Agent:
                     data={"result": response.content or ""},
                 )
                 return
+            no_tool_response_blocks = 0
 
             # === Act ===
             signatures = {

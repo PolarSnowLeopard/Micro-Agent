@@ -60,7 +60,7 @@ async def test_tool_registry_namespace():
 
 async def test_mcp_connection_manager_init():
     """测试 MCPConnectionManager 基础功能（不连接真实服务器）。"""
-    from micro_agent.tool.mcp.connection import MCPConnectionManager, ServerConfig
+    from micro_agent.tool.mcp.connection import MCPConnectionManager
 
     mgr = MCPConnectionManager()
     assert mgr.server_ids() == []
@@ -137,6 +137,66 @@ async def test_agent_cancel():
     assert not agent._cancelled
 
     print("[PASS] Agent cancel")
+
+
+async def test_agent_requires_terminal_tool_after_plain_text_response():
+    from micro_agent.core.agent import Agent
+    from micro_agent.core.llm import LLMResponse
+    from micro_agent.core.schema import ToolCall
+    from micro_agent.tool.base import Tool, ToolResult
+    from micro_agent.tool.registry import ToolRegistry
+
+    class Finalize(Tool):
+        name = "finalize"
+        description = "Finalize the deterministic task."
+        parameters = {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+        async def execute(self, **kwargs):
+            return ToolResult(output="finished")
+
+    class PlainThenToolLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(content="I would make the change.")
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="final-call",
+                        name="finalize",
+                        arguments="{}",
+                    )
+                ]
+            )
+
+    registry = ToolRegistry()
+    registry.register(Finalize())
+    llm = PlainThenToolLLM()
+    agent = Agent(
+        llm=llm,
+        tools=registry,
+        terminal_tools={"finalize"},
+        require_terminal_tool=True,
+        max_steps=3,
+    )
+
+    events = [event async for event in agent.run("finish with a tool")]
+
+    assert llm.calls == 2
+    assert any(
+        event.type == "think"
+        and "终止工具契约" in event.data.get("thought", "")
+        for event in events
+    )
+    assert events[-1].type == "done"
+    assert events[-1].data["tool"] == "finalize"
 
 
 async def test_agent_blocks_identical_tool_calls_before_provider_history_repeats():

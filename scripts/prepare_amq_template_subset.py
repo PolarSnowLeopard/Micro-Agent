@@ -506,7 +506,9 @@ async def adapt_one(
                     if repair_mode:
                         prompt += (
                             _template_candidate_context(staged)
-                            + "\n只修改上述错误，并用 write_template_file 提交所有受影响文件的完整内容。"
+                            + "\n只修改上述错误；优先用 patch_template_file 精确替换，"
+                            "需要整体重构时才用 write_template_file 提交完整文件。"
+                            "最后必须调用 verify_template，纯文本说明不算完成。"
                         )
                     candidate_before = _template_candidate_digest(staged)
                     with event_path.open("a", encoding="utf-8") as handle:
