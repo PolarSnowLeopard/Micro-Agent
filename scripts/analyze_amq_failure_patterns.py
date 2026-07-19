@@ -134,6 +134,11 @@ def classify_adaptation_errors(errors: list[str]) -> list[str]:
             "fixture 过多",
             "*args 或 **kwargs",
         ),
+        "server_path_interface": ("容器内路径",),
+        "missing_runtime_assets": (
+            "缺少完成真实算法调用所需的模型或数据资产",
+            "伪 checkpoint",
+        ),
         "module_runtime_state": ("模块级调用",),
         "schema_or_doc_contract": (
             "类型注解",

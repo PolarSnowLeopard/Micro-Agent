@@ -35,6 +35,21 @@ def test_adaptation_failure_classifier_covers_contract_and_interface() -> None:
     ]
 
 
+def test_adaptation_classifier_separates_remote_paths_and_missing_assets() -> None:
+    labels = classify_adaptation_errors(
+        [
+            "main_process 不得要求远程调用者提供容器内路径；"
+            "仓库缺少完成真实算法调用所需的模型或数据资产，"
+            "不能生成伪 checkpoint"
+        ]
+    )
+
+    assert labels == [
+        "server_path_interface",
+        "missing_runtime_assets",
+    ]
+
+
 def test_failure_classifier_preserves_unclassified_signal() -> None:
     assert classify_generation_failure("unexpected opaque failure") == [
         "unclassified"
