@@ -130,6 +130,41 @@ def main_process(value: float) -> float:
     assert report.checks["resolvableRepositoryImports"] is True
 
 
+def test_template_validator_allows_conditionally_defined_module_member(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "solver"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "core.py").write_text(
+        "if True:\n"
+        "    def conditional_run(value: float) -> float:\n"
+        "        return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from solver.core import conditional_run
+
+def main_process(value: float) -> float:
+    """Run a conditionally exposed repository function.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Solver output.
+    """
+    return conditional_run(value)
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert report.passed, report.to_json()
+    assert report.checks["resolvableRepositoryImports"] is True
+
+
 def test_template_repair_agent_uses_candidate_context_instead_of_rescanning(
     tmp_path: Path,
 ) -> None:

@@ -369,25 +369,56 @@ def _invalid_local_import_members(root: Path, tree: ast.Module) -> list[str]:
 
 def _module_bound_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+
+    class ModuleBindingVisitor(ast.NodeVisitor):
+        """Collect bindings created while executing a module.
+
+        Conditional and guarded imports/assignments still create legitimate
+        module attributes. Function and class bodies have their own namespace,
+        however, and comprehension targets do not leak into the module.
+        """
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             names.add(node.name)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            names.add(node.name)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            names.add(node.name)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, ast.Store):
+                names.add(node.id)
+
+        def visit_Import(self, node: ast.Import) -> None:
             names.update(
-                child.id
-                for target in targets
-                for child in ast.walk(target)
-                if isinstance(child, ast.Name)
+                alias.asname or alias.name.split(".")[0] for alias in node.names
             )
-        elif isinstance(node, ast.Import):
-            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             names.update(
                 alias.asname or alias.name
                 for alias in node.names
                 if alias.name != "*"
             )
+
+        def visit_ListComp(self, node: ast.ListComp) -> None:
+            return
+
+        def visit_SetComp(self, node: ast.SetComp) -> None:
+            return
+
+        def visit_DictComp(self, node: ast.DictComp) -> None:
+            return
+
+        def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+            return
+
+    ModuleBindingVisitor().visit(tree)
     return names
 
 
