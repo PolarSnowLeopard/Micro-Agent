@@ -410,6 +410,10 @@ class ReviseSmokeTests(Tool):
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         revisions = kwargs.get("revisions")
+        if isinstance(revisions, str):
+            parsed = _parse_structured_string(revisions)
+            if isinstance(parsed, list):
+                revisions = parsed
         if not isinstance(revisions, list) or not revisions:
             return ToolResult(error="revisions 必须包含至少一个失败 Tool 的局部 smoke 修订")
 
@@ -475,6 +479,7 @@ class ReviseSmokeTests(Tool):
         accepted_plan = self.current_plan
         accepted_names: list[str] = []
         rejected: list[str] = []
+        auto_grounded: list[str] = []
         accepted_quality: InterfaceQualityReport | None = None
         for index, (tool_name, smoke_update) in enumerate(prepared):
             candidate_raw = accepted_plan.to_dict()
@@ -496,21 +501,31 @@ class ReviseSmokeTests(Tool):
             check_path = self.store.path.with_name(
                 f".{self.store.path.name}.smoke-{index}.tmp"
             )
-            check_store = replace(
-                self.store,
-                path=check_path,
-                plan=None,
-                last_candidate=None,
-                last_errors=None,
-                best_candidate=None,
-                best_errors=None,
-                best_score=None,
-                interface_quality=None,
-            )
+            check_store = _smoke_check_store(self.store, check_path)
             try:
                 result = await SavePackagingPlan(check_store).execute(
                     **candidate_raw
                 )
+                if result.error and (
+                    "[smoke_fixture_grounding]" in result.error
+                    or "[smoke_evidence_reference]" in result.error
+                ):
+                    grounded = _ground_smoke_revision_from_repository(
+                        candidate_raw,
+                        tool_name,
+                        self.store,
+                    )
+                    if grounded is not None:
+                        candidate_raw = grounded
+                        check_store = _smoke_check_store(
+                            self.store,
+                            check_path,
+                        )
+                        result = await SavePackagingPlan(check_store).execute(
+                            **candidate_raw
+                        )
+                        if not result.error and check_store.plan is not None:
+                            auto_grounded.append(tool_name)
             finally:
                 check_path.unlink(missing_ok=True)
             if result.error or check_store.plan is None:
@@ -548,13 +563,130 @@ class ReviseSmokeTests(Tool):
             if rejected
             else ""
         )
+        grounding_note = (
+            "；已将以下工具的自由文本输入机械替换为原仓库测试/doctest/示例中"
+            "最接近且有 file:line 的真实 fixture，仍需通过外层容器: "
+            + ", ".join(auto_grounded)
+            if auto_grounded
+            else ""
+        )
         return ToolResult(
             output=(
                 f"已确定性更新 {', '.join(accepted_names)} 的 smokeTest.input/evidence，"
                 "并通过全部规划门禁；外层将用新输入重新执行静态与容器验收"
+                + grounding_note
                 + rejected_note
             )
         )
+
+
+def _smoke_check_store(store: PlanStore, path: Path) -> PlanStore:
+    return replace(
+        store,
+        path=path,
+        plan=None,
+        last_candidate=None,
+        last_errors=None,
+        best_candidate=None,
+        best_errors=None,
+        best_score=None,
+        interface_quality=None,
+    )
+
+
+def _ground_smoke_revision_from_repository(
+    raw: dict[str, Any],
+    tool_name: str,
+    store: PlanStore,
+) -> dict[str, Any] | None:
+    root = store.smoke_evidence_root
+    if root is None or not store.known_files:
+        return None
+    generated_files = {
+        "main.py",
+        "README.ioeb.md",
+        "template_adaptation.json",
+    }
+    candidate_paths = _smoke_candidate_files(
+        set(store.known_files) - generated_files
+    )
+    corpus = _read_smoke_evidence_corpus(root, candidate_paths)
+    if not corpus:
+        return None
+    candidate = json.loads(json.dumps(raw, ensure_ascii=False))
+    tool = next(
+        (
+            item
+            for service in candidate.get("services", [])
+            for item in service.get("tools", [])
+            if str(item.get("name")) == tool_name
+        ),
+        None,
+    )
+    if not isinstance(tool, dict):
+        return None
+    smoke = tool.get("smokeTest")
+    if not isinstance(smoke, dict) or not isinstance(smoke.get("input"), dict):
+        return None
+    ungrounded = _ungrounded_smoke_strings(
+        smoke["input"],
+        tool.get("inputSchema", {}),
+        corpus,
+    )
+    # Values already present in the full corpus may merely cite the wrong file.
+    free_text = _ungrounded_smoke_strings(
+        smoke["input"],
+        tool.get("inputSchema", {}),
+        "",
+    )
+    replacements: dict[str, str] = {}
+    provenance: dict[str, str] = {}
+    for value in free_text:
+        exact = _smoke_candidate_provenance(root, candidate_paths, {value})
+        if exact:
+            replacements[value] = value
+            provenance[value] = exact[value]
+            continue
+        if value not in ungrounded:
+            continue
+        suggestions = _smoke_string_candidates(corpus, value)
+        suggested_provenance = _smoke_candidate_provenance(
+            root,
+            candidate_paths,
+            set(suggestions),
+        )
+        replacement = next(
+            (item for item in suggestions if item in suggested_provenance),
+            None,
+        )
+        if replacement is None:
+            return None
+        replacements[value] = replacement
+        provenance[replacement] = suggested_provenance[replacement]
+    if not replacements:
+        return None
+    smoke["input"] = _replace_exact_string_values(
+        smoke["input"],
+        replacements,
+    )
+    smoke["evidence"] = sorted(set(provenance.values()))
+    return candidate
+
+
+def _replace_exact_string_values(value: Any, replacements: dict[str, str]) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _replace_exact_string_values(child, replacements)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _replace_exact_string_values(child, replacements)
+            for child in value
+        ]
+    if isinstance(value, str):
+        return replacements.get(value, value)
+    return value
 
 
 def _augment_unknown_symbol_errors(

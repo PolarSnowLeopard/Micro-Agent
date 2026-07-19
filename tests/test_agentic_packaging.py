@@ -490,6 +490,84 @@ async def test_runtime_smoke_revision_keeps_valid_subset_when_peer_is_invalid(
     assert store.plan.tools[1]["smokeTest"] == plan.tools[1]["smokeTest"]
 
 
+async def test_runtime_smoke_revision_parses_stringified_revision_array(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        enforce_interface_quality=False,
+    )
+    revisions = [
+        {
+            "toolName": plan.tool_names[0],
+            "input": {"value": 0.7},
+            "evidence": ["tests/test_core.py:4"],
+        }
+    ]
+
+    result = await ReviseSmokeTests(store, plan).execute(
+        revisions=json.dumps(revisions),
+    )
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.tools[0]["smokeTest"]["input"] == {"value": 0.7}
+
+
+async def test_runtime_smoke_revision_auto_grounds_free_text_from_repository(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    examples = project / "examples"
+    examples.mkdir()
+    (examples / "fixture.py").write_text(
+        'SCENARIO = "documented risk fixture"\n',
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    tool = raw["services"][0]["tools"][0]
+    tool["inputSchema"]["properties"]["scenario"] = {
+        "type": "string",
+        "description": "Named source-backed scenario.",
+    }
+    tool["inputSchema"]["required"].append("scenario")
+    tool["smokeTest"]["input"]["scenario"] = "documented risk fixture"
+    tool["smokeTest"]["evidence"] = ["examples/fixture.py:1"]
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        enforce_interface_quality=False,
+        require_independent_smoke_evidence=True,
+        smoke_evidence_root=project,
+    )
+
+    result = await ReviseSmokeTests(store, plan).execute(
+        revisions=[
+            {
+                "toolName": plan.tool_names[0],
+                "input": {
+                    "value": 0.7,
+                    "scenario": "invented placeholder",
+                },
+                "evidence": ["README.md:1"],
+            }
+        ],
+    )
+
+    assert not result.error
+    assert "机械替换" in result.output
+    assert store.plan is not None
+    revised = store.plan.tools[0]["smokeTest"]
+    assert revised["input"]["scenario"] == "documented risk fixture"
+    assert revised["evidence"] == ["examples/fixture.py:1"]
+
+
 def test_smoke_fixture_is_frozen_only_with_exact_independent_provenance():
     generic = [
         "[smoke_evidence_reference] predict.smokeTest.evidence 只引用了生成的 main.py"
