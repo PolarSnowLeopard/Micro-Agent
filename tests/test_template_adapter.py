@@ -68,7 +68,7 @@ def main_process(value: float) -> dict[str, float]:
     assert report.checks["reachableLocalFunctions"] == ["_predict", "main_process"]
 
 
-def test_template_contract_requires_json_fixtures_for_every_dispatch_branch(
+def test_template_contract_records_uncovered_dispatch_branches(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "algorithm.py").write_text(
@@ -146,9 +146,10 @@ def test_double_contract():
 ''',
         encoding="utf-8",
     )
-    rejected = validate_algorithm_template(project, require_contract_test=True)
-    assert not rejected.passed
-    assert any("mode='triple'" in error for error in rejected.errors)
+    partial = validate_algorithm_template(project, require_contract_test=True)
+    assert partial.passed, partial.to_json()
+    assert partial.checks["contractBranchCoverage"] is False
+    assert partial.checks["contractUncoveredBranches"] == ["mode='triple'"]
 
 
 def test_template_contract_rejects_unconsumed_pytest_fixture(
@@ -331,6 +332,59 @@ def test_contract():
         "必须是可审计的 JSON 字面量" in error
         for error in rejected.errors
     )
+
+
+def test_template_contract_accepts_bounded_json_expressions_and_ignores_extra_dynamic_calls(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(values: list[float]) -> float:\n    return sum(values)\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(values: list[float]) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        values: Numeric inputs.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(values)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def make_values():
+    return [4.0]
+
+def test_compact_contract():
+    values = [1.0] * (2 * 3)
+    result = main_process(values=values)
+    assert result["result"] == 6.0
+
+def test_additional_dynamic_contract():
+    result = main_process(values=make_values())
+    assert result["result"] == 4.0
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert report.passed, report.to_json()
+    assert report.checks["contractFixtures"][0]["input"] == {
+        "values": [1.0] * 6
+    }
+    assert report.checks["contractDynamicInputCallCount"] == 1
+    assert report.checks["contractStaticBindingCount"] == 1
 
 
 def test_template_contract_accepts_unittest_assertion_methods(

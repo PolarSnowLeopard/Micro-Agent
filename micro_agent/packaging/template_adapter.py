@@ -639,7 +639,7 @@ def _validate_template_contract_test(
     fixtures: list[dict[str, Any]] = []
     uncollected_calls = 0
     static_binding_count = 0
-    invalid_literal_lines: list[int] = []
+    dynamic_input_lines: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -693,7 +693,7 @@ def _validate_template_contract_test(
             except (ValueError, SyntaxError):
                 invalid_literal = True
         if invalid_literal:
-            invalid_literal_lines.append(node.lineno)
+            dynamic_input_lines.append(node.lineno)
             continue
         unknown = sorted(set(fixture) - set(parameter_names))
         missing = sorted(required - set(fixture))
@@ -728,13 +728,17 @@ def _validate_template_contract_test(
         )
     checks["contractUncollectedCallCount"] = uncollected_calls
     checks["contractStaticBindingCount"] = static_binding_count
-    if invalid_literal_lines:
+    checks["contractDynamicInputCallCount"] = len(dynamic_input_lines)
+    checks["contractDynamicInputLines"] = sorted(dynamic_input_lines)
+    if dynamic_input_lines and not fixtures:
         errors.append(
             "模板契约测试的 main_process 输入必须是可审计的 JSON 字面量，"
-            "仅允许直接字面量，或同一测试函数内直接赋值为纯字面量的局部变量；"
-            "不能引用 fixture/helper/模块变量、表达式、推导式或使用 **kwargs；"
+            "至少一个成功 smoke 调用的完整输入必须能静态还原；允许直接字面量、"
+            "同一测试函数内的纯 JSON 局部变量，以及由常量组成的 list/string "
+            "拼接或重复表达式；不能仅依赖 fixture/helper/模块变量、函数调用、"
+            "推导式或 **kwargs；"
             "相关调用行: "
-            + ", ".join(map(str, sorted(invalid_literal_lines)))
+            + ", ".join(map(str, sorted(dynamic_input_lines)))
         )
 
     if fixtures:
@@ -844,10 +848,8 @@ def _validate_template_contract_test(
             if value not in observed:
                 missing_cases.append(f"{selector}={value!r}")
     if missing_cases:
-        errors.append(
-            "模板契约测试未覆盖 main_process 的全部字面量分支: "
-            + ", ".join(missing_cases)
-        )
+        checks["contractUncoveredBranches"] = missing_cases
+        checks["contractBranchCoverage"] = False
     else:
         checks["contractBranchCoverage"] = True
     return errors, checks
@@ -857,14 +859,122 @@ def _contract_json_literal(
     node: ast.AST,
     enclosing: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[Any, bool]:
-    """Resolve a literal or a same-test local directly bound to one literal."""
+    """Resolve a bounded JSON expression from the same collected test.
+
+    Compact fixtures such as ``[0.0] * 1024`` are as auditable as spelling
+    out every element. Resolve a deliberately small expression language
+    without importing or executing any test code.
+    """
 
     try:
-        return ast.literal_eval(node), False
+        value = ast.literal_eval(node)
+        _validate_contract_json_value(value)
+        return value, False
     except (ValueError, SyntaxError):
         pass
-    if not isinstance(node, ast.Name):
-        raise ValueError("not a contract JSON literal")
+    return _contract_json_expression(
+        node,
+        enclosing,
+        resolving=frozenset(),
+    )
+
+
+def _contract_json_expression(
+    node: ast.AST,
+    enclosing: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    resolving: frozenset[str],
+) -> tuple[Any, bool]:
+    try:
+        value = ast.literal_eval(node)
+        _validate_contract_json_value(value)
+        return value, False
+    except (ValueError, SyntaxError):
+        pass
+    if isinstance(node, (ast.List, ast.Tuple)):
+        values = [
+            _contract_json_expression(
+                item,
+                enclosing,
+                resolving=resolving,
+            )[0]
+            for item in node.elts
+        ]
+        _validate_contract_json_value(values)
+        return values, False
+    if isinstance(node, ast.Dict) and all(key is not None for key in node.keys):
+        keys = [
+            _contract_json_expression(
+                key,
+                enclosing,
+                resolving=resolving,
+            )[0]
+            for key in node.keys
+        ]
+        if not all(isinstance(key, str) for key in keys):
+            raise ValueError("contract JSON object keys must be strings")
+        values = [
+            _contract_json_expression(
+                value,
+                enclosing,
+                resolving=resolving,
+            )[0]
+            for value in node.values
+        ]
+        result = dict(zip(keys, values))
+        _validate_contract_json_value(result)
+        return result, False
+    if isinstance(node, ast.UnaryOp) and isinstance(
+        node.op,
+        (ast.UAdd, ast.USub),
+    ):
+        operand, used_binding = _contract_json_expression(
+            node.operand,
+            enclosing,
+            resolving=resolving,
+        )
+        if isinstance(operand, bool) or not isinstance(operand, (int, float)):
+            raise ValueError("unary contract expression requires a number")
+        result = operand if isinstance(node.op, ast.UAdd) else -operand
+        _validate_contract_json_value(result)
+        return result, used_binding
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mult)):
+        left, left_bound = _contract_json_expression(
+            node.left,
+            enclosing,
+            resolving=resolving,
+        )
+        right, right_bound = _contract_json_expression(
+            node.right,
+            enclosing,
+            resolving=resolving,
+        )
+        if isinstance(node.op, ast.Add):
+            if not (
+                isinstance(left, type(right))
+                and isinstance(left, (int, float, str, list))
+                and not isinstance(left, bool)
+            ):
+                raise ValueError("unsupported contract addition")
+            result = left + right
+        else:
+            if isinstance(left, bool) or isinstance(right, bool):
+                raise ValueError("unsupported contract multiplication")
+            if isinstance(left, (list, str)) and isinstance(right, int):
+                result = left * right
+            elif isinstance(right, (list, str)) and isinstance(left, int):
+                result = right * left
+            elif isinstance(left, (int, float)) and isinstance(
+                right,
+                (int, float),
+            ):
+                result = left * right
+            else:
+                raise ValueError("unsupported contract multiplication")
+        _validate_contract_json_value(result)
+        return result, left_bound or right_bound
+    if not isinstance(node, ast.Name) or node.id in resolving:
+        raise ValueError("not a contract JSON expression")
 
     candidate: ast.AST | None = None
     for statement in enclosing.body:
@@ -893,7 +1003,18 @@ def _contract_json_literal(
             candidate = None
     if candidate is None:
         raise ValueError("unbound or dynamic contract input")
-    return ast.literal_eval(candidate), True
+    value, _ = _contract_json_expression(
+        candidate,
+        enclosing,
+        resolving=resolving | {node.id},
+    )
+    return value, True
+
+
+def _validate_contract_json_value(value: Any) -> None:
+    encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+    if len(encoded.encode("utf-8")) > 512_000:
+        raise ValueError("contract JSON expression exceeds 512KB")
 
 
 def _contract_call_expected_outcome(
