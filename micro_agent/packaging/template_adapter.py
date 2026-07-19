@@ -1324,6 +1324,7 @@ def verify_template_contract_runtime(
     dockerfile = root / f".ioeb-template-contract-{run_id}.Dockerfile"
     dockerignore = root / f"{dockerfile.name}.dockerignore"
     dockerfile.write_text(
+        "# syntax=docker/dockerfile:1\n"
         "FROM python:3.11-slim-bookworm\n"
         "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
@@ -1331,7 +1332,8 @@ def verify_template_contract_runtime(
         "PYTHONPATH=/ioeb:/workspace:/workspace/src\n"
         "WORKDIR /workspace\n"
         "COPY requirements.txt /tmp/requirements.txt\n"
-        "RUN python -m pip install --no-cache-dir --index-url "
+        "RUN --mount=type=cache,target=/root/.cache/pip "
+        "python -m pip install --index-url "
         "\"${PIP_INDEX_URL}\" --timeout 120 --retries 5 "
         "\"pytest>=8,<9\" -r /tmp/requirements.txt\n"
         "COPY . /workspace\n"

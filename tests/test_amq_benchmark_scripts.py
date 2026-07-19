@@ -93,6 +93,8 @@ def test_export_submission_uses_harness_repo_as_algorithm(tmp_path: Path) -> Non
     assert "COPY system-packages.txt /app/system-packages.txt" in dockerfile
     assert "requirements-cpu.txt" in dockerfile
     assert "PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu" in dockerfile
+    assert "--mount=type=cache,target=/root/.cache/pip" in dockerfile
+    assert "--no-cache-dir" not in dockerfile
     assert "USER 10001:10001" in dockerfile
     assert "COPY . /app" not in dockerfile
     manifest = json.loads((destination / "generation_manifest.json").read_text(encoding="utf-8"))

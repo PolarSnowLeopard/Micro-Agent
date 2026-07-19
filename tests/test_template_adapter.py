@@ -885,9 +885,15 @@ def test_contract():
         encoding="utf-8",
     )
     commands: list[list[str]] = []
+    dockerfiles: list[str] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(command)
+        if command[:2] == ["docker", "build"]:
+            dockerfiles.extend(
+                path.read_text(encoding="utf-8")
+                for path in project.glob(".ioeb-template-contract-*.Dockerfile")
+            )
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     monkeypatch.setattr(template_adapter.subprocess, "run", fake_run)
@@ -901,6 +907,9 @@ def test_contract():
     assert "--cap-drop" in docker_run and "ALL" in docker_run
     assert "PYTHONPATH=/workspace:/workspace/src:/ioeb" in docker_run
     assert docker_run[docker_run.index("--workdir") + 1] == "/workspace"
+    assert len(dockerfiles) == 1
+    assert "--mount=type=cache,target=/root/.cache/pip" in dockerfiles[0]
+    assert "--no-cache-dir" not in dockerfiles[0]
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 

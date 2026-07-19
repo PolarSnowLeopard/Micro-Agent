@@ -130,6 +130,7 @@ def prepare_source(
 
 def _submission_dockerfile() -> str:
     return (
+        "# syntax=docker/dockerfile:1\n"
         "FROM python:3.11-slim-bookworm\n"
         "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
         "ARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu\n"
@@ -143,12 +144,13 @@ def _submission_dockerfile() -> str:
         "rm -rf /var/lib/apt/lists/*; "
         "fi\n"
         "COPY requirements.txt requirements-cpu.txt /app/\n"
-        "RUN set -eux; "
+        "RUN --mount=type=cache,target=/root/.cache/pip set -eux; "
         "if [ -s /app/requirements-cpu.txt ]; then "
-        "pip install --no-cache-dir --index-url \"${PYTORCH_CPU_INDEX_URL}\" "
+        "pip install --index-url \"${PYTORCH_CPU_INDEX_URL}\" "
         "--timeout 120 --retries 5 -r /app/requirements-cpu.txt; "
         "fi\n"
-        "RUN pip install --no-cache-dir --index-url \"${PIP_INDEX_URL}\" "
+        "RUN --mount=type=cache,target=/root/.cache/pip "
+        "pip install --index-url \"${PIP_INDEX_URL}\" "
         "--timeout 120 --retries 5 -r /app/requirements.txt\n"
         "RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin ioeb\n"
         "COPY --chown=10001:10001 repo /app/algorithm\n"
