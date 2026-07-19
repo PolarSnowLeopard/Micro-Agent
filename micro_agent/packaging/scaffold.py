@@ -657,6 +657,7 @@ def _render_server(plan: PackagingPlan) -> str:
         '    """Preserve optional-but-non-null JSON Schema fields on serialization."""',
         "    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:",
         '        kwargs.setdefault("exclude_unset", True)',
+        '        kwargs.setdefault("by_alias", True)',
         "        return super().model_dump(*args, **kwargs)",
         "",
     ]
@@ -806,6 +807,7 @@ class _SchemaTypeRenderer:
         properties = schema.get("properties", {})
         required = set(schema.get("required", []))
         entries: list[str] = []
+        field_names: set[str] = set()
         for property_name, raw_child in properties.items():
             child = raw_child if isinstance(raw_child, dict) else {}
             annotation = self.annotation(
@@ -813,12 +815,28 @@ class _SchemaTypeRenderer:
                 suggested_name=f"{name}_{property_name}",
                 model_objects=True,
             )
-            annotation = _annotated_field(annotation, child)
+            field_name = property_name
+            alias: str | None = None
+            if (
+                not property_name.isidentifier()
+                or keyword.iskeyword(property_name)
+                or property_name.startswith("model_")
+                or property_name.startswith("__pydantic")
+            ):
+                base_name = f"ioeb_{_python_identifier(property_name)}"
+                field_name = base_name
+                suffix = 2
+                while field_name in field_names:
+                    field_name = f"{base_name}_{suffix}"
+                    suffix += 1
+                alias = property_name
+            field_names.add(field_name)
+            annotation = _annotated_field(annotation, child, alias=alias)
             if property_name in required:
                 default = "..."
             else:
                 default = repr(child.get("default"))
-            entries.append(f"{property_name!r}: ({annotation}, {default})")
+            entries.append(f"{field_name!r}: ({annotation}, {default})")
         self.definitions.append(
             f"{name} = create_model({name!r}, __base__=_IOEBOutputModel, "
             f"**{{{', '.join(entries)}}})"
@@ -836,8 +854,20 @@ class _SchemaTypeRenderer:
         return candidate
 
 
-def _annotated_field(annotation: str, schema: dict[str, Any]) -> str:
+def _annotated_field(
+    annotation: str,
+    schema: dict[str, Any],
+    *,
+    alias: str | None = None,
+) -> str:
     arguments: list[str] = []
+    if alias is not None:
+        arguments.extend(
+            [
+                f"alias={alias!r}",
+                f"serialization_alias={alias!r}",
+            ]
+        )
     description = schema.get("description")
     if isinstance(description, str) and description.strip():
         arguments.append(f"description={description.strip()!r}")
@@ -971,6 +1001,15 @@ def _python_type_name(value: str) -> str:
     rendered = "".join(part[:1].upper() + part[1:] for part in parts) or "GeneratedSchema"
     if rendered[0].isdigit():
         rendered = "Schema" + rendered
+    return rendered
+
+
+def _python_identifier(value: str) -> str:
+    rendered = re.sub(r"\W+", "_", value).strip("_") or "field"
+    if rendered[0].isdigit():
+        rendered = "field_" + rendered
+    if keyword.iskeyword(rendered):
+        rendered += "_"
     return rendered
 
 

@@ -2503,6 +2503,59 @@ def test_scaffold_publishes_exact_non_nullable_optional_schema(tmp_path, monkeyp
         raise AssertionError("explicit null must be rejected by a non-null optional schema")
 
 
+def test_scaffold_aliases_pydantic_reserved_output_fields(tmp_path, monkeypatch):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    predict = raw["services"][0]["tools"][0]
+    predict["outputSchema"] = {
+        "type": "object",
+        "properties": {
+            "score": {
+                "type": "number",
+                "description": "Normalized risk score.",
+            },
+            "model_config": {
+                "type": "object",
+                "description": "Configuration used by the model.",
+                "additionalProperties": True,
+            },
+        },
+        "required": ["score", "model_config"],
+    }
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "adapters.py").write_text(
+        "def predict_risk(value):\n"
+        "    return {'score': value, 'model_config': {'threshold': 0.5}}\n\n"
+        "def evaluate_risk(values):\n"
+        "    return {'mean': sum(values) / len(values)}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.syspath_prepend(str(artifact))
+    sys.modules.pop("adapters", None)
+    spec = importlib.util.spec_from_file_location(
+        "generated_reserved_output_server",
+        artifact / "server.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    generated = module.mcp._tool_manager.get_tool("predict_risk")
+    assert generated is not None
+
+    _, structured = asyncio.run(
+        generated.run({"value": 0.5}, convert_result=True)
+    )
+
+    assert structured == {
+        "score": 0.5,
+        "model_config": {"threshold": 0.5},
+    }
+    assert generated.output_schema == predict["outputSchema"]
+
+
 def test_verifier_rejects_adapter_sys_path_mutation(tmp_path):
     project = _sample_project(tmp_path)
     ir = RepositoryAnalyzer().analyze(project)
