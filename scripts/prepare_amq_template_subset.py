@@ -444,6 +444,22 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "用嵌套列表逐元素格式化，不能用会把返回字符串重新强制转换为符号的"
             " `Matrix.applyfunc(serializer)`。"
         )
+    if (
+        "keyerror:" in text
+        or " in {}" in text
+        or (
+            "assertionerror: assert" in text
+            and any(marker in text for marker in (" in result", "not in result"))
+        )
+    ):
+        advice.append(
+            "调用成功但领域集合为空或缺少断言字段：先沿真实源码、测试和数据列追踪"
+            "输入标签对应的 canonical vocabulary/enum/key，判断是公开输入需要映射"
+            "（大小写、分隔符、别名）还是当前 fixture 没有源码证据。若 API 承诺接受"
+            "该别名，应在 main.py 显式规范化并映射到真实值；否则只把 fixture 改成"
+            "原仓库测试/doctest/示例中确实产生非空结果的字面量。禁止伪造返回键、"
+            "硬填空结果或删除领域断言来制造通过。"
+        )
     if not advice:
         return ""
     return (
