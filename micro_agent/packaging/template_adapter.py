@@ -39,7 +39,8 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
 9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process，
-   使用完整 JSON 字面量输入调用每个公开分支，每个成功 fixture 至少用一个 assert 检查领域输出。
+   使用完整 JSON 字面量输入调用每个公开分支；过长输入可以先赋给同一测试函数内的局部变量，
+   但变量值本身必须是纯 JSON 字面量。每个成功 fixture 至少用一个 assert 检查领域输出。
    优先复用原仓库测试/doctest/示例中的输入，不得只检查 callable、不得联网、不得启动子进程。
    可选的错误边界 fixture 必须放在 pytest.raises/相关 assertRaises 上下文中；它们不会成为
    服务 smoke 输入，也不能代替任何公开分支的成功 fixture。
@@ -117,6 +118,7 @@ def validate_algorithm_template(
         "contractFixtures": [],
         "contractSuccessFixtureCount": 0,
         "contractUncollectedCallCount": 0,
+        "contractStaticBindingCount": 0,
         "serverPathParameters": [],
         "noServerPathInterface": False,
         "controlEnvelopeReturnLines": [],
@@ -548,6 +550,7 @@ def _validate_template_contract_test(
         "contractFixtures": [],
         "contractSuccessFixtureCount": 0,
         "contractUncollectedCallCount": 0,
+        "contractStaticBindingCount": 0,
     }
     relative = Path("tests_ioeb") / "test_template_contract.py"
     path = root / relative
@@ -635,6 +638,7 @@ def _validate_template_contract_test(
     executable_functions = _contract_executable_functions(tree)
     fixtures: list[dict[str, Any]] = []
     uncollected_calls = 0
+    static_binding_count = 0
     invalid_literal_lines: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -659,6 +663,7 @@ def _validate_template_contract_test(
             continue
         fixture: dict[str, Any] = {}
         invalid_literal = False
+        fixture_static_binding_count = 0
         if len(node.args) > len(parameter_names):
             errors.append(
                 f"模板契约测试 main_process 调用参数过多: line={node.lineno}"
@@ -666,7 +671,12 @@ def _validate_template_contract_test(
             continue
         for name, value_node in zip(parameter_names, node.args):
             try:
-                fixture[name] = ast.literal_eval(value_node)
+                value, used_binding = _contract_json_literal(
+                    value_node,
+                    enclosing,
+                )
+                fixture[name] = value
+                fixture_static_binding_count += int(used_binding)
             except (ValueError, SyntaxError):
                 invalid_literal = True
         for keyword in node.keywords:
@@ -674,7 +684,12 @@ def _validate_template_contract_test(
                 invalid_literal = True
                 continue
             try:
-                fixture[keyword.arg] = ast.literal_eval(keyword.value)
+                value, used_binding = _contract_json_literal(
+                    keyword.value,
+                    enclosing,
+                )
+                fixture[keyword.arg] = value
+                fixture_static_binding_count += int(used_binding)
             except (ValueError, SyntaxError):
                 invalid_literal = True
         if invalid_literal:
@@ -700,6 +715,7 @@ def _validate_template_contract_test(
                 f"line={node.lineno}"
             )
             continue
+        static_binding_count += fixture_static_binding_count
         fixtures.append(
             {
                 "line": node.lineno,
@@ -711,10 +727,12 @@ def _validate_template_contract_test(
             }
         )
     checks["contractUncollectedCallCount"] = uncollected_calls
+    checks["contractStaticBindingCount"] = static_binding_count
     if invalid_literal_lines:
         errors.append(
             "模板契约测试的 main_process 输入必须是可审计的 JSON 字面量，"
-            "不能引用 fixture/helper/运行时变量、表达式、推导式或使用 **kwargs；"
+            "仅允许直接字面量，或同一测试函数内直接赋值为纯字面量的局部变量；"
+            "不能引用 fixture/helper/模块变量、表达式、推导式或使用 **kwargs；"
             "相关调用行: "
             + ", ".join(map(str, sorted(invalid_literal_lines)))
         )
@@ -725,7 +743,7 @@ def _validate_template_contract_test(
     else:
         errors.append(
             "模板契约测试必须至少一次直接调用从 main 导入的 main_process，"
-            "并使用完整 JSON 字面量输入"
+            "并使用完整、可静态求值的 JSON 字面量输入"
         )
     success_fixtures = [
         fixture
@@ -833,6 +851,49 @@ def _validate_template_contract_test(
     else:
         checks["contractBranchCoverage"] = True
     return errors, checks
+
+
+def _contract_json_literal(
+    node: ast.AST,
+    enclosing: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[Any, bool]:
+    """Resolve a literal or a same-test local directly bound to one literal."""
+
+    try:
+        return ast.literal_eval(node), False
+    except (ValueError, SyntaxError):
+        pass
+    if not isinstance(node, ast.Name):
+        raise ValueError("not a contract JSON literal")
+
+    candidate: ast.AST | None = None
+    for statement in enclosing.body:
+        if getattr(statement, "lineno", 0) >= getattr(node, "lineno", 0):
+            break
+        if isinstance(statement, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == node.id
+                for target in statement.targets
+            ):
+                candidate = statement.value
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.target.id == node.id
+            and statement.value is not None
+        ):
+            candidate = statement.value
+        elif (
+            isinstance(statement, (ast.AugAssign, ast.For, ast.AsyncFor))
+            and any(
+                isinstance(target, ast.Name) and target.id == node.id
+                for target in ast.walk(statement.target)
+            )
+        ):
+            candidate = None
+    if candidate is None:
+        raise ValueError("unbound or dynamic contract input")
+    return ast.literal_eval(candidate), True
 
 
 def _contract_call_expected_outcome(
@@ -1901,7 +1962,8 @@ def template_adapter_prompt(ir: RepositoryIR, wrap_intent: str, original_main: s
         f"{original_note}\n"
         "只调用一次 inspect_repository，最多读取 12 个最相关文件，随后写 main.py、"
         "tests_ioeb/test_template_contract.py 与必要的 requirements.txt。"
-        "契约测试必须用 JSON 字面量直接调用 main_process 的每个公开分支并断言领域输出，"
+        "契约测试必须用 JSON 字面量调用 main_process 的每个公开分支并断言领域输出；"
+        "长输入可先赋给同一测试函数内值为纯 JSON 字面量的局部变量，"
         "输入优先来自已读取的原仓库测试/doctest/示例。"
         "不要读取或推断任何 benchmark 答案。完成后调用 verify_template；不要在校验后继续操作。\n"
         "仓库索引摘要：\n"

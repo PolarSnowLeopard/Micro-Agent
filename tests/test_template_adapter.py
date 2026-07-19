@@ -266,6 +266,73 @@ def test_contract():
     ) == 1
 
 
+def test_template_contract_accepts_same_test_local_json_literal(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(values: list[float]) -> float:\n    return sum(values)\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(values: list[float]) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        values: Numeric inputs.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(values)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def test_contract():
+    values = [1.0, 2.0, 3.0]
+    result = main_process(values=values)
+    assert result["result"] == 6.0
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert report.passed, report.to_json()
+    assert report.checks["contractFixtures"][0]["input"] == {
+        "values": [1.0, 2.0, 3.0]
+    }
+    assert report.checks["contractStaticBindingCount"] == 1
+
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def make_values():
+    return [1.0, 2.0, 3.0]
+
+def test_contract():
+    values = make_values()
+    result = main_process(values=values)
+    assert result["result"] == 6.0
+''',
+        encoding="utf-8",
+    )
+
+    rejected = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not rejected.passed
+    assert any(
+        "必须是可审计的 JSON 字面量" in error
+        for error in rejected.errors
+    )
+
+
 def test_template_contract_accepts_unittest_assertion_methods(
     tmp_path: Path,
 ) -> None:
@@ -1060,7 +1127,8 @@ def main_process(value: float) -> float:
     literal_advice = _template_runtime_repair_advice(
         ["模板契约测试的 main_process 输入必须是可审计的 JSON 字面量"]
     )
-    assert "位置参数和关键字值都必须直接写成" in literal_advice
+    assert "位置参数和关键字值必须直接写成" in literal_advice
+    assert "同一测试函数内的局部变量" in literal_advice
     assert "不能在测试中临时生成随机模型" in literal_advice
     envelope_advice = _template_runtime_repair_advice(
         ['assert result["success"] is True']
