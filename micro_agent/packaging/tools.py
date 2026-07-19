@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.capability_coverage import assess_dispatch_coverage
@@ -26,6 +27,7 @@ from micro_agent.packaging.models import (
     PackagingPlan,
     PlanValidationError,
 )
+from micro_agent.packaging.scaffold import _source_owned_distributions
 from micro_agent.packaging.verifier import ArtifactVerifier
 from micro_agent.tool.base import Tool, ToolResult
 
@@ -887,6 +889,13 @@ class WriteArtifactFile(Tool):
         validation_error = _validate_agent_dependency_file(relative, content)
         if validation_error:
             return ToolResult(error=validation_error)
+        shadowing_error = _source_shadowing_dependency_error(
+            self.root,
+            relative,
+            content,
+        )
+        if shadowing_error:
+            return ToolResult(error=shadowing_error)
         path = _contained_path(self.root, relative)
         if (
             not self.allow_nonempty_overwrite
@@ -999,6 +1008,32 @@ def _validate_agent_dependency_file(relative: str, content: str) -> str:
                 + ", ".join(invalid[:10])
             )
     return ""
+
+
+def _source_shadowing_dependency_error(
+    artifact_root: Path,
+    relative: str,
+    content: str,
+) -> str:
+    if relative != "requirements.txt":
+        return ""
+    owned = _source_owned_distributions(artifact_root / "algorithm")
+    if not owned:
+        return ""
+    declared = {
+        canonicalize_name(Requirement(line.strip()).name)
+        for line in content.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    shadowing = sorted(owned & declared)
+    if not shadowing:
+        return ""
+    return (
+        "requirements.txt 不得重新安装由提交仓库提供的纯 Python 包，否则 "
+        "site-packages 会覆盖已审核源码: "
+        + ", ".join(shadowing)
+        + "；请保留其 install_requires 依赖，但移除同名项目自身"
+    )
 
 
 class ReadArtifactFile(Tool):

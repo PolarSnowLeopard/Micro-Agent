@@ -2391,6 +2391,21 @@ async def test_dependency_writer_allows_only_safe_package_manifests(tmp_path):
     assert vcs_requirement.error
     assert "URL/VCS" in vcs_requirement.error
 
+    algorithm = tmp_path / "algorithm"
+    package = algorithm / "local_solver"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (algorithm / "pyproject.toml").write_text(
+        '[project]\nname = "local-solver"\nversion = "1.0.0"\n',
+        encoding="utf-8",
+    )
+    shadowing_requirement = await writer.execute(
+        path="requirements.txt",
+        content="local-solver>=1\nnumpy>=1.26\n",
+    )
+    assert shadowing_requirement.error
+    assert "覆盖已审核源码: local-solver" in shadowing_requirement.error
+
     valid_system = await writer.execute(
         path="system-packages.txt",
         content="libgomp1\nlibexpat1\n",
