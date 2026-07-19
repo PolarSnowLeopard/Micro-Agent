@@ -23,6 +23,7 @@ from scripts.prepare_amq_template_subset import (
     _is_l0,
     _save_template_snapshot,
     _template_repair_needs_source,
+    _template_runtime_repair_advice,
     ensure_output_outside_source_repo,
     load_mini30,
     recover_last_template_writes,
@@ -919,6 +920,15 @@ def main_process(value: float) -> float:
     assert _template_repair_needs_source(
         ["AttributeError: module has no attribute 'run'"]
     )
+    object_advice = _template_runtime_repair_advice(
+        [
+            "ValueError: Symbol q_0(t) is not a state.",
+            "SympifyError: could not parse formatted expression",
+        ]
+    )
+    assert "不要用 sympify" in object_advice
+    assert "映射回该集合中的原对象" in object_advice
+    assert "格式化结果被错误地重新解析" in object_advice
 
 
 async def test_patch_template_file_requires_one_exact_match(

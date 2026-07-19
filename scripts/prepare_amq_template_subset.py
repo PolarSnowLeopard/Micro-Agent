@@ -406,6 +406,48 @@ def _template_repair_needs_source(errors: list[str]) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _template_runtime_repair_advice(errors: list[str]) -> str:
+    """Translate recurring runtime failure classes into reusable repair rules."""
+
+    text = "\n".join(errors).lower()
+    advice: list[str] = []
+    if any(
+        marker in text
+        for marker in (
+            "is not a state",
+            "is not a constant",
+            "is not a 'specified' symbol",
+            "is not a specified symbol",
+        )
+    ):
+        advice.append(
+            "对象身份/名称映射错误：保持公开 JSON 字段稳定，不要用 sympify、"
+            "dynamicsymbols、Enum 构造器等重新制造库对象。先枚举源对象公开的"
+            "合法 state/constant/specified/enum 集合，再把每个真实对象按 str、"
+            "去除时间后缀和仅用于展示的分隔符后的规范化别名建立索引；"
+            "将用户键映射回该集合中的原对象，未知键应明确拒绝。"
+        )
+    if any(
+        marker in text
+        for marker in (
+            "sympifyerror",
+            "could not parse",
+            "tokenerror",
+        )
+    ):
+        advice.append(
+            "格式化结果被错误地重新解析：LaTeX、pretty-print、repr 或其他展示字符串"
+            "只能作为最终 JSON 字符串输出，禁止再交给 sympify/parse/eval。"
+            "应直接遍历原符号对象并调用一次稳定序列化函数。"
+        )
+    if not advice:
+        return ""
+    return (
+        "\n检测到跨仓库常见运行时失败模式，修复时必须遵循：\n- "
+        + "\n- ".join(advice)
+    )
+
+
 async def adapt_one(
     sample: dict[str, Any],
     *,
@@ -562,7 +604,11 @@ async def adapt_one(
                     )
                     prompt = template_adapter_prompt(ir, sample["wrap_intent"], original_main)
                     if errors:
-                        prompt += "\n上一次确定性校验错误，请全部修复：\n" + "\n".join(errors)
+                        prompt += (
+                            "\n上一次确定性校验错误，请全部修复：\n"
+                            + "\n".join(errors)
+                            + _template_runtime_repair_advice(errors)
+                        )
                     if repair_mode:
                         prompt += (
                             _template_candidate_context(staged)
