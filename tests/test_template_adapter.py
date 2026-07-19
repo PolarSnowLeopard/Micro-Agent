@@ -846,6 +846,7 @@ def test_contract():
     assert "--read-only" in docker_run
     assert "--cap-drop" in docker_run and "ALL" in docker_run
     assert "PYTHONPATH=/workspace:/workspace/src:/ioeb" in docker_run
+    assert docker_run[docker_run.index("--workdir") + 1] == "/workspace"
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 
@@ -891,11 +892,13 @@ def test_contract():
         encoding="utf-8",
     )
     docker_runs = 0
+    docker_commands: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal docker_runs
         if command[:2] == ["docker", "run"]:
             docker_runs += 1
+            docker_commands.append(command)
             if docker_runs == 1:
                 return subprocess.CompletedProcess(
                     command,
@@ -920,6 +923,8 @@ def test_contract():
     assert report.checks["installedDistributionFallbackCandidates"] == [
         "compiledlib"
     ]
+    fallback_command = docker_commands[-1]
+    assert fallback_command[fallback_command.index("--workdir") + 1] == "/ioeb"
     assert any("同名发行包" in warning for warning in report.warnings)
 
 

@@ -1276,7 +1276,10 @@ def verify_template_contract_runtime(
 
         run_started = time.perf_counter()
 
-        def runtime_command(python_path: str) -> list[str]:
+        def runtime_command(
+            python_path: str,
+            workdir: str,
+        ) -> list[str]:
             return [
                 "docker",
                 "run",
@@ -1300,12 +1303,17 @@ def verify_template_contract_runtime(
                 "2",
                 "--env",
                 f"PYTHONPATH={python_path}",
+                "--workdir",
+                workdir,
                 image,
             ]
 
         try:
             runtime = subprocess.run(
-                runtime_command("/workspace:/workspace/src:/ioeb"),
+                runtime_command(
+                    "/workspace:/workspace/src:/ioeb",
+                    "/workspace",
+                ),
                 capture_output=True,
                 text=True,
                 timeout=runtime_timeout,
@@ -1337,7 +1345,7 @@ def verify_template_contract_runtime(
             fallback_started = time.perf_counter()
             try:
                 fallback = subprocess.run(
-                    runtime_command("/ioeb"),
+                    runtime_command("/ioeb", "/ioeb"),
                     capture_output=True,
                     text=True,
                     timeout=runtime_timeout,
