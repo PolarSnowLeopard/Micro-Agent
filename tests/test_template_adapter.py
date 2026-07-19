@@ -897,6 +897,7 @@ def main_process(value: float) -> float:
     assert agent.tools.get("terminate") is None
     assert agent.max_steps == 16
     assert agent.require_terminal_tool is True
+    assert agent.duplicate_tool_retry_limit == 4
     assert agent.terminal_tools == {"verify_template"}
     assert "当前 main.py" in agent.system_prompt
 

@@ -40,6 +40,7 @@ class Agent:
         terminal_tools: Optional[set[str]] = None,
         require_terminal_tool: bool = False,
         no_tool_retry_limit: int = 2,
+        duplicate_tool_retry_limit: int = 2,
     ):
         self.name = name
         self.llm = llm
@@ -53,6 +54,7 @@ class Agent:
         self.terminal_tools = terminal_tools or {"terminate"}
         self.require_terminal_tool = require_terminal_tool
         self.no_tool_retry_limit = max(1, no_tool_retry_limit)
+        self.duplicate_tool_retry_limit = max(1, duplicate_tool_retry_limit)
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -195,7 +197,11 @@ class Agent:
                     duplicate_tool_call_blocks = 0
                 else:
                     duplicate_tool_call_blocks += 1
-                if not novel_signatures and duplicate_tool_call_blocks >= 2:
+                if (
+                    not novel_signatures
+                    and duplicate_tool_call_blocks
+                    >= self.duplicate_tool_retry_limit
+                ):
                     yield AgentEvent(
                         type="done",
                         step=step,

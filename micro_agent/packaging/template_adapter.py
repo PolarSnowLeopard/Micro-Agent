@@ -1723,9 +1723,10 @@ def build_template_adapter_agent(
         terminal_tools={"verify_template"},
         require_terminal_tool=True,
         no_tool_retry_limit=3,
+        duplicate_tool_retry_limit=4,
         next_step_prompt=(
-            "纯文本说明不算修复。必要时先读取候选精确局部，再调用"
-            " patch_template_file/write_template_file，"
+            "纯文本说明不算修复。必要时只读取一次候选精确局部；已有读取结果时"
+            "禁止重读，必须立即调用 patch_template_file/write_template_file，"
             "完成后调用 verify_template。"
         ),
     )
