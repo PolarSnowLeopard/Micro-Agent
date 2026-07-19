@@ -601,6 +601,7 @@ async def test_runtime_smoke_revision_never_reuses_container_failed_input(
     assert "隔离容器实际执行并判定失败" in result.error
     assert store.plan is None
     assert store.last_errors
+    assert store.smoke_revision_attempted
 
 
 def test_smoke_revision_retry_prompt_forbids_failed_complete_inputs():
@@ -814,6 +815,20 @@ async def test_project_reader_exhaustion_requires_current_stage_completion(tmp_p
     assert "不得再次调用 read_project_file" in exhausted.error
     assert "完成当前阶段要求的规划或产物" in exhausted.error
     assert "结构化规划" not in exhausted.error
+
+
+async def test_project_reader_invalid_path_does_not_consume_read_budget(tmp_path):
+    project = _sample_project(tmp_path)
+    reader = ReadProjectFile(project, max_reads=1)
+
+    invalid = await reader.execute(path="algorithm/")
+    valid = await reader.execute(path="core.py")
+    exhausted = await reader.execute(path="README.md")
+
+    assert invalid.error
+    assert "不支持目录浏览" in invalid.error
+    assert not valid.error
+    assert exhausted.error
 
 
 def test_non_template_repository_retains_full_public_symbol_audit(tmp_path):

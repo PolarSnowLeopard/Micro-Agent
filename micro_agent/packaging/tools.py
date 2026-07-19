@@ -88,25 +88,33 @@ class ReadProjectFile(Tool):
         self.calls = 0
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        self.calls += 1
-        if self.max_reads is not None and self.calls > self.max_reads:
+        if self.max_reads is not None and self.calls >= self.max_reads:
             return ToolResult(
                 error=(
                     f"本轮源码读取上限为 {self.max_reads} 个文件，额度已用完；"
                     "不得再次调用 read_project_file，必须立即完成当前阶段要求的规划或产物"
                 )
             )
-        path = _contained_path(self.root, str(kwargs.get("path", "")))
+        try:
+            path = _contained_path(self.root, str(kwargs.get("path", "")))
+        except ValueError as exc:
+            return ToolResult(error=str(exc))
         if not path.is_file() or path.is_symlink():
             requested = str(kwargs.get("path", ""))
             if requested.startswith("algorithm/"):
+                corrected = requested.removeprefix("algorithm/")
                 return ToolResult(
                     error=(
                         "read_project_file 的路径相对用户提交根目录，不能带 algorithm/ 前缀；"
-                        f"请改用 {requested.removeprefix('algorithm/')}"
+                        + (
+                            f"请改用 {corrected}"
+                            if corrected
+                            else "请直接填写真实文件路径；该工具不支持目录浏览"
+                        )
                     )
                 )
             return ToolResult(error=f"文件不存在或不可读: {kwargs.get('path', '')}")
+        self.calls += 1
         start = max(1, int(kwargs.get("start_line", 1)))
         end = max(start, min(start + 999, int(kwargs.get("end_line", 400))))
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -130,6 +138,7 @@ class PlanStore:
     require_independent_smoke_evidence: bool = False
     smoke_evidence_root: Path | None = None
     rejected_smoke_inputs: dict[str, set[str]] | None = None
+    smoke_revision_attempted: bool = False
     plan: PackagingPlan | None = None
     last_candidate: dict[str, Any] | None = None
     last_errors: list[str] | None = None
@@ -410,6 +419,7 @@ class ReviseSmokeTests(Tool):
         self.current_plan = current_plan
 
     async def execute(self, **kwargs: Any) -> ToolResult:
+        self.store.smoke_revision_attempted = True
         revisions = kwargs.get("revisions")
         if isinstance(revisions, str):
             parsed = _parse_structured_string(revisions)
