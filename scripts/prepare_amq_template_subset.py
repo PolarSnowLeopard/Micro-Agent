@@ -424,7 +424,8 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "对象身份/名称映射错误：保持公开 JSON 字段稳定，不要用 sympify、"
             "dynamicsymbols、Enum 构造器等重新制造库对象。先枚举源对象公开的"
             "合法 state/constant/specified/enum 集合，再把每个真实对象按 str、"
-            "去除时间后缀和仅用于展示的分隔符后的规范化别名建立索引；"
+            "去除时间后缀和仅用于展示的分隔符后的规范化别名建立索引"
+            "（例如对两侧名称都执行 lower，并移除 `(t)` 与所有非字母数字字符）；"
             "将用户键映射回该集合中的原对象，未知键应明确拒绝。"
         )
     if any(
@@ -438,7 +439,9 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
         advice.append(
             "格式化结果被错误地重新解析：LaTeX、pretty-print、repr 或其他展示字符串"
             "只能作为最终 JSON 字符串输出，禁止再交给 sympify/parse/eval。"
-            "应直接遍历原符号对象并调用一次稳定序列化函数。"
+            "应直接遍历原符号对象并调用一次稳定序列化函数；矩阵必须在 `tolist()` 后"
+            "用嵌套列表逐元素格式化，不能用会把返回字符串重新强制转换为符号的"
+            " `Matrix.applyfunc(serializer)`。"
         )
     if not advice:
         return ""
