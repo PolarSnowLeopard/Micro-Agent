@@ -16,6 +16,7 @@ from micro_agent.packaging.template_adapter import (
     verify_template_contract_runtime,
 )
 from scripts.prepare_amq_template_subset import (
+    acquire_output_lock,
     _candidate_requires_replan,
     _is_l0,
     ensure_output_outside_source_repo,
@@ -773,6 +774,21 @@ def test_output_guard_refuses_writing_inside_source_git_repository(tmp_path: Pat
 
     with pytest.raises(ValueError, match="outside"):
         ensure_output_outside_source_repo(benchmark, source / "derived")
+
+
+def test_output_lock_prevents_concurrent_adaptation_writers(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "derived"
+    first = acquire_output_lock(output)
+    try:
+        with pytest.raises(RuntimeError, match="another adaptation process"):
+            acquire_output_lock(output)
+    finally:
+        first.close()
+
+    second = acquire_output_lock(output)
+    second.close()
 
 
 def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) -> None:

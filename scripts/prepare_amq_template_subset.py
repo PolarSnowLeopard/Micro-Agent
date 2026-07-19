@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -116,6 +117,19 @@ def ensure_output_outside_source_repo(benchmark_file: Path, output_root: Path) -
     except ValueError:
         return
     raise ValueError(f"output root must be outside the original AMQ-Bench repository: {source_root}")
+
+
+def acquire_output_lock(output_root: Path) -> Any:
+    output_root.mkdir(parents=True, exist_ok=True)
+    handle = (output_root / ".adaptation.lock").open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError(
+            f"another adaptation process is already writing {output_root}"
+        ) from exc
+    return handle
 
 
 def _json_digest(value: Any) -> str:
@@ -585,7 +599,7 @@ async def main() -> int:
             sample for sample in samples if sample["sample_id"] in selected
         ]
     original_sha = sha256_file(benchmark_file)
-    output_root.mkdir(parents=True, exist_ok=True)
+    output_lock = acquire_output_lock(output_root)
     cache_roots = [path.resolve() for path in args.repo_cache_root]
     if not cache_roots:
         cache_roots = [Path(os.getenv("REPO_CACHE_ROOT", ".repo_cache")).resolve()]
@@ -649,6 +663,8 @@ async def main() -> int:
     }
     _write_json_atomic(output_root / "adaptation_summary.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+    fcntl.flock(output_lock.fileno(), fcntl.LOCK_UN)
+    output_lock.close()
     return 0 if summary["complete"] and source_unchanged else 2
 
 
