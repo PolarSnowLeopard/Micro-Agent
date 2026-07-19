@@ -61,6 +61,7 @@ def validate_algorithm_template(
         "typedReturn": False,
         "googleDocstring": False,
         "noModuleRuntimeState": False,
+        "resolvableRepositoryImports": False,
         "callsRepositoryCode": False,
         "requirementsFile": (root / "requirements.txt").is_file(),
         "readmeFile": (root / "README.md").is_file() or (root / "README.ioeb.md").is_file(),
@@ -79,6 +80,16 @@ def validate_algorithm_template(
     except SyntaxError as exc:
         errors.append(f"main.py 语法错误: line={exc.lineno}, {exc.msg}")
         return TemplateValidationReport(False, errors, warnings, checks)
+
+    invalid_imports = _invalid_local_import_members(root, tree)
+    if invalid_imports:
+        errors.append(
+            "main.py 从仓库本地模块导入了不存在的成员: "
+            + "; ".join(invalid_imports)
+            + "；必须读取对应源码并使用真实公开 API，不能凭名称猜测"
+        )
+    else:
+        checks["resolvableRepositoryImports"] = True
 
     functions = [
         node
@@ -298,6 +309,74 @@ def validate_algorithm_template(
     if not checks["readmeFile"]:
         errors.append("ZIP 项目缺少 README.md 或 README.ioeb.md")
     return TemplateValidationReport(not errors, errors, warnings, checks)
+
+
+def _invalid_local_import_members(root: Path, tree: ast.Module) -> list[str]:
+    invalid: list[str] = []
+    search_roots = [root]
+    if (root / "src").is_dir():
+        search_roots.append(root / "src")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+            continue
+        parts = node.module.split(".")
+        module_path: Path | None = None
+        is_package = False
+        for search_root in search_roots:
+            file_candidate = search_root.joinpath(*parts).with_suffix(".py")
+            package_candidate = search_root.joinpath(*parts, "__init__.py")
+            if file_candidate.is_file():
+                module_path = file_candidate
+                break
+            if package_candidate.is_file():
+                module_path = package_candidate
+                is_package = True
+                break
+        if module_path is None:
+            continue
+        try:
+            module_tree = ast.parse(
+                module_path.read_text(encoding="utf-8", errors="replace"),
+                filename=str(module_path),
+            )
+        except (OSError, SyntaxError):
+            continue
+        available = _module_bound_names(module_tree)
+        package_dir = module_path.parent if is_package else None
+        for alias in node.names:
+            if alias.name == "*" or alias.name in available:
+                continue
+            if package_dir is not None and (
+                (package_dir / f"{alias.name}.py").is_file()
+                or (package_dir / alias.name / "__init__.py").is_file()
+            ):
+                continue
+            invalid.append(f"{node.module}.{alias.name} (main.py:{node.lineno})")
+    return sorted(set(invalid))
+
+
+def _module_bound_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.update(
+                child.id
+                for target in targets
+                for child in ast.walk(target)
+                if isinstance(child, ast.Name)
+            )
+        elif isinstance(node, ast.Import):
+            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name != "*"
+            )
+    return names
 
 
 def _contains_forbidden_pass(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

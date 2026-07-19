@@ -52,6 +52,46 @@ def main_process(value: float) -> dict[str, float]:
     assert report.checks["reachableLocalFunctions"] == ["_predict", "main_process"]
 
 
+def test_template_validator_rejects_hallucinated_local_import_members(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "solver"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "core.py").write_text(
+        "class RealSolver:\n"
+        "    def run(self, value: float) -> float:\n"
+        "        return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from solver.core import ImaginedSolver
+
+def main_process(value: float) -> float:
+    """Run a repository solver.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Solver output.
+    """
+    return ImaginedSolver().run(value)
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert not report.passed
+    assert report.checks["resolvableRepositoryImports"] is False
+    assert any(
+        "solver.core.ImaginedSolver (main.py:1)" in error
+        and "不能凭名称猜测" in error
+        for error in report.errors
+    )
+
+
 def test_template_validator_rejects_stdlib_only_facade(tmp_path: Path) -> None:
     project = _project(
         tmp_path,
