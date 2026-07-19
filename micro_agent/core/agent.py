@@ -266,7 +266,11 @@ class Agent:
         return await self.llm.complete(
             messages=messages,
             tools=tools,
-            tool_choice="auto" if tools else None,
+            tool_choice=(
+                "required"
+                if tools and self.require_terminal_tool
+                else "auto" if tools else None
+            ),
         )
 
     def _last_user_content(self) -> Optional[str]:

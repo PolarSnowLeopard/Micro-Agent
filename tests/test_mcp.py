@@ -161,9 +161,11 @@ async def test_agent_requires_terminal_tool_after_plain_text_response():
     class PlainThenToolLLM:
         def __init__(self):
             self.calls = 0
+            self.tool_choices = []
 
         async def complete(self, messages, **kwargs):
             self.calls += 1
+            self.tool_choices.append(kwargs.get("tool_choice"))
             if self.calls == 1:
                 return LLMResponse(content="I would make the change.")
             return LLMResponse(
@@ -190,6 +192,7 @@ async def test_agent_requires_terminal_tool_after_plain_text_response():
     events = [event async for event in agent.run("finish with a tool")]
 
     assert llm.calls == 2
+    assert llm.tool_choices == ["required", "required"]
     assert any(
         event.type == "think"
         and "终止工具契约" in event.data.get("thought", "")
