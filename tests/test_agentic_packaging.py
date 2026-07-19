@@ -1461,6 +1461,29 @@ def test_scaffold_and_verifier_accept_exact_multi_tool_contract(tmp_path):
     assert "sys.path.insert" not in loader
 
 
+def test_verifier_explains_hidden_variadic_adapter_parameters(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    adapters = _valid_adapters().replace(
+        "def predict_risk(value: float)",
+        "def predict_risk(value: float, **kwargs)",
+    )
+    (artifact / "adapters.py").write_text(adapters, encoding="utf-8")
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert any(
+        "predict_risk" in error
+        and "forbiddenVariadic=['**kwargs']" in error
+        and "不得使用 *args/**kwargs" in error
+        for error in report.errors
+    )
+
+
 def test_scaffold_preserves_agent_facing_schema_descriptions_and_constraints(
     tmp_path,
     monkeypatch,

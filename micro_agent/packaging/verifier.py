@@ -171,8 +171,16 @@ class ArtifactVerifier:
                 if arg.arg != "self"
             }
             if expected_args != actual_args or function.args.vararg or function.args.kwarg:
+                variadic = []
+                if function.args.vararg is not None:
+                    variadic.append(f"*{function.args.vararg.arg}")
+                if function.args.kwarg is not None:
+                    variadic.append(f"**{function.args.kwarg.arg}")
                 report.errors.append(
-                    f"适配函数 {name} 参数与规划不一致: expected={sorted(expected_args)}, actual={sorted(actual_args)}"
+                    f"适配函数 {name} 参数与规划不一致: "
+                    f"expected={sorted(expected_args)}, actual={sorted(actual_args)}, "
+                    f"forbiddenVariadic={variadic}；适配器必须只声明规划中的显式参数，"
+                    "不得使用 *args/**kwargs"
                 )
             if _returns_from_except(function):
                 report.errors.append(
