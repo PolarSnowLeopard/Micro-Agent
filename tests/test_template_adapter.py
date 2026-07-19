@@ -910,6 +910,7 @@ def test_contract():
     assert len(dockerfiles) == 1
     assert "--mount=type=cache,target=/root/.cache/pip" in dockerfiles[0]
     assert "--no-cache-dir" not in dockerfiles[0]
+    assert "libexpat1 libgomp1 libgl1 libglib2.0-0" in dockerfiles[0]
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 
