@@ -10,6 +10,7 @@ from micro_agent.packaging import template_adapter
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.template_adapter import (
     PatchTemplateFile,
+    ReadTemplateFile,
     WriteTemplateFile,
     _runtime_requirement_errors,
     build_template_adapter_agent,
@@ -827,6 +828,7 @@ def main_process(value: float) -> float:
 
     assert agent.tools.get("inspect_repository") is None
     assert agent.tools.get("read_project_file").max_reads == 4
+    assert agent.tools.get("read_template_file") is not None
     assert agent.tools.get("patch_template_file") is not None
     assert agent.tools.get("terminate") is None
     assert agent.max_steps == 16
@@ -841,6 +843,7 @@ def main_process(value: float) -> float:
         repair_source_reads=False,
     )
     assert local_only.tools.get("read_project_file") is None
+    assert local_only.tools.get("read_template_file") is not None
     assert "源码读取工具已关闭" in local_only.system_prompt
     assert not _template_repair_needs_source(
         [
@@ -875,6 +878,32 @@ async def test_patch_template_file_requires_one_exact_match(
     assert path.read_text(encoding="utf-8") == "VALUE = 2\nRESULT = VALUE\n"
     assert ambiguous.error
     assert "当前 2 次" in ambiguous.error
+    assert "read_template_file" in ambiguous.error
+
+
+async def test_read_template_file_returns_bounded_current_candidate(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tests_ioeb"
+    path.mkdir()
+    (path / "test_template_contract.py").write_text(
+        "line1\nline2\nline3\nline4\n",
+        encoding="utf-8",
+    )
+    tool = ReadTemplateFile(tmp_path, max_reads=1, max_lines=2)
+
+    result = await tool.execute(
+        path="tests_ioeb/test_template_contract.py",
+        start_line=2,
+        end_line=3,
+    )
+    exhausted = await tool.execute(path="main.py")
+
+    assert not result.error
+    assert "lines 2-3 (total 4)" in result.output
+    assert result.output.endswith("line2\nline3")
+    assert exhausted.error
+    assert "读取次数已达上限" in exhausted.error
 
 
 def test_template_validator_rejects_stdlib_only_facade(tmp_path: Path) -> None:

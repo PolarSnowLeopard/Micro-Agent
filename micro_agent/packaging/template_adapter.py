@@ -1324,6 +1324,88 @@ def _repository_import_roots(root: Path) -> set[str]:
     return {name for name in imports if name and name not in sys.stdlib_module_names}
 
 
+class ReadTemplateFile(Tool):
+    """Read the current generated candidate without reopening repository search."""
+
+    name = "read_template_file"
+    description = (
+        "读取当前生成候选的精确文本片段；只允许 main.py、requirements.txt 与"
+        " tests_ioeb/test_template_contract.py。补丁 old 不匹配或校验给出行号时，"
+        "先用此工具取得当前内容，再调用 patch_template_file。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "enum": [
+                    "main.py",
+                    "requirements.txt",
+                    "tests_ioeb/test_template_contract.py",
+                ],
+            },
+            "start_line": {"type": "integer", "minimum": 1},
+            "end_line": {"type": "integer", "minimum": 1},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    }
+
+    def __init__(
+        self,
+        project_dir: str | Path,
+        *,
+        max_reads: int = 4,
+        max_lines: int = 240,
+    ) -> None:
+        self.root = Path(project_dir).resolve()
+        self.max_reads = max(1, max_reads)
+        self.max_lines = max(1, max_lines)
+        self._reads = 0
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        relative = str(kwargs.get("path", ""))
+        if relative not in {
+            "main.py",
+            "requirements.txt",
+            "tests_ioeb/test_template_contract.py",
+        }:
+            return ToolResult(error=f"不允许读取: {relative}")
+        if self._reads >= self.max_reads:
+            return ToolResult(error=f"候选文件读取次数已达上限 {self.max_reads}")
+        path = self.root / relative
+        if not path.is_file() or path.is_symlink():
+            return ToolResult(error=f"候选文件不存在或不可读取: {relative}")
+        try:
+            start = int(kwargs.get("start_line", 1))
+            requested_end = kwargs.get("end_line")
+            end = (
+                int(requested_end)
+                if requested_end is not None
+                else start + self.max_lines - 1
+            )
+        except (TypeError, ValueError):
+            return ToolResult(error="start_line 与 end_line 必须是整数")
+        if start < 1 or end < start:
+            return ToolResult(error="行号范围无效")
+        if end - start + 1 > self.max_lines:
+            return ToolResult(error=f"单次最多读取 {self.max_lines} 行")
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        self._reads += 1
+        if start > len(lines):
+            return ToolResult(
+                error=f"{relative} 只有 {len(lines)} 行，start_line={start} 超出范围"
+            )
+        actual_end = min(end, len(lines))
+        content = "\n".join(lines[start - 1 : actual_end])
+        return ToolResult(
+            output=(
+                f"# {relative} lines {start}-{actual_end} "
+                f"(total {len(lines)})\n{content}"
+            )
+        )
+
+
 class WriteTemplateFile(Tool):
     name = "write_template_file"
     description = (
@@ -1415,7 +1497,11 @@ class PatchTemplateFile(Tool):
         count = content.count(old)
         if count != 1:
             return ToolResult(
-                error=f"old 在 {relative} 中必须恰好出现一次，当前 {count} 次"
+                error=(
+                    f"old 在 {relative} 中必须恰好出现一次，当前 {count} 次。"
+                    "请调用 read_template_file 读取校验错误附近的当前精确文本，"
+                    "再用更小且唯一的 old 重试；不要猜测或重复相同补丁。"
+                )
             )
         updated = content.replace(old, new, 1)
         limit = 200_000 if relative == "main.py" else 50_000
@@ -1481,6 +1567,7 @@ def build_template_adapter_agent(
         )
     tools.register(WriteTemplateFile(project_dir))
     if repair:
+        tools.register(ReadTemplateFile(project_dir))
         tools.register(PatchTemplateFile(project_dir))
     tools.register(VerifyTemplate(project_dir))
     return Agent(
@@ -1492,7 +1579,8 @@ def build_template_adapter_agent(
             + (
                 "\n这是已有模板候选的定向修复轮次。当前 main.py 和确定性错误已在请求中完整提供；"
                 "禁止重新调用 inspect_repository。只读取错误指向的真实源码模块，保留候选中"
-                "已通过的部分，优先用 patch_template_file 精确修改；仅在需要整体重构时才用"
+                "已通过的部分。若补丁 old 不匹配或错误带行号，先用 read_template_file 读取"
+                "当前候选的精确局部，再用 patch_template_file 修改；仅在需要整体重构时才用"
                 " write_template_file 覆盖错误涉及的 main.py、requirements.txt 或契约测试，"
                 "随后调用 verify_template。"
                 if repair
@@ -1500,8 +1588,8 @@ def build_template_adapter_agent(
             )
             + (
                 "\n当前错误完全位于生成候选的结构、docstring 或契约 fixture；"
-                "源码读取工具已关闭。必须直接依据请求中完整候选修复并提交，"
-                "不得尝试读取任何文件。"
+                "原仓库源码读取工具已关闭。可用 read_template_file 检查生成候选的精确局部，"
+                "但不得尝试读取其他仓库文件。"
                 if repair and not repair_source_reads
                 else ""
             )
@@ -1512,7 +1600,8 @@ def build_template_adapter_agent(
         require_terminal_tool=True,
         no_tool_retry_limit=3,
         next_step_prompt=(
-            "纯文本说明不算修复。必须调用 patch_template_file/write_template_file，"
+            "纯文本说明不算修复。必要时先读取候选精确局部，再调用"
+            " patch_template_file/write_template_file，"
             "完成后调用 verify_template。"
         ),
     )
