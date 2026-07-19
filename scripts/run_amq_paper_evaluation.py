@@ -66,6 +66,12 @@ def parse_args() -> argparse.Namespace:
             "reasoning.enabled=false and is recorded as a solver substitution setting."
         ),
     )
+    parser.add_argument(
+        "--solver-max-tokens",
+        type=int,
+        default=65536,
+        help="Maximum solver completion tokens; recorded in the evaluation protocol.",
+    )
     return parser.parse_args()
 
 
@@ -411,6 +417,8 @@ async def main() -> int:
     ]
     if args.corpus_size < 1:
         raise SystemExit("--corpus-size must be >= 1")
+    if args.solver_max_tokens < 1:
+        raise SystemExit("--solver-max-tokens must be >= 1")
     if len(samples) != args.corpus_size and not args.sample:
         raise SystemExit(f"protocol requires {args.corpus_size} samples, got {len(samples)}")
     all_ids = [sample["sample_id"] for sample in samples]
@@ -447,6 +455,7 @@ async def main() -> int:
         "solverTemperature": 0.0,
         "solverSeed": 42,
         "solverReasoning": args.solver_reasoning,
+        "solverMaxTokens": args.solver_max_tokens,
         "maxUtilityTurns": PAPER_MAX_UTILITY_TURNS,
         "utilityOracle": "deterministic_verify_script_only",
         "goVToolProbeCap": PAPER_TOOL_PROBE_CAP,
@@ -554,20 +563,27 @@ async def main() -> int:
         skip_d3=args.skip_d3,
         verify_model="deterministic-only",
     )
-    if args.solver_reasoning == "disabled":
+    if args.solver_reasoning == "disabled" or args.solver_max_tokens < 65536:
         completions = runner.openai_client.chat.completions
         original_create = completions.create
 
-        async def create_without_reasoning(*create_args: Any, **create_kwargs: Any) -> Any:
+        async def create_with_solver_limits(*create_args: Any, **create_kwargs: Any) -> Any:
+            requested_max_tokens = create_kwargs.get("max_tokens")
+            if (
+                not isinstance(requested_max_tokens, int)
+                or requested_max_tokens > args.solver_max_tokens
+            ):
+                create_kwargs["max_tokens"] = args.solver_max_tokens
             extra_body = dict(create_kwargs.pop("extra_body", {}) or {})
-            extra_body["reasoning"] = {"enabled": False}
+            if args.solver_reasoning == "disabled":
+                extra_body["reasoning"] = {"enabled": False}
             return await original_create(
                 *create_args,
                 **create_kwargs,
                 extra_body=extra_body,
             )
 
-        completions.create = create_without_reasoning
+        completions.create = create_with_solver_limits
     original_agent_loop = runner.run_agent_loop
 
     async def recording_agent_loop(session: Any, task: dict[str, Any], tools: list[Any]) -> dict[str, Any]:
