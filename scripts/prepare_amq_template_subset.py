@@ -433,7 +433,7 @@ async def adapt_one(
             runtime_report = None
             static_repair_attempts = 0
             runtime_repair_attempts = 0
-            runtime_repair_budget = max(2, (max_attempts + 1) // 2)
+            runtime_repair_budget = max(2, max_attempts)
             no_op_attempts = 0
             no_op_attempt_budget = max(2, (max_attempts + 1) // 2)
             if is_l0:
