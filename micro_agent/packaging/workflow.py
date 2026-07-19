@@ -378,6 +378,8 @@ class AgenticPackagingWorkflow:
         prompt = _builder_prompt(plan, self.ir, implementation_context)
         initial_generation_complete = False
         pending_smoke_store: PlanStore | None = None
+        last_smoke_failure_signature: str | None = None
+        repeated_smoke_failures = 0
         while True:
             async for event in builder.run(prompt):
                 if event.type == "done":
@@ -431,6 +433,13 @@ class AgenticPackagingWorkflow:
                     )
                     if not runtime_report.passed:
                         report = runtime_report
+                        smoke_signature = _smoke_failure_signature(runtime_report)
+                        if smoke_signature is not None:
+                            if smoke_signature == last_smoke_failure_signature:
+                                repeated_smoke_failures += 1
+                            else:
+                                repeated_smoke_failures = 0
+                            last_smoke_failure_signature = smoke_signature
 
             if report.passed and (
                 self.runtime_verifier_factory is None
@@ -500,6 +509,10 @@ class AgenticPackagingWorkflow:
                 static_repairs += 1
                 phase_repairs = static_repairs
             total_repairs += 1
+            force_smoke_revision = (
+                _is_smoke_test_report(report)
+                and repeated_smoke_failures >= 1
+            )
             yield AgentEvent(
                 type="think",
                 step=step_offset,
@@ -521,6 +534,7 @@ class AgenticPackagingWorkflow:
                 artifact_snapshot=_repair_artifact_snapshot(self.artifact_dir),
                 implementation_context=implementation_context,
                 allow_smoke_revision=_is_smoke_test_report(report),
+                force_smoke_revision=force_smoke_revision,
             )
             builder = _build_builder_agent(
                 self.project_dir,
@@ -539,6 +553,7 @@ class AgenticPackagingWorkflow:
                     builder,
                     pending_smoke_store,
                     plan,
+                    force_revision=force_smoke_revision,
                 )
             self._active_agent = builder
 
@@ -766,12 +781,29 @@ def _configure_smoke_revision_builder(
     builder: Agent,
     store: PlanStore,
     plan: PackagingPlan,
+    *,
+    force_revision: bool = False,
 ) -> None:
     tools = getattr(builder, "tools", None)
     if tools is None:
         return
     tools.register(ReviseSmokeTests(store, plan))
     builder.terminal_tools.add("revise_smoke_tests")
+    if force_revision:
+        for name in (
+            "read_artifact_file",
+            "write_artifact_file",
+            "patch_artifact_file",
+            "verify_artifact",
+        ):
+            tools.unregister(name)
+        builder.terminal_tools = {"revise_smoke_tests", "terminate"}
+        builder.max_steps = min(builder.max_steps, 16)
+        builder.system_prompt += (
+            "\n同一组 smoke 运行错误在 adapter 修复后再次出现。当前阶段是专用 fixture 修订，"
+            "禁止继续修改 adapter 或依赖。最多读取一个真实测试/doctest/示例文件，"
+            "然后必须调用 revise_smoke_tests，仅更换失败工具的 smokeTest.input/evidence。"
+        )
 
 
 def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
@@ -985,13 +1017,31 @@ def _repair_prompt(
     artifact_snapshot: dict[str, str] | None = None,
     implementation_context: dict[str, Any] | None = None,
     allow_smoke_revision: bool = False,
+    force_smoke_revision: bool = False,
 ) -> str:
     snapshot = artifact_snapshot or {}
-    first_action = (
+    repair_mechanics = (
+        "同一 smoke 错误已经重复，本轮是专用 fixture 修订，不允许修改任何产物或依赖，"
+        "也不再调用 verify_artifact。可先读取一个独立证据文件，随后必须调用 "
+        "revise_smoke_tests 并结束本轮。"
+        if force_smoke_revision
+        else (
+            (
         "若要修改现有产物，第一项产物修改仍必须是 patch_artifact_file；"
         "若错误来自 smoke 输入本身，可先补读一个被引用的证据文件并直接调用 revise_smoke_tests。"
-        if allow_smoke_revision
-        else "第一项产物修改必须是 patch_artifact_file（精确局部替换）；"
+            )
+            if allow_smoke_revision
+            else "第一项产物修改必须是 patch_artifact_file（精确局部替换）；"
+        )
+        + (
+            "仅当报告要求初始化快照中明确为空的目标文件时，才可直接以 write_artifact_file "
+            "作为第一项产物修改。非空文件即使修改涉及大部分内容也必须使用 "
+            "patch_artifact_file。完成修改后立即调用 verify_artifact。不得先调用 "
+            "inspect_repository 或 read_project_file；只有验收报告明确指向尚未提供的算法"
+            "源码行、且当前快照无法确定修复时，才可补读该单个源码文件。"
+            if not force_smoke_revision
+            else ""
+        )
     )
     smoke_revision = (
         "本轮报告属于 smoke_test。先判断是 adapters.py 转换错误，还是原 smoke 输入本身不能"
@@ -1003,18 +1053,28 @@ def _repair_prompt(
         if allow_smoke_revision
         else ""
     )
+    if force_smoke_revision:
+        smoke_revision = (
+            "此前 adapter 修复未改变同一组 smoke 错误，已确定切换到 fixture 修订阶段。"
+            "本轮不得调用 patch/write/verify；必须提交当前完整规划，只修改失败工具的 "
+            "smokeTest.input/evidence，并调用 revise_smoke_tests。"
+        )
+    artifact_scope = (
+        ""
+        if force_smoke_revision
+        else (
+            "根据错误只修复 adapters.py、requirements.txt、requirements-cpu.txt 或 "
+            "system-packages.txt；不得改变 server.py、Dockerfile、packaging_plan.json "
+            "或删除计划中的工具。"
+        )
+    )
     return (
         f"这是第 {attempt} 次定向修复（{failure_phase} 阶段第 {phase_attempt} 次）。"
         "这是执行修复任务，不是分析问答：不得长篇复述报告。下面已经给出全部可写产物的当前快照；"
-        + first_action
-        + "仅当报告要求初始化快照中明确为空的目标文件时，才可直接以 write_artifact_file 作为"
-        "第一项产物修改。非空文件即使修改涉及大部分内容也必须使用 patch_artifact_file。"
-        "完成修改后立即调用 verify_artifact。不得先调用 inspect_repository 或 read_project_file；"
-        "只有验收报告明确指向尚未提供的算法源码行、且当前快照无法确定修复时，才可补读该单个源码文件。"
-        "独立验收报告如下。"
-        "根据错误只修复 adapters.py、requirements.txt、requirements-cpu.txt 或 system-packages.txt；"
-        "不得改变 server.py、Dockerfile、packaging_plan.json 或删除计划中的工具。"
-        "提交模板已声明的运行依赖是不可删除的基线；不能因为某次 smoke 输入失败就删减依赖，"
+        + repair_mechanics
+        + "独立验收报告如下。"
+        + artifact_scope
+        + "提交模板已声明的运行依赖是不可删除的基线；不能因为某次 smoke 输入失败就删减依赖，"
         "只能根据缺包、冲突或源码兼容证据调整版本约束或增加依赖。"
         "若报告来自容器构建/运行阶段，必须依据具体缺包、导入栈、系统库或 smoke test 错误修复，"
         "不得绕过运行验收或吞掉异常。若原仓库在模块导入阶段引用已迁移/删除的第三方符号，"
@@ -1089,6 +1149,13 @@ def _is_repairable_report(report: VerificationReport) -> bool:
 
 def _is_smoke_test_report(report: VerificationReport) -> bool:
     return any(error.startswith("[smoke_test]") for error in report.errors)
+
+
+def _smoke_failure_signature(report: VerificationReport) -> str | None:
+    failures = report.checks.get("smokeTestFailures")
+    if not isinstance(failures, dict) or not failures:
+        return None
+    return json.dumps(failures, ensure_ascii=False, sort_keys=True)
 
 
 def _plan_failure(store: PlanStore) -> str:

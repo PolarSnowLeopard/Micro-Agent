@@ -45,9 +45,11 @@ from micro_agent.packaging.workflow import (
     _build_builder_agent,
     _builder_implementation_context,
     _configure_repair_builder,
+    _configure_smoke_revision_builder,
     _repair_artifact_snapshot,
     _repair_prompt,
     _run_planner,
+    _smoke_failure_signature,
     planning_candidate_symbols,
     _extract_planning_json,
 )
@@ -490,6 +492,46 @@ def test_repair_builder_has_bounded_evidence_and_patch_only_tools(tmp_path):
     assert builder.tools.get("inspect_repository") is None
     assert builder.tools.get("read_project_file").max_reads == 1
     assert builder.tools.get("write_artifact_file").allow_nonempty_overwrite is False
+
+
+def test_repeated_smoke_failure_routes_to_fixture_only_agent(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = tmp_path / "artifact"
+    builder = _build_builder_agent(project, artifact, plan, ir)
+    store = PlanStore(
+        path=artifact / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+    )
+
+    _configure_repair_builder(builder)
+    _configure_smoke_revision_builder(
+        builder,
+        store,
+        plan,
+        force_revision=True,
+    )
+
+    assert set(builder.tools.list_names()) == {
+        "read_project_file",
+        "revise_smoke_tests",
+        "terminate",
+    }
+    assert builder.max_steps == 16
+    assert "专用 fixture 修订" in builder.system_prompt
+
+    report = VerificationReport(
+        passed=False,
+        checks={"smokeTestFailures": {"predict_risk": "invalid fixture"}},
+        errors=["[smoke_test] failed"],
+    )
+    assert _smoke_failure_signature(report) == json.dumps(
+        {"predict_risk": "invalid fixture"},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
 
 def test_builder_context_passes_bounded_reviewed_source_artifacts(tmp_path):
@@ -2638,6 +2680,24 @@ def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
     )
     assert "revise_smoke_tests" in smoke_prompt
     assert "只修改对应 tools[*].smokeTest.input/evidence" in smoke_prompt
+
+    forced_prompt = _repair_prompt(
+        VerificationReport(
+            passed=False,
+            checks={"smokeTestFailures": {"predict_risk": "same failure"}},
+            errors=["[smoke_test] same failure"],
+        ),
+        3,
+        failure_phase="runtime",
+        phase_attempt=3,
+        artifact_snapshot=snapshot,
+        implementation_context={"packagingPlan": {"decision": "package"}},
+        allow_smoke_revision=True,
+        force_smoke_revision=True,
+    )
+    assert "必须调用 revise_smoke_tests" in forced_prompt
+    assert "不允许修改任何产物或依赖" in forced_prompt
+    assert "第一项产物修改必须是 patch_artifact_file" not in forced_prompt
 
 
 async def test_container_runtime_verifier_builds_and_discovers_tools(tmp_path):
