@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -123,10 +124,11 @@ class RepositoryAnalyzer:
         if not root_path.is_dir():
             raise ValueError(f"项目目录不存在: {root_path}")
 
-        candidates = [path for path in root_path.rglob("*") if self._include(path, root_path)]
+        candidates, truncated = _bounded_candidate_files(
+            root_path,
+            self.max_files,
+        )
         candidates.sort(key=lambda path: _candidate_sort_key(path, root_path))
-        truncated = len(candidates) > self.max_files
-        candidates = candidates[: self.max_files]
 
         files: list[FileInfo] = []
         symbols: list[SymbolInfo] = []
@@ -220,6 +222,73 @@ class RepositoryAnalyzer:
         if any(part.startswith(".") and part not in {".github"} for part in rel_parts):
             return False
         return True
+
+
+def _bounded_candidate_files(root: Path, limit: int) -> tuple[list[Path], bool]:
+    """Inventory at most ``limit`` files without enumerating the whole tree."""
+
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    contract = root / "tests_ioeb" / "test_template_contract.py"
+    priority_files = [
+        *(
+            [contract]
+            if RepositoryAnalyzer._include(contract, root)
+            else []
+        ),
+        *(
+            path
+            for path in root.iterdir()
+            if RepositoryAnalyzer._include(path, root)
+        ),
+    ]
+    for path in sorted(
+        dict.fromkeys(priority_files),
+        key=lambda item: _candidate_sort_key(item, root),
+    ):
+        if len(candidates) >= limit:
+            return candidates, True
+        candidates.append(path)
+        seen.add(path)
+
+    for current, directories, filenames in os.walk(
+        root,
+        topdown=True,
+        followlinks=False,
+    ):
+        current_path = Path(current)
+        directories[:] = sorted(
+            (
+                name
+                for name in directories
+                if name not in IGNORED_DIRS
+                and (not name.startswith(".") or name == ".github")
+                and not (current_path / name).is_symlink()
+            ),
+            key=_directory_sort_key,
+        )
+        paths = sorted(
+            (current_path / name for name in filenames),
+            key=lambda path: _candidate_sort_key(path, root),
+        )
+        for path in paths:
+            if path in seen or not RepositoryAnalyzer._include(path, root):
+                continue
+            if len(candidates) >= limit:
+                return candidates, True
+            candidates.append(path)
+    return candidates, False
+
+
+def _directory_sort_key(name: str) -> tuple[int, str]:
+    lowered = name.lower()
+    if lowered == "src":
+        return (0, lowered)
+    if lowered in {"test", "tests", "examples"}:
+        return (2, lowered)
+    if lowered in {"doc", "docs", ".github"}:
+        return (3, lowered)
+    return (1, lowered)
 
 
 def _candidate_sort_key(path: Path, root: Path) -> tuple[int, int, str]:

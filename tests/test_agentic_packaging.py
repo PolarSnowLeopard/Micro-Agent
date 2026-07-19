@@ -230,6 +230,37 @@ def test_repository_analyzer_never_truncates_root_template_evidence(tmp_path):
     assert ir.truncated
 
 
+def test_repository_analyzer_does_not_enumerate_the_full_tree(
+    tmp_path,
+    monkeypatch,
+):
+    project = tmp_path / "bounded"
+    project.mkdir()
+    (project / "main.py").write_text(
+        "def main_process(value: int) -> int:\n    return value\n",
+        encoding="utf-8",
+    )
+    for directory_index in range(10):
+        directory = project / f"package_{directory_index:02d}"
+        directory.mkdir()
+        for file_index in range(10):
+            (directory / f"module_{file_index:02d}.py").write_text(
+                f"VALUE = {file_index}\n",
+                encoding="utf-8",
+            )
+
+    def reject_rglob(*args, **kwargs):
+        raise AssertionError("full-tree rglob must not be used")
+
+    monkeypatch.setattr(Path, "rglob", reject_rglob)
+
+    ir = RepositoryAnalyzer(max_files=5).analyze(project)
+
+    assert ir.truncated
+    assert len(ir.files) == 5
+    assert "main.main_process" in ir.known_symbols
+
+
 def test_darp_propagates_intent_relevance_through_internal_dependencies(tmp_path):
     project = tmp_path / "relevance"
     project.mkdir()
