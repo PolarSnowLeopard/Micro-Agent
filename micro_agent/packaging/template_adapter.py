@@ -114,6 +114,7 @@ def validate_algorithm_template(
         "contractOperationCounts": {},
         "contractFixtures": [],
         "contractSuccessFixtureCount": 0,
+        "contractUncollectedCallCount": 0,
     }
     main_path = root / "main.py"
     if not main_path.is_file():
@@ -404,6 +405,7 @@ def _validate_template_contract_test(
         "contractOperationCounts": {},
         "contractFixtures": [],
         "contractSuccessFixtureCount": 0,
+        "contractUncollectedCallCount": 0,
     }
     relative = Path("tests_ioeb") / "test_template_contract.py"
     path = root / relative
@@ -488,7 +490,9 @@ def _validate_template_contract_test(
         for parent in ast.walk(tree)
         for child in ast.iter_child_nodes(parent)
     }
+    executable_functions = _contract_executable_functions(tree)
     fixtures: list[dict[str, Any]] = []
+    uncollected_calls = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -500,6 +504,15 @@ def _validate_template_contract_test(
             and node.func.value.id in module_names
         )
         if not (is_direct or is_module):
+            continue
+        enclosing = _enclosing_contract_function(node, parent_by_node)
+        if enclosing not in executable_functions:
+            uncollected_calls += 1
+            errors.append(
+                "模板契约 main_process 调用不会被 pytest/unittest 收集执行："
+                f"line={node.lineno}。不得把成功调用只放在未被测试使用的 "
+                "@pytest.fixture 或普通 helper 中"
+            )
             continue
         fixture: dict[str, Any] = {}
         invalid_literal = False
@@ -557,6 +570,7 @@ def _validate_template_contract_test(
                 ),
             }
         )
+    checks["contractUncollectedCallCount"] = uncollected_calls
 
     if fixtures:
         checks["contractTestCallsMainProcess"] = True
@@ -700,6 +714,107 @@ def _contract_call_expected_outcome(
     return "success"
 
 
+def _contract_executable_functions(
+    tree: ast.Module,
+) -> set[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Return tests and pytest fixtures that a collected test actually uses."""
+
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    tests = {node for node in functions if node.name.startswith("test_")}
+    fixtures = {
+        node.name: node
+        for node in functions
+        if any(_decorator_terminal_name(item) == "fixture" for item in node.decorator_list)
+    }
+    used_fixture_names: set[str] = set()
+    for test in tests:
+        used_fixture_names.update(
+            parameter.arg
+            for parameter in (
+                *test.args.posonlyargs,
+                *test.args.args,
+                *test.args.kwonlyargs,
+            )
+            if parameter.arg in fixtures
+        )
+        used_fixture_names.update(_usefixtures_names(test.decorator_list))
+    for name, fixture in fixtures.items():
+        if any(
+            _decorator_terminal_name(item) == "fixture"
+            and isinstance(item, ast.Call)
+            and any(
+                keyword.arg == "autouse"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+                for keyword in item.keywords
+            )
+            for item in fixture.decorator_list
+        ):
+            used_fixture_names.add(name)
+
+    pending = list(used_fixture_names)
+    while pending:
+        name = pending.pop()
+        fixture = fixtures.get(name)
+        if fixture is None:
+            continue
+        for parameter in (
+            *fixture.args.posonlyargs,
+            *fixture.args.args,
+            *fixture.args.kwonlyargs,
+        ):
+            dependency = parameter.arg
+            if dependency in fixtures and dependency not in used_fixture_names:
+                used_fixture_names.add(dependency)
+                pending.append(dependency)
+    return tests | {
+        fixture
+        for name, fixture in fixtures.items()
+        if name in used_fixture_names
+    }
+
+
+def _decorator_terminal_name(decorator: ast.expr) -> str | None:
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    return None
+
+
+def _usefixtures_names(decorators: list[ast.expr]) -> set[str]:
+    names: set[str] = set()
+    for decorator in decorators:
+        if (
+            isinstance(decorator, ast.Call)
+            and _decorator_terminal_name(decorator) == "usefixtures"
+        ):
+            for argument in decorator.args:
+                if isinstance(argument, ast.Constant) and isinstance(
+                    argument.value,
+                    str,
+                ):
+                    names.add(argument.value)
+    return names
+
+
+def _enclosing_contract_function(
+    node: ast.AST,
+    parent_by_node: dict[ast.AST, ast.AST],
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    current = node
+    while current in parent_by_node:
+        current = parent_by_node[current]
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return current
+    return None
+
+
 def template_contract_fixture_outcomes(
     path: str | Path,
 ) -> dict[int, str]:
@@ -731,6 +846,7 @@ def template_contract_fixture_outcomes(
         for parent in ast.walk(tree)
         for child in ast.iter_child_nodes(parent)
     }
+    executable_functions = _contract_executable_functions(tree)
     outcomes: dict[int, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -743,9 +859,17 @@ def template_contract_fixture_outcomes(
             and node.func.value.id in module_names
         )
         if is_direct or is_module:
-            outcomes[node.lineno] = _contract_call_expected_outcome(
-                node,
-                parent_by_node,
+            outcomes[node.lineno] = (
+                _contract_call_expected_outcome(
+                    node,
+                    parent_by_node,
+                )
+                if _enclosing_contract_function(
+                    node,
+                    parent_by_node,
+                )
+                in executable_functions
+                else "uncollected"
             )
     return outcomes
 

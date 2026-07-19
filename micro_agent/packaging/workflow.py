@@ -1066,6 +1066,7 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
 
     records: list[dict[str, Any]] = []
     error_fixture_count = 0
+    uncollected_fixture_count = 0
     fixture_outcomes = template_contract_fixture_outcomes(
         Path(ir.root) / "tests_ioeb" / "test_template_contract.py"
     )
@@ -1078,10 +1079,20 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
                 continue
             line = fixture.get("line")
             expected_outcome = fixture.get("expectedOutcome")
-            if not isinstance(expected_outcome, str) and isinstance(line, int):
-                expected_outcome = fixture_outcomes.get(line)
+            parsed_outcome = (
+                fixture_outcomes.get(line)
+                if isinstance(line, int)
+                else None
+            )
+            if parsed_outcome in {"error", "uncollected"}:
+                expected_outcome = parsed_outcome
+            elif not isinstance(expected_outcome, str):
+                expected_outcome = parsed_outcome
             if expected_outcome == "error":
                 error_fixture_count += 1
+                continue
+            if expected_outcome != "success":
+                uncollected_fixture_count += 1
                 continue
             main_input = json.loads(
                 json.dumps(fixture["input"], ensure_ascii=False)
@@ -1135,6 +1146,7 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
         "networkDuringTest": runtime_checks.get("networkDuringTest"),
         "records": records,
         "excludedErrorFixtureCount": error_fixture_count,
+        "excludedUncollectedFixtureCount": uncollected_fixture_count,
         "warnings": runtime.get("warnings", []) if isinstance(runtime, dict) else [],
         "reason": (
             "verified runtime contract fixtures"

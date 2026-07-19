@@ -150,6 +150,69 @@ def test_double_contract():
     assert any("mode='triple'" in error for error in rejected.errors)
 
 
+def test_template_contract_rejects_unconsumed_pytest_fixture(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n"
+        "    return value * 2\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        value: Numeric input.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    contract = tests / "test_template_contract.py"
+    contract.write_text(
+        '''import pytest
+from main import main_process
+
+@pytest.fixture
+def hidden_success():
+    result = main_process(value=2.0)
+    assert result["result"] == 4.0
+    return result
+
+def test_collection_only():
+    assert True
+''',
+        encoding="utf-8",
+    )
+
+    rejected = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not rejected.passed
+    assert rejected.checks["contractSuccessFixtureCount"] == 0
+    assert rejected.checks["contractUncollectedCallCount"] == 1
+    assert any("不会被 pytest/unittest 收集执行" in error for error in rejected.errors)
+
+    contract.write_text(
+        contract.read_text(encoding="utf-8")
+        + "\ndef test_uses_fixture(hidden_success):\n"
+        + '    assert hidden_success["result"] == 4.0\n',
+        encoding="utf-8",
+    )
+    accepted = validate_algorithm_template(project, require_contract_test=True)
+
+    assert accepted.passed, accepted.to_json()
+    assert accepted.checks["contractSuccessFixtureCount"] == 1
+    assert accepted.checks["contractUncollectedCallCount"] == 0
+
+
 def test_template_contract_rejects_dynamic_or_network_dependent_fixtures(
     tmp_path: Path,
 ) -> None:
