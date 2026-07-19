@@ -67,8 +67,9 @@ GENERATION_FAILURE_PATTERNS: dict[str, tuple[str, ...]] = {
         "依赖",
     ),
     "agent_submission_protocol": (
-        "未能提交有效封装规划",
         "未调用 save_packaging_plan",
+        "未收到有效结构化规划",
+        "agent 在有限步骤内未调用",
         "不是严格 json",
     ),
 }

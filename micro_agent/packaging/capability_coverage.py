@@ -111,10 +111,16 @@ def _is_semantic_dispatch_parameter(parameter: str) -> bool:
     )
 
 
-def _strategy_fixes_value(strategy: str, parameter: str, value: str) -> bool:
+def strategy_fixes_dispatch_value(
+    strategy: str,
+    parameter: str,
+    value: Any,
+) -> bool:
+    """Return whether an adapter strategy fixes a dispatch parameter value."""
+
     normalized = " ".join(strategy.lower().split())
     parameter_pattern = re.escape(parameter.lower())
-    value_pattern = re.escape(value.lower())
+    value_pattern = re.escape(str(value).lower())
     patterns = (
         rf"\b{parameter_pattern}\b\s*=\s*['\"]?{value_pattern}['\"]?",
         rf"\bfix(?:es|ed)?\s+\b{parameter_pattern}\b\s+(?:to|as)\s+['\"]?{value_pattern}['\"]?",
@@ -124,4 +130,7 @@ def _strategy_fixes_value(strategy: str, parameter: str, value: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in patterns)
 
 
-__all__ = ["assess_dispatch_coverage"]
+_strategy_fixes_value = strategy_fixes_dispatch_value
+
+
+__all__ = ["assess_dispatch_coverage", "strategy_fixes_dispatch_value"]

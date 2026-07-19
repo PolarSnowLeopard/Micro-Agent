@@ -16,7 +16,10 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from micro_agent.packaging.analyzer import RepositoryIR
-from micro_agent.packaging.capability_coverage import assess_dispatch_coverage
+from micro_agent.packaging.capability_coverage import (
+    assess_dispatch_coverage,
+    strategy_fixes_dispatch_value,
+)
 from micro_agent.packaging.interface_quality import (
     InterfaceQualityReport,
     assess_interface_quality,
@@ -138,6 +141,8 @@ class PlanStore:
     require_independent_smoke_evidence: bool = False
     smoke_evidence_root: Path | None = None
     rejected_smoke_inputs: dict[str, set[str]] | None = None
+    verified_contract_records: list[dict[str, Any]] | None = None
+    contract_smoke_grounded_tools: list[str] | None = None
     smoke_revision_attempted: bool = False
     plan: PackagingPlan | None = None
     last_candidate: dict[str, Any] | None = None
@@ -184,6 +189,9 @@ class SavePackagingPlan(Tool):
                 stage="shape",
             )
             return ToolResult(error=errors[0])
+        self.store.contract_smoke_grounded_tools = (
+            _ground_plan_smoke_from_verified_contract(normalized, self.store)
+        )
         self.store.last_candidate = json.loads(
             json.dumps(normalized, ensure_ascii=False)
         )
@@ -217,6 +225,28 @@ class SavePackagingPlan(Tool):
                     + "\n- ".join(errors)
                 )
             )
+        if plan.decision == "package" and self.store.verified_contract_records:
+            contract_errors = _verified_contract_alignment_errors(
+                plan,
+                self.store,
+            )
+            if contract_errors:
+                self.store.plan = None
+                _record_rejected_candidate(
+                    self.store,
+                    normalized,
+                    contract_errors,
+                    stage="contract",
+                )
+                self.store.interface_quality = None
+                return ToolResult(
+                    error=(
+                        "已验证模板契约对齐门禁失败。Tool 必须通过运行时已验证的 "
+                        "main.main_process 入口，并保持分支输入与公开 Schema 可映射；"
+                        "请修订接口规划后重新提交完整规划:\n- "
+                        + "\n- ".join(contract_errors)
+                    )
+                )
         if self.store.enforce_interface_quality and plan.decision == "package":
             quality = assess_interface_quality(plan)
             self.store.interface_quality = quality
@@ -295,12 +325,211 @@ class SavePackagingPlan(Tool):
                 f"规划已保存：decision={plan.decision}, "
                 f"services={len(plan.data.get('services', []))}, tools={len(plan.tools)}"
                 + (
+                    ", verifiedContractSmoke="
+                    + ",".join(self.store.contract_smoke_grounded_tools)
+                    if self.store.contract_smoke_grounded_tools
+                    else ""
+                )
+                + (
                     f", interfaceGoE={self.store.interface_quality.metrics['referenceFreeGoE']}"
                     if self.store.interface_quality is not None
                     else ""
                 )
             )
         )
+
+
+def _ground_plan_smoke_from_verified_contract(
+    raw: dict[str, Any],
+    store: PlanStore,
+) -> list[str]:
+    """Replace model-invented smoke fixtures with runtime-verified contracts.
+
+    Template adaptation already executes each submitted fixture in an isolated
+    container. Planning therefore must not ask the LLM to reproduce the same
+    structured value exactly. This gate maps a Tool's fixed dispatch branch to
+    the corresponding verified public input before any plan validation runs.
+    """
+
+    records = store.verified_contract_records or []
+    if raw.get("decision") != "package" or not records:
+        return []
+    rejected = store.rejected_smoke_inputs or {}
+    grounded: list[str] = []
+    services = raw.get("services")
+    if not isinstance(services, list):
+        return grounded
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        tools = service.get("tools")
+        if not isinstance(tools, list):
+            continue
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            source_symbols = tool.get("sourceSymbols")
+            if not isinstance(source_symbols, list) or "main.main_process" not in source_symbols:
+                continue
+            name = tool.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            schema = tool.get("inputSchema")
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            required = schema.get("required", []) if isinstance(schema, dict) else []
+            if not isinstance(properties, dict) or not isinstance(required, list):
+                continue
+            candidates: list[dict[str, Any]] = []
+            for record in _contract_branch_records(tool, records):
+                smoke_input = record["toolSmokeInput"]
+                evidence = record["evidence"]
+                if (
+                    not set(smoke_input).issubset(properties)
+                    or not set(required).issubset(smoke_input)
+                    or _contract_record_was_rejected(name, record, rejected)
+                ):
+                    continue
+                candidates.append(record)
+            if not candidates:
+                continue
+            selected = min(
+                candidates,
+                key=lambda item: _canonical_smoke_input(item["toolSmokeInput"]),
+            )
+            tool["smokeTest"] = {
+                "enabled": True,
+                "input": json.loads(
+                    json.dumps(selected["toolSmokeInput"], ensure_ascii=False)
+                ),
+                "evidence": list(selected["evidence"]),
+            }
+            grounded.append(name)
+    return grounded
+
+
+def _contract_branch_records(
+    tool: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    strategy = str(tool.get("adapterStrategy", ""))
+    properties = tool.get("inputSchema", {}).get("properties", {})
+    if not isinstance(properties, dict):
+        properties = {}
+    matched: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        smoke_input = record.get("toolSmokeInput")
+        evidence = record.get("evidence")
+        if (
+            not isinstance(smoke_input, dict)
+            or not isinstance(evidence, list)
+            or not evidence
+            or not all(isinstance(item, str) and item for item in evidence)
+        ):
+            continue
+        parameter = record.get("dispatchParameter")
+        if parameter is None:
+            matched.append(record)
+            continue
+        if (
+            isinstance(parameter, str)
+            and parameter not in properties
+            and strategy_fixes_dispatch_value(
+                strategy,
+                parameter,
+                record.get("dispatchValue"),
+            )
+        ):
+            matched.append(record)
+    return matched
+
+
+def _contract_record_was_rejected(
+    tool_name: str,
+    record: dict[str, Any],
+    rejected: dict[str, set[str]],
+) -> bool:
+    return _canonical_smoke_input(record["toolSmokeInput"]) in rejected.get(
+        tool_name,
+        set(),
+    )
+
+
+def _verified_contract_alignment_errors(
+    plan: PackagingPlan,
+    store: PlanStore,
+) -> list[str]:
+    records = store.verified_contract_records or []
+    rejected = store.rejected_smoke_inputs or {}
+    errors: list[str] = []
+    for tool in plan.tools:
+        name = str(tool.get("name", "<unnamed>"))
+        source_symbols = tool.get("sourceSymbols", [])
+        if "main.main_process" not in source_symbols:
+            errors.append(
+                f"[verified_contract_source] {name} 未把运行时已验证的 "
+                "main.main_process 作为 sourceSymbol；模板能力不能绕过公共契约"
+            )
+            continue
+        branch_records = _contract_branch_records(tool, records)
+        if not branch_records:
+            errors.append(
+                f"[verified_contract_branch] {name} 的 adapterStrategy 未匹配任何"
+                "运行时已验证分支，或仍公开了应由 Tool 固定的分派参数"
+            )
+            continue
+        available = [
+            record
+            for record in branch_records
+            if not _contract_record_was_rejected(name, record, rejected)
+        ]
+        if not available:
+            # Runtime evidence has superseded these fixtures. The bounded smoke
+            # revision flow may select another independently grounded example.
+            continue
+        schema = tool.get("inputSchema", {})
+        properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        required = schema.get("required", []) if isinstance(schema, dict) else []
+        fitting = [
+            record
+            for record in available
+            if isinstance(properties, dict)
+            and isinstance(required, list)
+            and set(record["toolSmokeInput"]).issubset(properties)
+            and set(required).issubset(record["toolSmokeInput"])
+        ]
+        if not fitting:
+            fixture_keys = sorted(
+                {
+                    key
+                    for record in available
+                    for key in record["toolSmokeInput"]
+                }
+            )
+            errors.append(
+                f"[verified_contract_schema] {name} 的 inputSchema 无法承载已验证"
+                f"公开输入；契约字段={fixture_keys}, "
+                f"schema 字段={sorted(properties) if isinstance(properties, dict) else []}, "
+                f"required={sorted(required) if isinstance(required, list) else []}"
+            )
+            continue
+        smoke = tool.get("smokeTest", {})
+        smoke_input = smoke.get("input") if isinstance(smoke, dict) else None
+        expected = {
+            _canonical_smoke_input(record["toolSmokeInput"])
+            for record in fitting
+        }
+        if (
+            not smoke.get("enabled")
+            or not isinstance(smoke_input, dict)
+            or _canonical_smoke_input(smoke_input) not in expected
+        ):
+            errors.append(
+                f"[verified_contract_smoke] {name}.smokeTest 未使用匹配分支中"
+                "已在隔离容器执行成功的公开输入"
+            )
+    return errors
 
 
 def _record_rejected_candidate(
@@ -317,6 +546,7 @@ def _record_rejected_candidate(
     stage_rank = {
         "shape": 0,
         "structure": 1,
+        "contract": 2,
         "interface": 2,
         "smoke": 3,
         "smoke_provenance": 4,

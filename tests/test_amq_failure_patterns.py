@@ -37,3 +37,12 @@ def test_failure_classifier_preserves_unclassified_signal() -> None:
     assert classify_generation_failure("unexpected opaque failure") == [
         "unclassified"
     ]
+
+
+def test_generic_plan_failure_is_not_misclassified_as_submission_protocol() -> None:
+    assert classify_generation_failure("未能提交有效封装规划：接口质量门禁失败") == [
+        "unclassified"
+    ]
+    assert classify_generation_failure(
+        "Agent 在有限步骤内未调用 save_packaging_plan_json"
+    ) == ["agent_submission_protocol"]

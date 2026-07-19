@@ -889,9 +889,229 @@ def test_predict_contract():
     assert '"value": 0.5' in prompt
     assert "tests_ioeb/test_template_contract.py:4" in prompt
     assert "保持 toolSmokeInput 中的值不变" in prompt
+    context = _builder_implementation_context(_plan(ir), ir)
+    assert context["verifiedTemplateContract"]["runtimePassed"] is True
+    assert context["verifiedTemplateContract"]["records"][0][
+        "mainProcessInput"
+    ] == {"operation": "predict", "value": 0.5}
     assert "tests_ioeb/test_template_contract.py" in {
         item["path"] for item in relevance["overview"]["seedFiles"]
     }
+
+
+async def test_plan_store_deterministically_grounds_verified_contract_smoke(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "from core import predict\n\n"
+        "def main_process(operation: str, value: float) -> dict:\n"
+        "    if operation == 'predict':\n"
+        "        return predict(value)\n"
+        "    raise ValueError('unsupported')\n",
+        encoding="utf-8",
+    )
+    contract_dir = project / "tests_ioeb"
+    contract_dir.mkdir()
+    contract_file = contract_dir / "test_template_contract.py"
+    contract_file.write_text(
+        "from main import main_process\n\n"
+        "def test_predict_contract():\n"
+        "    assert main_process(operation='predict', value=0.5)['score'] == 0.5\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"] = [raw["services"][0]["tools"][0]]
+    tool = raw["services"][0]["tools"][0]
+    tool["sourceSymbols"] = ["main.main_process"]
+    tool["adapterStrategy"] = (
+        "Validate value, set operation='predict', and call main.main_process."
+    )
+    tool["smokeTest"] = {
+        "enabled": True,
+        "input": {"value": 999.0},
+        "evidence": ["main.py:4"],
+    }
+    store = PlanStore(
+        path=tmp_path / "plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        symbol_dispatch_branches={
+            "main.main_process": next(
+                symbol.dispatchBranches
+                for symbol in ir.symbols
+                if symbol.qualifiedName == "main.main_process"
+            )
+        },
+        require_independent_smoke_evidence=True,
+        smoke_evidence_root=project,
+        verified_contract_records=[
+            {
+                "dispatchParameter": "operation",
+                "dispatchValue": "predict",
+                "mainProcessInput": {"operation": "predict", "value": 0.5},
+                "toolSmokeInput": {"value": 0.5},
+                "evidence": ["tests_ioeb/test_template_contract.py:4"],
+            }
+        ],
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.tools[0]["smokeTest"] == {
+        "enabled": True,
+        "input": {"value": 0.5},
+        "evidence": ["tests_ioeb/test_template_contract.py:4"],
+    }
+    assert store.contract_smoke_grounded_tools == ["predict_risk"]
+    assert "verifiedContractSmoke=predict_risk" in result.output
+
+
+async def test_plan_store_never_regrounds_runtime_rejected_contract_smoke(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "from core import predict\n\n"
+        "def main_process(operation: str, value: float) -> dict:\n"
+        "    if operation == 'predict':\n"
+        "        return predict(value)\n"
+        "    raise ValueError('unsupported')\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"] = [raw["services"][0]["tools"][0]]
+    tool = raw["services"][0]["tools"][0]
+    tool["sourceSymbols"] = ["main.main_process"]
+    tool["adapterStrategy"] = (
+        "Validate value, set operation='predict', and call main.main_process."
+    )
+    tool["smokeTest"] = {
+        "enabled": True,
+        "input": {"value": 0.7},
+        "evidence": ["tests/test_core.py:4"],
+    }
+    rejected = {"value": 0.5}
+    store = PlanStore(
+        path=tmp_path / "plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        rejected_smoke_inputs={
+            "predict_risk": {_canonical_smoke_input(rejected)}
+        },
+        verified_contract_records=[
+            {
+                "dispatchParameter": "operation",
+                "dispatchValue": "predict",
+                "mainProcessInput": {"operation": "predict", **rejected},
+                "toolSmokeInput": rejected,
+                "evidence": ["tests_ioeb/test_template_contract.py:4"],
+            }
+        ],
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.tools[0]["smokeTest"]["input"] == {"value": 0.7}
+    assert store.contract_smoke_grounded_tools == []
+
+
+async def test_verified_contract_gate_rejects_schema_that_cannot_carry_fixture(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "from core import predict\n\n"
+        "def main_process(operation: str, value: float) -> dict:\n"
+        "    if operation == 'predict':\n"
+        "        return predict(value)\n"
+        "    raise ValueError('unsupported')\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"] = [raw["services"][0]["tools"][0]]
+    tool = raw["services"][0]["tools"][0]
+    tool["sourceSymbols"] = ["main.main_process"]
+    tool["adapterStrategy"] = (
+        "Validate score_value, set operation='predict', and call main.main_process."
+    )
+    tool["inputSchema"] = {
+        "type": "object",
+        "properties": {"score_value": {"type": "number"}},
+        "required": ["score_value"],
+    }
+    tool["smokeTest"] = {
+        "enabled": True,
+        "input": {"score_value": 0.5},
+        "evidence": ["tests/test_core.py:4"],
+    }
+    store = PlanStore(
+        path=tmp_path / "plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        verified_contract_records=[
+            {
+                "dispatchParameter": "operation",
+                "dispatchValue": "predict",
+                "mainProcessInput": {"operation": "predict", "value": 0.5},
+                "toolSmokeInput": {"value": 0.5},
+                "evidence": ["tests_ioeb/test_template_contract.py:4"],
+            }
+        ],
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert result.error
+    assert "已验证模板契约对齐门禁失败" in result.error
+    assert "[verified_contract_schema]" in result.error
+    assert "契约字段=['value']" in result.error
+    assert store.plan is None
+
+
+async def test_verified_contract_gate_rejects_bypassing_public_entrypoint(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"] = [raw["services"][0]["tools"][0]]
+    store = PlanStore(
+        path=tmp_path / "plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        verified_contract_records=[
+            {
+                "dispatchParameter": None,
+                "dispatchValue": None,
+                "mainProcessInput": {"value": 0.5},
+                "toolSmokeInput": {"value": 0.5},
+                "evidence": ["tests_ioeb/test_template_contract.py:4"],
+            }
+        ],
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert result.error
+    assert "[verified_contract_source]" in result.error
+    assert "不能绕过公共契约" in result.error
+    assert store.plan is None
 
 
 async def test_project_reader_corrects_artifact_prefixed_source_path(tmp_path):
