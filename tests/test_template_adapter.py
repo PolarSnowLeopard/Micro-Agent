@@ -257,6 +257,13 @@ def test_contract():
     assert not report.passed
     assert any("禁止导入: requests" in error for error in report.errors)
     assert any("必须是可审计的 JSON 字面量" in error for error in report.errors)
+    assert len(
+        [
+            error
+            for error in report.errors
+            if "必须是可审计的 JSON 字面量" in error
+        ]
+    ) == 1
 
 
 def test_template_contract_accepts_unittest_assertion_methods(
@@ -1014,6 +1021,11 @@ def main_process(value: float) -> float:
     )
     assert "canonical vocabulary" in empty_result_advice
     assert "禁止伪造返回键" in empty_result_advice
+    literal_advice = _template_runtime_repair_advice(
+        ["模板契约测试的 main_process 输入必须是可审计的 JSON 字面量"]
+    )
+    assert "位置参数和关键字值都必须直接写成" in literal_advice
+    assert "不能在测试中临时生成随机模型" in literal_advice
 
 
 async def test_patch_template_file_requires_one_exact_match(

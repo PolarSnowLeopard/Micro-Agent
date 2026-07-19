@@ -412,6 +412,17 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
 
     text = "\n".join(errors).lower()
     advice: list[str] = []
+    if "必须是可审计的 json 字面量" in text:
+        advice.append(
+            "契约输入不可静态提取：只重写 tests_ioeb/test_template_contract.py，"
+            "保留每个真实公开分支一个最小成功测试。每次 `main_process(...)` 的"
+            "位置参数和关键字值都必须直接写成 Constant/List/Tuple/Dict 组成的"
+            " JSON 字面量；禁止变量、pytest fixture、helper 返回值、`**kwargs`、"
+            "列表乘法、推导式或函数调用。若真实能力必须依赖文件或模型，应先把"
+            " main_process 改为接受可内联的 Base64/文本/结构化内容，或在缺少"
+            "真实运行资产时拒绝适配；不能在测试中临时生成随机模型、checkpoint"
+            "或服务端路径来绕过契约。"
+        )
     if any(
         marker in text
         for marker in (

@@ -590,6 +590,7 @@ def _validate_template_contract_test(
     executable_functions = _contract_executable_functions(tree)
     fixtures: list[dict[str, Any]] = []
     uncollected_calls = 0
+    invalid_literal_lines: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -632,10 +633,7 @@ def _validate_template_contract_test(
             except (ValueError, SyntaxError):
                 invalid_literal = True
         if invalid_literal:
-            errors.append(
-                "模板契约测试的 main_process 输入必须是可审计的 JSON 字面量，"
-                f"不能引用运行时变量或使用 **kwargs: line={node.lineno}"
-            )
+            invalid_literal_lines.append(node.lineno)
             continue
         unknown = sorted(set(fixture) - set(parameter_names))
         missing = sorted(required - set(fixture))
@@ -668,6 +666,13 @@ def _validate_template_contract_test(
             }
         )
     checks["contractUncollectedCallCount"] = uncollected_calls
+    if invalid_literal_lines:
+        errors.append(
+            "模板契约测试的 main_process 输入必须是可审计的 JSON 字面量，"
+            "不能引用 fixture/helper/运行时变量、表达式、推导式或使用 **kwargs；"
+            "相关调用行: "
+            + ", ".join(map(str, sorted(invalid_literal_lines)))
+        )
 
     if fixtures:
         checks["contractTestCallsMainProcess"] = True
