@@ -377,16 +377,21 @@ async def test_runtime_smoke_revision_preserves_reviewed_interface(tmp_path):
         known_files={file.path for file in ir.files},
         enforce_interface_quality=False,
     )
-    revised = plan.to_dict()
-    revised["services"][0]["tools"][0]["smokeTest"]["input"] = {"value": 0.7}
-
     result = await ReviseSmokeTests(store, plan).execute(
-        content=json.dumps(revised),
+        revisions=[
+            {
+                "toolName": plan.tool_names[0],
+                "input": {"value": 0.7},
+                "evidence": ["tests/test_core.py:4"],
+            }
+        ],
     )
 
     assert not result.error
     assert store.plan is not None
     assert store.plan.tools[0]["smokeTest"]["input"] == {"value": 0.7}
+    assert store.plan.tools[0]["smokeTest"]["evidence"] == ["tests/test_core.py:4"]
+    assert store.plan.tools[0]["description"] == plan.tools[0]["description"]
 
     rejected_store = PlanStore(
         path=tmp_path / "rejected_plan.json",
@@ -394,18 +399,57 @@ async def test_runtime_smoke_revision_preserves_reviewed_interface(tmp_path):
         known_files={file.path for file in ir.files},
         enforce_interface_quality=False,
     )
-    changed_interface = plan.to_dict()
-    changed_interface["services"][0]["tools"][0]["description"] += " Changed."
-    changed_interface["services"][0]["tools"][0]["smokeTest"]["input"] = {
-        "value": 0.9
-    }
     rejected = await ReviseSmokeTests(rejected_store, plan).execute(
-        content=json.dumps(changed_interface),
+        revisions=[
+            {
+                "toolName": "hallucinated_tool",
+                "input": {"value": 0.9},
+                "evidence": ["tests/test_core.py:4"],
+            }
+        ],
     )
 
     assert rejected.error
-    assert "只能改变 tools[*].smokeTest" in rejected.error
+    assert "未知 Tool" in rejected.error
     assert rejected_store.plan is None
+
+
+async def test_runtime_smoke_revision_rejects_noop_and_unknown_fields(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        enforce_interface_quality=False,
+    )
+    original = plan.tools[0]["smokeTest"]
+
+    noop = await ReviseSmokeTests(store, plan).execute(
+        revisions=[
+            {
+                "toolName": plan.tool_names[0],
+                "input": original["input"],
+                "evidence": original["evidence"],
+            }
+        ],
+    )
+    assert noop.error
+    assert "完全相同" in noop.error
+
+    unknown_field = await ReviseSmokeTests(store, plan).execute(
+        revisions=[
+            {
+                "toolName": plan.tool_names[0],
+                "input": {"value": 0.9},
+                "evidence": ["tests/test_core.py:4"],
+                "description": "must not be accepted",
+            }
+        ],
+    )
+    assert unknown_field.error
+    assert "不允许字段" in unknown_field.error
 
 
 def test_bage_retains_budgeted_inventory_without_promoting_unrelated_files(tmp_path):
@@ -2679,7 +2723,7 @@ def test_repair_prompt_embeds_bounded_mutable_snapshot(tmp_path):
         allow_smoke_revision=True,
     )
     assert "revise_smoke_tests" in smoke_prompt
-    assert "只修改对应 tools[*].smokeTest.input/evidence" in smoke_prompt
+    assert "toolName/input/evidence 局部修订" in smoke_prompt
 
     forced_prompt = _repair_prompt(
         VerificationReport(

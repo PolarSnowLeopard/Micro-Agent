@@ -368,68 +368,125 @@ class ReviseSmokeTests(Tool):
 
     name = "revise_smoke_tests"
     description = (
-        "提交完整严格 JSON 规划，但只允许修改现有 Tool 的 smokeTest。"
+        "只提交失败 Tool 的 smokeTest.input/evidence 局部修订；"
+        "系统会将其确定性合并到已经审核通过的完整规划。"
         "用于容器日志证明原 smoke 输入与真实入口不兼容、且仓库中存在另一组可追溯可执行输入时；"
         "服务边界、工具名、Schema、adapterStrategy 与其他字段必须保持不变。"
     )
-    parameters = SavePackagingPlanJson.parameters
+    parameters = {
+        "type": "object",
+        "properties": {
+            "revisions": {
+                "type": "array",
+                "minItems": 1,
+                "description": "仅列出需要更换 smoke fixture 的失败工具",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "toolName": {
+                            "type": "string",
+                            "description": "已审核规划中现有的精确 Tool 名称",
+                        },
+                        "input": {
+                            "type": "object",
+                            "description": "符合该 Tool inputSchema 的完整可执行输入",
+                        },
+                        "evidence": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string"},
+                            "description": "新输入来自真实测试/doctest/示例的 file:line 证据",
+                        },
+                    },
+                    "required": ["toolName", "input", "evidence"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["revisions"],
+        "additionalProperties": False,
+    }
 
     def __init__(self, store: PlanStore, current_plan: PackagingPlan) -> None:
         self.store = store
         self.current_plan = current_plan
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        content = str(kwargs.get("content", "")).strip()
-        try:
-            raw = json.loads(content)
-        except json.JSONDecodeError as exc:
-            return ToolResult(
-                error=(
-                    f"完整规划不是严格 JSON: line={exc.lineno}, "
-                    f"column={exc.colno}, {exc.msg}"
+        revisions = kwargs.get("revisions")
+        if not isinstance(revisions, list) or not revisions:
+            return ToolResult(error="revisions 必须包含至少一个失败 Tool 的局部 smoke 修订")
+
+        raw = self.current_plan.to_dict()
+        tools_by_name = {
+            str(tool.get("name")): tool
+            for service in raw.get("services", [])
+            for tool in service.get("tools", [])
+        }
+        seen: set[str] = set()
+        changed: list[str] = []
+        for index, revision in enumerate(revisions):
+            if not isinstance(revision, dict):
+                return ToolResult(error=f"revisions[{index}] 必须是 object")
+            unknown_fields = sorted(
+                set(revision) - {"toolName", "input", "evidence"}
+            )
+            if unknown_fields:
+                return ToolResult(
+                    error=(
+                        f"revisions[{index}] 包含不允许字段: {unknown_fields}；"
+                        "只能提交 toolName/input/evidence"
+                    )
                 )
-            )
-        if not isinstance(raw, dict):
-            return ToolResult(error="完整规划 JSON 顶层必须是 object")
-        _canonicalize_nonsemantic_shape(raw)
-        _drop_unknown_exclusions(raw, self.store.known_symbols)
-        try:
-            candidate = PackagingPlan.validate(
-                raw,
-                known_symbols=self.store.known_symbols,
-                known_files=self.store.known_files,
-                symbol_required_parameters=self.store.symbol_required_parameters,
-                symbol_calls=self.store.symbol_calls,
-                symbol_is_generator=self.store.symbol_is_generator,
-                candidate_symbols=self.store.candidate_symbols,
-            )
-        except PlanValidationError as exc:
-            return ToolResult(
-                error="smoke 修订后的完整规划无效:\n- " + "\n- ".join(exc.errors)
-            )
-        if _without_smoke_tests(candidate) != _without_smoke_tests(self.current_plan):
-            return ToolResult(
-                error=(
-                    "运行时 smoke 修订只能改变 tools[*].smokeTest；"
-                    "服务、Tool、Schema、adapterStrategy、证据与其他规划字段必须保持原样"
+            tool_name = str(revision.get("toolName", "")).strip()
+            if tool_name not in tools_by_name:
+                return ToolResult(
+                    error=(
+                        f"未知 Tool: {tool_name or '<empty>'}；"
+                        f"只能修订: {sorted(tools_by_name)}"
+                    )
                 )
+            if tool_name in seen:
+                return ToolResult(error=f"Tool {tool_name} 在 revisions 中重复")
+            seen.add(tool_name)
+            smoke_input = revision.get("input")
+            evidence = revision.get("evidence")
+            if not isinstance(smoke_input, dict):
+                return ToolResult(error=f"Tool {tool_name} 的 input 必须是 object")
+            if (
+                not isinstance(evidence, list)
+                or not evidence
+                or any(not isinstance(item, str) or not item.strip() for item in evidence)
+            ):
+                return ToolResult(
+                    error=f"Tool {tool_name} 的 evidence 必须是非空字符串数组"
+                )
+            tool = tools_by_name[tool_name]
+            previous_smoke = tool.get("smokeTest")
+            if not isinstance(previous_smoke, dict):
+                return ToolResult(error=f"Tool {tool_name} 没有可修订的 smokeTest")
+            updated_smoke = dict(previous_smoke)
+            updated_smoke["enabled"] = True
+            updated_smoke["input"] = json.loads(
+                json.dumps(smoke_input, ensure_ascii=False)
+            )
+            updated_smoke["evidence"] = [item.strip() for item in evidence]
+            if updated_smoke != previous_smoke:
+                changed.append(tool_name)
+            tool["smokeTest"] = updated_smoke
+
+        if not changed:
+            return ToolResult(
+                error="提交的 smoke fixture 与当前规划完全相同；请基于运行错误更换输入和证据"
             )
         result = await SavePackagingPlan(self.store).execute(**raw)
         if result.error:
             return result
         return ToolResult(
             output=(
-                "smokeTest 已通过全部规划门禁并写回；外层将用新输入重新执行静态与容器验收"
+                f"已确定性更新 {', '.join(changed)} 的 smokeTest.input/evidence，"
+                "并通过全部规划门禁；外层将用新输入重新执行静态与容器验收"
             )
         )
-
-
-def _without_smoke_tests(plan: PackagingPlan) -> dict[str, Any]:
-    data = plan.to_dict()
-    for service in data.get("services", []):
-        for tool in service.get("tools", []):
-            tool.pop("smokeTest", None)
-    return data
 
 
 def _augment_unknown_symbol_errors(

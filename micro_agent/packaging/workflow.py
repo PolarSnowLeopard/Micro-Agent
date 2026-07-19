@@ -1047,8 +1047,8 @@ def _repair_prompt(
         "本轮报告属于 smoke_test。先判断是 adapters.py 转换错误，还是原 smoke 输入本身不能"
         "通过当前已审核入口。如果 adapter 可修则照常 patch；只有容器错误明确证明原输入无效，"
         "并且你能从真实测试/doctest/示例找到另一组完整可执行输入时，才调用 revise_smoke_tests。"
-        "该工具必须提交当前完整规划 JSON，只修改对应 tools[*].smokeTest.input/evidence，"
-        "不得改变服务、Tool、Schema、adapterStrategy 或普通 evidence；证据必须精确到 file:line。"
+        "该工具只接收失败 Tool 的 toolName/input/evidence 局部修订，系统会确定性合并；"
+        "不要重写完整规划。证据必须精确到 file:line。"
         "调用后本轮结束，外层会用新 fixture 重跑全部验收。"
         if allow_smoke_revision
         else ""
@@ -1056,8 +1056,8 @@ def _repair_prompt(
     if force_smoke_revision:
         smoke_revision = (
             "此前 adapter 修复未改变同一组 smoke 错误，已确定切换到 fixture 修订阶段。"
-            "本轮不得调用 patch/write/verify；必须提交当前完整规划，只修改失败工具的 "
-            "smokeTest.input/evidence，并调用 revise_smoke_tests。"
+            "本轮不得调用 patch/write/verify；必须通过 revisions 只提交失败工具的 "
+            "toolName/input/evidence 局部修订，并调用 revise_smoke_tests；不要重写完整规划。"
         )
     artifact_scope = (
         ""
