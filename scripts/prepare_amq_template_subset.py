@@ -29,15 +29,15 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from micro_agent.packaging.analyzer import RepositoryAnalyzer
-from micro_agent.packaging.template_adapter import (
+from micro_agent.packaging.analyzer import RepositoryAnalyzer  # noqa: E402
+from micro_agent.packaging.template_adapter import (  # noqa: E402
     TemplateValidationReport,
     build_template_adapter_agent,
     template_adapter_prompt,
     validate_algorithm_template,
     verify_template_contract_runtime,
 )
-from scripts.run_amq_agentic_generation import prepare_source
+from scripts.run_amq_agentic_generation import prepare_source  # noqa: E402
 
 
 EXPECTED_MINI30_SIZE = 30
@@ -297,28 +297,16 @@ def _candidate_requires_replan(
     main_path = project / "main.py"
     if not main_path.is_file():
         return False
-    source = main_path.read_text(encoding="utf-8", errors="replace")
-    fixtures = report.checks.get("contractFixtures", [])
     operation_counts = report.checks.get("contractOperationCounts", {})
     return (
-        len(report.errors) >= 12
-        or len(fixtures) > 30
-        or any(int(count) > 8 for count in operation_counts.values())
+        any(int(count) > 8 for count in operation_counts.values())
         or any(
             marker in error
             for error in report.errors
-            for marker in ("显式参数过多", "*args 或 **kwargs")
-        )
-        or (
-            len(source) > 20_000
-            and any(
-                marker in error
-                for error in report.errors
-                for marker in (
-                    "动态执行用户文本",
-                    "显式参数过多",
-                    "*args 或 **kwargs",
-                )
+            for marker in (
+                "动态执行用户文本",
+                "显式参数过多",
+                "*args 或 **kwargs",
             )
         )
     )

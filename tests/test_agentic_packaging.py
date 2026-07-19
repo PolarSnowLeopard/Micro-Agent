@@ -838,11 +838,16 @@ def main_process(operation: str, value: float) -> dict[str, float]:
     contract_tests = project / "tests_ioeb"
     contract_tests.mkdir()
     (contract_tests / "test_template_contract.py").write_text(
-        '''from main import main_process
+        '''import pytest
+from main import main_process
 
 def test_predict_contract():
     result = main_process(operation="predict", value=0.5)
     assert result["score"] == 0.5
+
+def test_invalid_contract():
+    with pytest.raises(ValueError):
+        main_process(operation="invalid", value=0.5)
 ''',
         encoding="utf-8",
     )
@@ -854,12 +859,19 @@ def test_predict_contract():
                     "checks": {
                         "contractFixtures": [
                             {
-                                "line": 4,
+                                "line": 5,
                                 "input": {
                                     "operation": "predict",
                                     "value": 0.5,
                                 },
-                            }
+                            },
+                            {
+                                "line": 10,
+                                "input": {
+                                    "operation": "invalid",
+                                    "value": 0.5,
+                                },
+                            },
                         ]
                     },
                 },
@@ -887,13 +899,15 @@ def test_predict_contract():
     assert '"dispatchValue": "predict"' in prompt
     assert '"toolSmokeInput": {' in prompt
     assert '"value": 0.5' in prompt
-    assert "tests_ioeb/test_template_contract.py:4" in prompt
+    assert "tests_ioeb/test_template_contract.py:5" in prompt
     assert "保持 toolSmokeInput 中的值不变" in prompt
     context = _builder_implementation_context(_plan(ir), ir)
     assert context["verifiedTemplateContract"]["runtimePassed"] is True
     assert context["verifiedTemplateContract"]["records"][0][
         "mainProcessInput"
     ] == {"operation": "predict", "value": 0.5}
+    assert len(context["verifiedTemplateContract"]["records"]) == 1
+    assert context["verifiedTemplateContract"]["excludedErrorFixtureCount"] == 1
     assert "tests_ioeb/test_template_contract.py" in {
         item["path"] for item in relevance["overview"]["seedFiles"]
     }

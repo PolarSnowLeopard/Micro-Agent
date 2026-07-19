@@ -98,7 +98,8 @@ def main_process(mode: str, value: float) -> dict[str, float]:
     tests.mkdir()
     contract = tests / "test_template_contract.py"
     contract.write_text(
-        '''from main import main_process
+        '''import pytest
+from main import main_process
 
 def test_double_contract():
     result = main_process(mode="double", value=2.0)
@@ -107,6 +108,10 @@ def test_double_contract():
 def test_triple_contract():
     result = main_process(mode="triple", value=2.0)
     assert result["result"] == 6.0
+
+def test_invalid_mode_contract():
+    with pytest.raises(ValueError):
+        main_process(mode="invalid", value=2.0)
 ''',
         encoding="utf-8",
     )
@@ -116,10 +121,16 @@ def test_triple_contract():
     assert report.passed, report.to_json()
     assert report.checks["contractTestCallsMainProcess"] is True
     assert report.checks["contractBranchCoverage"] is True
-    assert [item["input"]["mode"] for item in report.checks["contractFixtures"]] == [
-        "double",
-        "triple",
+    assert [
+        (item["input"]["mode"], item["expectedOutcome"])
+        for item in report.checks["contractFixtures"]
+    ] == [
+        ("double", "success"),
+        ("triple", "success"),
+        ("invalid", "error"),
     ]
+    assert report.checks["contractSuccessFixtureCount"] == 2
+    assert report.checks["contractOperationCounts"] == {"mode": 2}
 
     contract.write_text(
         '''from main import main_process
@@ -221,6 +232,59 @@ class ContractTest(unittest.TestCase):
 
     assert report.passed, report.to_json()
     assert report.checks["contractTestAssertions"] is True
+
+
+def test_error_fixture_does_not_satisfy_success_output_assertion(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n"
+        "    if value < 0:\n"
+        "        raise ValueError('negative')\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        value: Numeric value.
+
+    Returns:
+        Computed value.
+    """
+    return {"value": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''import unittest
+from main import main_process
+
+class TestContract(unittest.TestCase):
+    def test_success_without_output_assertion(self):
+        main_process(value=1.0)
+
+    def test_expected_error(self):
+        with self.assertRaises(ValueError):
+            main_process(value=-1.0)
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not report.passed
+    assert report.checks["contractSuccessFixtureCount"] == 1
+    assert any(
+        "每个成功模板契约 fixture" in error
+        for error in report.errors
+    )
 
 
 def test_template_validator_rejects_dynamic_execution_in_reachable_helper(
@@ -360,6 +424,50 @@ def main_process(operation: str, value: int) -> dict[str, int]:
     assert report.checks["contractOperationCounts"] == {"operation": 9}
     assert any("operation 过多" in error for error in report.errors)
     assert _candidate_requires_replan(project, report)
+
+
+def test_fixture_budget_error_preserves_repairable_complete_candidate(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: int) -> int:\n    return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: int) -> dict[str, int]:
+    """Run the repository operation.
+
+    Args:
+        value: Integer input.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    contract_cases = "\n\n".join(
+        f'''def test_contract_{index}():
+    result = main_process(value={index})
+    assert result["result"] == {index}'''
+        for index in range(31)
+    )
+    (tests / "test_template_contract.py").write_text(
+        "from main import main_process\n\n" + contract_cases + "\n",
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not report.passed
+    assert report.checks["contractFixtureBudget"] is False
+    assert any("fixture 过多" in error for error in report.errors)
+    assert not _candidate_requires_replan(project, report)
 
 
 def test_contract_runtime_rejects_non_reproducible_requirements(

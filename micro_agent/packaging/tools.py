@@ -382,7 +382,6 @@ def _ground_plan_smoke_from_verified_contract(
             candidates: list[dict[str, Any]] = []
             for record in _contract_branch_records(tool, records):
                 smoke_input = record["toolSmokeInput"]
-                evidence = record["evidence"]
                 if (
                     not set(smoke_input).issubset(properties)
                     or not set(required).issubset(smoke_input)

@@ -40,8 +40,10 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
 9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process，
-   使用完整 JSON 字面量输入调用每个公开分支，每个 fixture 至少用一个 assert 检查领域输出。
+   使用完整 JSON 字面量输入调用每个公开分支，每个成功 fixture 至少用一个 assert 检查领域输出。
    优先复用原仓库测试/doctest/示例中的输入，不得只检查 callable、不得联网、不得启动子进程。
+   可选的错误边界 fixture 必须放在 pytest.raises/相关 assertRaises 上下文中；它们不会成为
+   服务 smoke 输入，也不能代替任何公开分支的成功 fixture。
 10. 写完 main.py、契约测试与 requirements.txt 后必须调用 verify_template；该调用会结束本轮，
     外层流程会把确定性错误反馈给下一轮修复。
 11. 禁止 eval、exec、compile 或其他动态执行用户文本的方式。将宽泛意图抽象为少量明确的
@@ -112,6 +114,7 @@ def validate_algorithm_template(
         "contractFixtureBudget": False,
         "contractOperationCounts": {},
         "contractFixtures": [],
+        "contractSuccessFixtureCount": 0,
     }
     main_path = root / "main.py"
     if not main_path.is_file():
@@ -401,6 +404,7 @@ def _validate_template_contract_test(
         "contractFixtureBudget": False,
         "contractOperationCounts": {},
         "contractFixtures": [],
+        "contractSuccessFixtureCount": 0,
     }
     relative = Path("tests_ioeb") / "test_template_contract.py"
     path = root / relative
@@ -480,6 +484,11 @@ def _validate_template_contract_test(
         if default is None
     )
 
+    parent_by_node = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
     fixtures: list[dict[str, Any]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -543,6 +552,10 @@ def _validate_template_contract_test(
             {
                 "line": node.lineno,
                 "input": fixture,
+                "expectedOutcome": _contract_call_expected_outcome(
+                    node,
+                    parent_by_node,
+                ),
             }
         )
 
@@ -553,6 +566,16 @@ def _validate_template_contract_test(
         errors.append(
             "模板契约测试必须至少一次直接调用从 main 导入的 main_process，"
             "并使用完整 JSON 字面量输入"
+        )
+    success_fixtures = [
+        fixture
+        for fixture in fixtures
+        if fixture["expectedOutcome"] == "success"
+    ]
+    checks["contractSuccessFixtureCount"] = len(success_fixtures)
+    if fixtures and not success_fixtures:
+        errors.append(
+            "模板契约测试只有预期失败输入；至少需要一个可作为服务 smoke 的成功 fixture"
         )
     if len(fixtures) <= 30:
         checks["contractFixtureBudget"] = True
@@ -569,15 +592,19 @@ def _validate_template_contract_test(
             and isinstance(node.func, ast.Attribute)
             and node.func.attr.startswith("assert")
             and len(node.func.attr) > len("assert")
+            and node.func.attr
+            not in {"assertRaises", "assertRaisesRegex"}
         )
         for node in ast.walk(tree)
     )
-    if fixtures and assertion_count >= len(fixtures):
+    error_fixture_count = len(fixtures) - len(success_fixtures)
+    if fixtures and assertion_count + error_fixture_count >= len(fixtures):
         checks["contractTestAssertions"] = True
     else:
         errors.append(
-            "每个模板契约 fixture 至少需要一个 assert 验证领域输出；"
-            f"当前 calls={len(fixtures)}, asserts={assertion_count}"
+            "每个成功模板契约 fixture 至少需要一个 assert 验证领域输出；"
+            f"当前 success_calls={len(success_fixtures)}, "
+            f"asserts={assertion_count}"
         )
 
     dispatch_cases = _literal_dispatch_cases(main_function)
@@ -596,6 +623,7 @@ def _validate_template_contract_test(
                 sort_keys=True,
             )
             for fixture in fixtures
+            if fixture["expectedOutcome"] == "success"
             if selector in fixture["input"]
         }
         if serialized_values:
@@ -618,7 +646,7 @@ def _validate_template_contract_test(
     for selector, values in dispatch_cases.items():
         observed = {
             fixture["input"].get(selector)
-            for fixture in fixtures
+            for fixture in success_fixtures
             if selector in fixture["input"]
         }
         for value in values:
@@ -632,6 +660,82 @@ def _validate_template_contract_test(
     else:
         checks["contractBranchCoverage"] = True
     return errors, checks
+
+
+def _contract_call_expected_outcome(
+    call: ast.Call,
+    parent_by_node: dict[ast.AST, ast.AST],
+) -> str:
+    current: ast.AST | None = call
+    while current is not None:
+        parent = parent_by_node.get(current)
+        if isinstance(parent, (ast.With, ast.AsyncWith)):
+            for item in parent.items:
+                context = item.context_expr
+                if (
+                    isinstance(context, ast.Call)
+                    and isinstance(context.func, ast.Attribute)
+                    and context.func.attr in {
+                        "raises",
+                        "assertRaises",
+                        "assertRaisesRegex",
+                    }
+                ):
+                    return "error"
+        if isinstance(parent, ast.Try) and current in parent.body and parent.handlers:
+            return "error"
+        current = parent
+    return "success"
+
+
+def template_contract_fixture_outcomes(
+    path: str | Path,
+) -> dict[int, str]:
+    """Recover success/error labels for metadata written before labels existed."""
+
+    contract_path = Path(path)
+    try:
+        tree = ast.parse(
+            contract_path.read_text(encoding="utf-8", errors="replace"),
+            filename=str(contract_path),
+        )
+    except (OSError, SyntaxError):
+        return {}
+    direct_names: set[str] = set()
+    module_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "main":
+                    module_names.add(alias.asname or "main")
+        elif isinstance(node, ast.ImportFrom) and node.module == "main":
+            direct_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "main_process"
+            )
+    parent_by_node = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    outcomes: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        is_direct = isinstance(node.func, ast.Name) and node.func.id in direct_names
+        is_module = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "main_process"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in module_names
+        )
+        if is_direct or is_module:
+            outcomes[node.lineno] = _contract_call_expected_outcome(
+                node,
+                parent_by_node,
+            )
+    return outcomes
 
 
 def _literal_dispatch_cases(

@@ -20,6 +20,9 @@ from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.models import PackagingPlan
 from micro_agent.packaging.relevance import build_relevance_evidence
 from micro_agent.packaging.scaffold import prepare_artifact
+from micro_agent.packaging.template_adapter import (
+    template_contract_fixture_outcomes,
+)
 from micro_agent.packaging.tools import (
     InspectRepository,
     PatchArtifactFile,
@@ -1054,6 +1057,10 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
                     dispatch_values.append(candidate)
 
     records: list[dict[str, Any]] = []
+    error_fixture_count = 0
+    fixture_outcomes = template_contract_fixture_outcomes(
+        Path(ir.root) / "tests_ioeb" / "test_template_contract.py"
+    )
     if runtime_passed:
         for fixture in fixtures[:30]:
             if not isinstance(fixture, dict) or not isinstance(
@@ -1061,10 +1068,16 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
                 dict,
             ):
                 continue
+            line = fixture.get("line")
+            expected_outcome = fixture.get("expectedOutcome")
+            if not isinstance(expected_outcome, str) and isinstance(line, int):
+                expected_outcome = fixture_outcomes.get(line)
+            if expected_outcome == "error":
+                error_fixture_count += 1
+                continue
             main_input = json.loads(
                 json.dumps(fixture["input"], ensure_ascii=False)
             )
-            line = fixture.get("line")
             evidence = (
                 f"tests_ioeb/test_template_contract.py:{line}"
                 if isinstance(line, int) and line > 0
@@ -1103,6 +1116,7 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
         "executionMode": runtime_checks.get("executionMode"),
         "networkDuringTest": runtime_checks.get("networkDuringTest"),
         "records": records,
+        "excludedErrorFixtureCount": error_fixture_count,
         "warnings": runtime.get("warnings", []) if isinstance(runtime, dict) else [],
         "reason": (
             "verified runtime contract fixtures"
