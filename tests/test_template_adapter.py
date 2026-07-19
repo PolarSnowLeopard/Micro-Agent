@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from micro_agent.packaging.template_adapter import validate_algorithm_template
+from micro_agent.packaging.analyzer import RepositoryAnalyzer
+from micro_agent.packaging.template_adapter import (
+    build_template_adapter_agent,
+    validate_algorithm_template,
+)
 from scripts.prepare_amq_template_subset import (
     _is_l0,
     ensure_output_outside_source_repo,
@@ -124,6 +128,39 @@ def main_process(value: float) -> float:
 
     assert report.passed, report.to_json()
     assert report.checks["resolvableRepositoryImports"] is True
+
+
+def test_template_repair_agent_uses_candidate_context_instead_of_rescanning(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n    return value\n",
+        encoding="utf-8",
+    )
+    _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> float:
+    """Run the repository function.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Output value.
+    """
+    return run(value)
+''',
+    )
+    ir = RepositoryAnalyzer().analyze(tmp_path)
+
+    agent = build_template_adapter_agent(tmp_path, ir, repair=True)
+
+    assert agent.tools.get("inspect_repository") is None
+    assert agent.tools.get("read_project_file").max_reads == 4
+    assert agent.max_steps == 16
+    assert "当前 main.py" in agent.system_prompt
 
 
 def test_template_validator_rejects_stdlib_only_facade(tmp_path: Path) -> None:

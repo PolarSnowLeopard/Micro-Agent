@@ -502,10 +502,16 @@ class BudgetedReadProjectFile(ReadProjectFile):
         super().__init__(project_dir, max_reads=max_reads)
 
 
-def build_template_adapter_agent(project_dir: Path, ir: RepositoryIR) -> Agent:
+def build_template_adapter_agent(
+    project_dir: Path,
+    ir: RepositoryIR,
+    *,
+    repair: bool = False,
+) -> Agent:
     tools = ToolRegistry()
-    tools.register(BudgetedInspectRepository(ir))
-    tools.register(BudgetedReadProjectFile(project_dir))
+    if not repair:
+        tools.register(BudgetedInspectRepository(ir))
+    tools.register(BudgetedReadProjectFile(project_dir, max_reads=4 if repair else 12))
     tools.register(WriteTemplateFile(project_dir))
     tools.register(VerifyTemplate(project_dir))
     tools.register(Terminate())
@@ -513,8 +519,17 @@ def build_template_adapter_agent(project_dir: Path, ir: RepositoryIR) -> Agent:
         name="ioeb_template_adapter",
         llm=LLM(config.get_llm("reasoning")),
         tools=tools,
-        system_prompt=TEMPLATE_ADAPTER_SYSTEM_PROMPT,
-        max_steps=24,
+        system_prompt=(
+            TEMPLATE_ADAPTER_SYSTEM_PROMPT
+            + (
+                "\n这是已有模板候选的定向修复轮次。当前 main.py 和确定性错误已在请求中完整提供；"
+                "禁止重新调用 inspect_repository。只读取错误指向的真实源码模块，保留候选中"
+                "已通过的部分，随后必须覆盖写入修复后的完整 main.py 并调用 verify_template。"
+                if repair
+                else ""
+            )
+        ),
+        max_steps=16 if repair else 24,
         max_observe=50_000,
         terminal_tools={"verify_template", "terminate"},
     )
