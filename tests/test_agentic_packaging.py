@@ -455,6 +455,41 @@ async def test_runtime_smoke_revision_rejects_noop_and_unknown_fields(tmp_path):
     assert "不允许字段" in unknown_field.error
 
 
+async def test_runtime_smoke_revision_keeps_valid_subset_when_peer_is_invalid(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    store = PlanStore(
+        path=tmp_path / "packaging_plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        enforce_interface_quality=False,
+    )
+
+    result = await ReviseSmokeTests(store, plan).execute(
+        revisions=[
+            {
+                "toolName": plan.tool_names[0],
+                "input": {"value": 0.7},
+                "evidence": ["tests/test_core.py:4"],
+            },
+            {
+                "toolName": plan.tool_names[1],
+                "input": {"unknown": 0.1},
+                "evidence": ["missing_fixture.py:1"],
+            },
+        ],
+    )
+
+    assert not result.error
+    assert "其余修订未应用" in result.output
+    assert store.plan is not None
+    assert store.plan.tools[0]["smokeTest"]["input"] == {"value": 0.7}
+    assert store.plan.tools[1]["smokeTest"] == plan.tools[1]["smokeTest"]
+
+
 def test_smoke_fixture_is_frozen_only_with_exact_independent_provenance():
     generic = [
         "[smoke_evidence_reference] predict.smokeTest.evidence 只引用了生成的 main.py"

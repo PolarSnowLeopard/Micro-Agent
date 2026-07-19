@@ -8,7 +8,7 @@ import io
 import json
 import re
 import tokenize
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -413,14 +413,14 @@ class ReviseSmokeTests(Tool):
         if not isinstance(revisions, list) or not revisions:
             return ToolResult(error="revisions 必须包含至少一个失败 Tool 的局部 smoke 修订")
 
-        raw = self.current_plan.to_dict()
+        current_raw = self.current_plan.to_dict()
         tools_by_name = {
             str(tool.get("name")): tool
-            for service in raw.get("services", [])
+            for service in current_raw.get("services", [])
             for tool in service.get("tools", [])
         }
         seen: set[str] = set()
-        changed: list[str] = []
+        prepared: list[tuple[str, dict[str, Any]]] = []
         for index, revision in enumerate(revisions):
             if not isinstance(revision, dict):
                 return ToolResult(error=f"revisions[{index}] 必须是 object")
@@ -457,31 +457,102 @@ class ReviseSmokeTests(Tool):
                 return ToolResult(
                     error=f"Tool {tool_name} 的 evidence 必须是非空字符串数组"
                 )
-            tool = tools_by_name[tool_name]
-            previous_smoke = tool.get("smokeTest")
-            if not isinstance(previous_smoke, dict):
+            if not isinstance(tools_by_name[tool_name].get("smokeTest"), dict):
                 return ToolResult(error=f"Tool {tool_name} 没有可修订的 smokeTest")
-            updated_smoke = dict(previous_smoke)
-            updated_smoke["enabled"] = True
-            updated_smoke["input"] = json.loads(
-                json.dumps(smoke_input, ensure_ascii=False)
+            prepared.append(
+                (
+                    tool_name,
+                    {
+                        "enabled": True,
+                        "input": json.loads(
+                            json.dumps(smoke_input, ensure_ascii=False)
+                        ),
+                        "evidence": [item.strip() for item in evidence],
+                    },
+                )
             )
-            updated_smoke["evidence"] = [item.strip() for item in evidence]
-            if updated_smoke != previous_smoke:
-                changed.append(tool_name)
-            tool["smokeTest"] = updated_smoke
 
-        if not changed:
-            return ToolResult(
-                error="提交的 smoke fixture 与当前规划完全相同；请基于运行错误更换输入和证据"
+        accepted_plan = self.current_plan
+        accepted_names: list[str] = []
+        rejected: list[str] = []
+        accepted_quality: InterfaceQualityReport | None = None
+        for index, (tool_name, smoke_update) in enumerate(prepared):
+            candidate_raw = accepted_plan.to_dict()
+            candidate_tool = next(
+                tool
+                for service in candidate_raw.get("services", [])
+                for tool in service.get("tools", [])
+                if str(tool.get("name")) == tool_name
             )
-        result = await SavePackagingPlan(self.store).execute(**raw)
-        if result.error:
-            return result
+            previous_smoke = candidate_tool["smokeTest"]
+            updated_smoke = dict(previous_smoke)
+            updated_smoke.update(smoke_update)
+            if updated_smoke == previous_smoke:
+                rejected.append(
+                    f"{tool_name}: fixture 与当前规划完全相同"
+                )
+                continue
+            candidate_tool["smokeTest"] = updated_smoke
+            check_path = self.store.path.with_name(
+                f".{self.store.path.name}.smoke-{index}.tmp"
+            )
+            check_store = replace(
+                self.store,
+                path=check_path,
+                plan=None,
+                last_candidate=None,
+                last_errors=None,
+                best_candidate=None,
+                best_errors=None,
+                best_score=None,
+                interface_quality=None,
+            )
+            try:
+                result = await SavePackagingPlan(check_store).execute(
+                    **candidate_raw
+                )
+            finally:
+                check_path.unlink(missing_ok=True)
+            if result.error or check_store.plan is None:
+                rejected.append(
+                    f"{tool_name}: {result.error or '未生成有效规划'}"
+                )
+                continue
+            accepted_plan = check_store.plan
+            accepted_quality = check_store.interface_quality
+            accepted_names.append(tool_name)
+
+        if not accepted_names:
+            return ToolResult(
+                error=(
+                    "没有 smoke fixture 通过规划门禁:\n- "
+                    + "\n- ".join(rejected)
+                )
+            )
+
+        self.store.path.parent.mkdir(parents=True, exist_ok=True)
+        self.store.path.write_text(
+            accepted_plan.to_json() + "\n",
+            encoding="utf-8",
+        )
+        self.store.plan = accepted_plan
+        self.store.last_candidate = accepted_plan.to_dict()
+        self.store.last_errors = None
+        self.store.best_candidate = accepted_plan.to_dict()
+        self.store.best_errors = None
+        self.store.best_score = (5, 0)
+        self.store.interface_quality = accepted_quality
+        rejected_note = (
+            "；其余修订未应用: "
+            + " | ".join(item[:500] for item in rejected)
+            if rejected
+            else ""
+        )
         return ToolResult(
             output=(
-                f"已确定性更新 {', '.join(changed)} 的 smokeTest.input/evidence，"
+                f"已确定性更新 {', '.join(accepted_names)} 的 smokeTest.input/evidence，"
                 "并通过全部规划门禁；外层将用新输入重新执行静态与容器验收"
+                + rejected_note
             )
         )
 
