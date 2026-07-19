@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from micro_agent.packaging import template_adapter
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.template_adapter import (
+    WriteTemplateFile,
+    _runtime_requirement_errors,
     build_template_adapter_agent,
     validate_algorithm_template,
+    verify_template_contract_runtime,
 )
 from scripts.prepare_amq_template_subset import (
     _is_l0,
@@ -54,6 +59,214 @@ def main_process(value: float) -> dict[str, float]:
     assert report.passed
     assert report.checks["repositoryCallRoots"] == ["predict"]
     assert report.checks["reachableLocalFunctions"] == ["_predict", "main_process"]
+
+
+def test_template_contract_requires_json_fixtures_for_every_dispatch_branch(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float, factor: float) -> float:\n"
+        "    return value * factor\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(mode: str, value: float) -> dict[str, float]:
+    """Run a selected repository capability.
+
+    Args:
+        mode: Either double or triple.
+        value: Input value.
+
+    Returns:
+        Computed result.
+    """
+    if mode == "double":
+        result = run(value, 2)
+    elif mode == "triple":
+        result = run(value, 3)
+    else:
+        raise ValueError("unsupported mode")
+    return {"result": result}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    contract = tests / "test_template_contract.py"
+    contract.write_text(
+        '''from main import main_process
+
+def test_double_contract():
+    result = main_process(mode="double", value=2.0)
+    assert result["result"] == 4.0
+
+def test_triple_contract():
+    result = main_process(mode="triple", value=2.0)
+    assert result["result"] == 6.0
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert report.passed, report.to_json()
+    assert report.checks["contractTestCallsMainProcess"] is True
+    assert report.checks["contractBranchCoverage"] is True
+    assert [item["input"]["mode"] for item in report.checks["contractFixtures"]] == [
+        "double",
+        "triple",
+    ]
+
+    contract.write_text(
+        '''from main import main_process
+
+def test_double_contract():
+    result = main_process(mode="double", value=2.0)
+    assert result["result"] == 4.0
+''',
+        encoding="utf-8",
+    )
+    rejected = validate_algorithm_template(project, require_contract_test=True)
+    assert not rejected.passed
+    assert any("mode='triple'" in error for error in rejected.errors)
+
+
+def test_template_contract_rejects_dynamic_or_network_dependent_fixtures(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n    return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''import requests
+from main import main_process
+
+VALUE = 2.0
+
+def test_contract():
+    result = main_process(value=VALUE)
+    assert result["result"] == 2.0
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert not report.passed
+    assert any("禁止导入: requests" in error for error in report.errors)
+    assert any("必须是可审计的 JSON 字面量" in error for error in report.errors)
+
+
+def test_contract_runtime_rejects_non_reproducible_requirements(
+    tmp_path: Path,
+) -> None:
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "--extra-index-url https://example.test/simple\n"
+        "valid-package>=1\n"
+        "checkout @ git+https://example.test/private/repo.git\n",
+        encoding="utf-8",
+    )
+
+    errors = _runtime_requirement_errors(requirements)
+
+    assert len(errors) == 2
+    assert any("pip 命令行选项" in error for error in errors)
+    assert any("URL/VCS/本地路径依赖" in error for error in errors)
+
+
+def test_contract_runtime_executes_in_restricted_container(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n    return value * 2\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the repository algorithm.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def test_contract():
+    result = main_process(value=2.0)
+    assert result["result"] == 4.0
+''',
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(template_adapter.subprocess, "run", fake_run)
+
+    report = verify_template_contract_runtime(project)
+
+    assert report.passed, report.to_json()
+    docker_run = next(command for command in commands if command[:2] == ["docker", "run"])
+    assert "--network" in docker_run and "none" in docker_run
+    assert "--read-only" in docker_run
+    assert "--cap-drop" in docker_run and "ALL" in docker_run
+    assert not list(project.glob(".ioeb-template-contract-*"))
+
+
+@pytest.mark.asyncio
+async def test_template_writer_creates_only_reviewed_contract_path(
+    tmp_path: Path,
+) -> None:
+    writer = WriteTemplateFile(tmp_path)
+
+    result = await writer.execute(
+        path="tests_ioeb/test_template_contract.py",
+        content="from main import main_process\n",
+    )
+    rejected = await writer.execute(
+        path="tests_ioeb/arbitrary.py",
+        content="raise RuntimeError\n",
+    )
+
+    assert not result.error
+    assert (tmp_path / "tests_ioeb/test_template_contract.py").is_file()
+    assert rejected.error
 
 
 def test_template_validator_rejects_hallucinated_local_import_members(
@@ -450,9 +663,22 @@ def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) 
                 "arguments": {"path": "main.py", "content": "second"},
             },
         },
+        {
+            "type": "tool_call",
+            "data": {
+                "tool": "write_template_file",
+                "arguments": {
+                    "path": "tests_ioeb/test_template_contract.py",
+                    "content": "contract",
+                },
+            },
+        },
     ]
     (tmp_path / "events.jsonl").write_text(
         "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
     )
 
-    assert recover_last_template_writes(tmp_path) == {"main.py": "second\n"}
+    assert recover_last_template_writes(tmp_path) == {
+        "main.py": "second\n",
+        "tests_ioeb/test_template_contract.py": "contract\n",
+    }

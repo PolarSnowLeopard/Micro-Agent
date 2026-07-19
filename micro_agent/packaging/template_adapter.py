@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import re
+import subprocess
 import sys
+import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from packaging.requirements import InvalidRequirement, Requirement
 
 from micro_agent.core.agent import Agent
 from micro_agent.core.config import config
@@ -23,14 +30,19 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 
 必须遵守：
 1. 先且只调用一次 inspect_repository，再阅读 README、依赖文件、与用户封装意图相关的入口、测试和核心源码。每轮最多调用 12 次 read_project_file；证据足够后立即写入口，不得漫无目的遍历仓库。
-2. 只允许写根目录 main.py，以及在确有必要时写 requirements.txt。不得修改原算法源码。
+2. 只允许写根目录 main.py、在确有必要时写 requirements.txt，以及
+   tests_ioeb/test_template_contract.py。不得修改原算法源码。
 3. main.py 必须提供顶层同步函数 main_process(...)；所有参数和返回值有类型注解，docstring 使用 Google 风格并包含 Args: 与 Returns:。
 4. main_process 必须 import 并调用仓库中真实存在的算法能力；可以做输入校验、对象构造、数据转换和结果序列化，但不得复制/重写算法核心、返回伪结果或硬编码 benchmark 答案。
 5. 模型加载、配置读取和资源解析必须在函数调用内部完成；禁止模块级 model = load_model() 或其他可变运行状态。
 6. 面向调用者的输入输出应为 JSON 可表达的标量、list、dict；不得要求调用者访问容器内路径。若原算法确实需要文件，可接受 Base64/文本/结构化内容并在函数内部创建临时资源。
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
-9. 写完 main.py 与 requirements.txt 后必须调用 verify_template；该调用会结束本轮，外层流程会把确定性错误反馈给下一轮修复。
+9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process，
+   使用完整 JSON 字面量输入调用每个公开分支，每个 fixture 至少用一个 assert 检查领域输出。
+   优先复用原仓库测试/doctest/示例中的输入，不得只检查 callable、不得联网、不得启动子进程。
+10. 写完 main.py、契约测试与 requirements.txt 后必须调用 verify_template；该调用会结束本轮，
+    外层流程会把确定性错误反馈给下一轮修复。
 """
 
 
@@ -48,8 +60,25 @@ class TemplateValidationReport:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
 
 
+@dataclass(frozen=True)
+class TemplateContractRuntimeReport:
+    passed: bool
+    errors: list[str]
+    warnings: list[str]
+    checks: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+
 def validate_algorithm_template(
-    project_dir: str | Path, *, allow_explicit_unsupported: bool = False
+    project_dir: str | Path,
+    *,
+    allow_explicit_unsupported: bool = False,
+    require_contract_test: bool = False,
 ) -> TemplateValidationReport:
     root = Path(project_dir).resolve()
     errors: list[str] = []
@@ -66,6 +95,12 @@ def validate_algorithm_template(
         "requirementsFile": (root / "requirements.txt").is_file(),
         "readmeFile": (root / "README.md").is_file() or (root / "README.ioeb.md").is_file(),
         "explicitUnsupported": False,
+        "contractTestFile": False,
+        "contractTestSyntax": False,
+        "contractTestCallsMainProcess": False,
+        "contractTestAssertions": False,
+        "contractBranchCoverage": False,
+        "contractFixtures": [],
     }
     main_path = root / "main.py"
     if not main_path.is_file():
@@ -308,7 +343,505 @@ def validate_algorithm_template(
         errors.append("ZIP 项目根目录缺少 requirements.txt")
     if not checks["readmeFile"]:
         errors.append("ZIP 项目缺少 README.md 或 README.ioeb.md")
+    if require_contract_test and not allow_explicit_unsupported:
+        contract_errors, contract_checks = _validate_template_contract_test(
+            root,
+            function,
+        )
+        errors.extend(contract_errors)
+        checks.update(contract_checks)
     return TemplateValidationReport(not errors, errors, warnings, checks)
+
+
+def _validate_template_contract_test(
+    root: Path,
+    main_function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[list[str], dict[str, Any]]:
+    errors: list[str] = []
+    checks: dict[str, Any] = {
+        "contractTestFile": False,
+        "contractTestSyntax": False,
+        "contractTestCallsMainProcess": False,
+        "contractTestAssertions": False,
+        "contractBranchCoverage": False,
+        "contractFixtures": [],
+    }
+    relative = Path("tests_ioeb") / "test_template_contract.py"
+    path = root / relative
+    if not path.is_file() or path.is_symlink():
+        return (
+            [
+                "模板缺少 tests_ioeb/test_template_contract.py；"
+                "必须提供从 main 导入 main_process 的端到端可执行契约测试"
+            ],
+            checks,
+        )
+    checks["contractTestFile"] = True
+    source = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        tree = ast.parse(source, filename=relative.as_posix())
+        compile(source, relative.as_posix(), "exec")
+    except SyntaxError as exc:
+        errors.append(
+            "tests_ioeb/test_template_contract.py 语法错误: "
+            f"line={exc.lineno}, {exc.msg}"
+        )
+        return errors, checks
+    checks["contractTestSyntax"] = True
+
+    forbidden_imports = {
+        "httpx",
+        "openai",
+        "requests",
+        "socket",
+        "subprocess",
+        "urllib",
+    }
+    imported_forbidden: set[str] = set()
+    direct_names: set[str] = set()
+    module_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root_name = alias.name.split(".")[0]
+                if root_name in forbidden_imports:
+                    imported_forbidden.add(root_name)
+                if alias.name == "main":
+                    module_names.add(alias.asname or "main")
+        elif isinstance(node, ast.ImportFrom):
+            root_name = (node.module or "").split(".")[0]
+            if root_name in forbidden_imports:
+                imported_forbidden.add(root_name)
+            if node.module == "main":
+                direct_names.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "main_process"
+                )
+    if imported_forbidden:
+        errors.append(
+            "模板契约测试不得访问网络或启动子进程，禁止导入: "
+            + ", ".join(sorted(imported_forbidden))
+        )
+
+    parameters = [
+        *main_function.args.posonlyargs,
+        *main_function.args.args,
+        *main_function.args.kwonlyargs,
+    ]
+    parameter_names = [parameter.arg for parameter in parameters]
+    positional_count = len(main_function.args.posonlyargs) + len(
+        main_function.args.args
+    )
+    positional_required = positional_count - len(main_function.args.defaults)
+    required = set(parameter_names[:positional_required])
+    required.update(
+        parameter.arg
+        for parameter, default in zip(
+            main_function.args.kwonlyargs,
+            main_function.args.kw_defaults,
+        )
+        if default is None
+    )
+
+    fixtures: list[dict[str, Any]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        is_direct = isinstance(node.func, ast.Name) and node.func.id in direct_names
+        is_module = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "main_process"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in module_names
+        )
+        if not (is_direct or is_module):
+            continue
+        fixture: dict[str, Any] = {}
+        invalid_literal = False
+        if len(node.args) > len(parameter_names):
+            errors.append(
+                f"模板契约测试 main_process 调用参数过多: line={node.lineno}"
+            )
+            continue
+        for name, value_node in zip(parameter_names, node.args):
+            try:
+                fixture[name] = ast.literal_eval(value_node)
+            except (ValueError, SyntaxError):
+                invalid_literal = True
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                invalid_literal = True
+                continue
+            try:
+                fixture[keyword.arg] = ast.literal_eval(keyword.value)
+            except (ValueError, SyntaxError):
+                invalid_literal = True
+        if invalid_literal:
+            errors.append(
+                "模板契约测试的 main_process 输入必须是可审计的 JSON 字面量，"
+                f"不能引用运行时变量或使用 **kwargs: line={node.lineno}"
+            )
+            continue
+        unknown = sorted(set(fixture) - set(parameter_names))
+        missing = sorted(required - set(fixture))
+        if unknown:
+            errors.append(
+                f"模板契约测试 main_process 调用包含未知参数 {unknown}: line={node.lineno}"
+            )
+            continue
+        if missing:
+            errors.append(
+                f"模板契约测试 main_process 调用缺少必填参数 {missing}: line={node.lineno}"
+            )
+            continue
+        try:
+            json.dumps(fixture, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError):
+            errors.append(
+                "模板契约测试输入必须完全 JSON 可序列化且不能包含 NaN/Infinity: "
+                f"line={node.lineno}"
+            )
+            continue
+        fixtures.append(
+            {
+                "line": node.lineno,
+                "input": fixture,
+            }
+        )
+
+    if fixtures:
+        checks["contractTestCallsMainProcess"] = True
+        checks["contractFixtures"] = fixtures
+    else:
+        errors.append(
+            "模板契约测试必须至少一次直接调用从 main 导入的 main_process，"
+            "并使用完整 JSON 字面量输入"
+        )
+
+    assertion_count = sum(
+        isinstance(node, ast.Assert) for node in ast.walk(tree)
+    )
+    if fixtures and assertion_count >= len(fixtures):
+        checks["contractTestAssertions"] = True
+    else:
+        errors.append(
+            "每个模板契约 fixture 至少需要一个 assert 验证领域输出；"
+            f"当前 calls={len(fixtures)}, asserts={assertion_count}"
+        )
+
+    dispatch_cases = _literal_dispatch_cases(main_function)
+    missing_cases: list[str] = []
+    for selector, values in dispatch_cases.items():
+        observed = {
+            fixture["input"].get(selector)
+            for fixture in fixtures
+            if selector in fixture["input"]
+        }
+        for value in values:
+            if value not in observed:
+                missing_cases.append(f"{selector}={value!r}")
+    if missing_cases:
+        errors.append(
+            "模板契约测试未覆盖 main_process 的全部字面量分支: "
+            + ", ".join(missing_cases)
+        )
+    else:
+        checks["contractBranchCoverage"] = True
+    return errors, checks
+
+
+def _literal_dispatch_cases(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, list[Any]]:
+    parameter_names = {
+        parameter.arg
+        for parameter in (
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        )
+    }
+    result: dict[str, list[Any]] = {}
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Compare) or not isinstance(node.left, ast.Name):
+            continue
+        selector = node.left.id
+        if selector not in parameter_names or len(node.ops) != len(node.comparators):
+            continue
+        values: list[Any] = []
+        for operator, comparator in zip(node.ops, node.comparators):
+            if isinstance(operator, ast.Eq):
+                try:
+                    value = ast.literal_eval(comparator)
+                except (ValueError, SyntaxError):
+                    continue
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    values.append(value)
+            elif isinstance(operator, ast.In) and isinstance(
+                comparator,
+                (ast.Tuple, ast.List, ast.Set),
+            ):
+                for item in comparator.elts:
+                    try:
+                        value = ast.literal_eval(item)
+                    except (ValueError, SyntaxError):
+                        continue
+                    if isinstance(value, (str, int, float, bool)) or value is None:
+                        values.append(value)
+        for value in values:
+            bucket = result.setdefault(selector, [])
+            if value not in bucket:
+                bucket.append(value)
+    return result
+
+
+def verify_template_contract_runtime(
+    project_dir: str | Path,
+    *,
+    build_timeout: int = 900,
+    runtime_timeout: int = 180,
+) -> TemplateContractRuntimeReport:
+    root = Path(project_dir).resolve()
+    checks: dict[str, Any] = {
+        "runtimeBackend": "docker",
+        "networkDuringTest": False,
+        "buildExitCode": None,
+        "buildSeconds": None,
+        "testExitCode": None,
+        "testSeconds": None,
+        "functionalVerified": False,
+    }
+    errors: list[str] = []
+    warnings: list[str] = []
+    static_report = validate_algorithm_template(
+        root,
+        require_contract_test=True,
+    )
+    if not static_report.passed:
+        return TemplateContractRuntimeReport(
+            False,
+            ["隔离运行前模板静态门禁未通过: " + "; ".join(static_report.errors)],
+            warnings,
+            checks,
+        )
+    requirement_errors = _runtime_requirement_errors(root / "requirements.txt")
+    if requirement_errors:
+        return TemplateContractRuntimeReport(
+            False,
+            requirement_errors,
+            warnings,
+            checks,
+        )
+    try:
+        docker = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        docker = None
+    if docker is None or docker.returncode != 0:
+        return TemplateContractRuntimeReport(
+            False,
+            ["[runtime_backend_unavailable] Docker daemon unavailable"],
+            warnings,
+            checks,
+        )
+
+    run_id = uuid.uuid4().hex[:12]
+    image = f"ioeb-template-contract:{run_id}"
+    dockerfile = root / f".ioeb-template-contract-{run_id}.Dockerfile"
+    dockerignore = root / f"{dockerfile.name}.dockerignore"
+    dockerfile.write_text(
+        "FROM python:3.11-slim-bookworm\n"
+        "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
+        "PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONPATH=/app:/app/src\n"
+        "WORKDIR /app\n"
+        "COPY requirements.txt /tmp/requirements.txt\n"
+        "RUN python -m pip install --no-cache-dir --index-url "
+        "\"${PIP_INDEX_URL}\" --timeout 120 --retries 5 "
+        "\"pytest>=8,<9\" -r /tmp/requirements.txt\n"
+        "COPY . /app\n"
+        "RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin ioeb\n"
+        "USER 10001:10001\n"
+        "CMD [\"python\", \"-m\", \"pytest\", \"-q\", "
+        "\"tests_ioeb/test_template_contract.py\"]\n",
+        encoding="utf-8",
+    )
+    dockerignore.write_text(
+        ".git\n.hg\n.svn\n.venv\nvenv\n__pycache__\n.pytest_cache\n"
+        ".mypy_cache\n.ruff_cache\nnode_modules\ndist\nbuild\n",
+        encoding="utf-8",
+    )
+    try:
+        build_started = time.perf_counter()
+        try:
+            build = subprocess.run(
+                [
+                    "docker",
+                    "build",
+                    "--file",
+                    dockerfile.name,
+                    "--tag",
+                    image,
+                    ".",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=build_timeout,
+                env={**os.environ, "DOCKER_BUILDKIT": "1"},
+            )
+        except subprocess.TimeoutExpired:
+            checks["buildSeconds"] = round(
+                time.perf_counter() - build_started,
+                3,
+            )
+            errors.append(
+                f"[contract_build_timeout] 模板契约镜像构建超过 {build_timeout} 秒"
+            )
+            return TemplateContractRuntimeReport(
+                False,
+                errors,
+                warnings,
+                checks,
+            )
+        checks["buildSeconds"] = round(time.perf_counter() - build_started, 3)
+        checks["buildExitCode"] = build.returncode
+        if build.returncode != 0:
+            errors.append(
+                "[contract_build] 模板契约镜像构建失败:\n"
+                + _safe_process_tail(build.stdout, build.stderr)
+            )
+            return TemplateContractRuntimeReport(
+                False,
+                errors,
+                warnings,
+                checks,
+            )
+
+        run_started = time.perf_counter()
+        try:
+            runtime = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,size=512m",
+                    "--tmpfs",
+                    "/home/ioeb:rw,noexec,nosuid,size=64m",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--pids-limit",
+                    "256",
+                    "--memory",
+                    "4g",
+                    "--cpus",
+                    "2",
+                    image,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=runtime_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            checks["testSeconds"] = round(
+                time.perf_counter() - run_started,
+                3,
+            )
+            errors.append(
+                f"[contract_test_timeout] 模板契约测试超过 {runtime_timeout} 秒"
+            )
+            return TemplateContractRuntimeReport(
+                False,
+                errors,
+                warnings,
+                checks,
+            )
+        checks["testSeconds"] = round(time.perf_counter() - run_started, 3)
+        checks["testExitCode"] = runtime.returncode
+        if runtime.returncode != 0:
+            errors.append(
+                "[contract_test] 无网络只读容器中的模板契约测试失败:\n"
+                + _safe_process_tail(runtime.stdout, runtime.stderr)
+            )
+        else:
+            checks["functionalVerified"] = True
+    finally:
+        dockerfile.unlink(missing_ok=True)
+        dockerignore.unlink(missing_ok=True)
+        try:
+            cleanup = subprocess.run(
+                ["docker", "image", "rm", "--force", image],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            cleanup = None
+        if (
+            (cleanup is None or cleanup.returncode != 0)
+            and checks["buildExitCode"] == 0
+        ):
+            warnings.append("模板契约运行镜像未能自动清理")
+    return TemplateContractRuntimeReport(
+        not errors and bool(checks["functionalVerified"]),
+        errors,
+        warnings,
+        checks,
+    )
+
+
+def _runtime_requirement_errors(path: Path) -> list[str]:
+    if not path.is_file():
+        return ["[contract_requirements] 根目录缺少 requirements.txt"]
+    errors: list[str] = []
+    for line_number, raw in enumerate(
+        path.read_text(encoding="utf-8", errors="replace").splitlines(),
+        start=1,
+    ):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("-"):
+            errors.append(
+                "[contract_requirements] requirements.txt 禁止 pip 命令行选项或递归引用: "
+                f"line={line_number}"
+            )
+            continue
+        try:
+            requirement = Requirement(line)
+        except InvalidRequirement:
+            errors.append(
+                "[contract_requirements] 非法 PEP 508 依赖: "
+                f"line={line_number}, value={line[:120]!r}"
+            )
+            continue
+        if requirement.url:
+            errors.append(
+                "[contract_requirements] 契约运行禁止 URL/VCS/本地路径依赖: "
+                f"line={line_number}, package={requirement.name}"
+            )
+    return errors
+
+
+def _safe_process_tail(stdout: str, stderr: str, *, limit: int = 4_000) -> str:
+    text = (stdout + "\n" + stderr).strip()
+    text = re.sub(
+        r"(?i)(https?://)([^/@\s]+)@",
+        r"\1<redacted>@",
+        text,
+    )
+    return text[-limit:] if text else "<no output>"
 
 
 def _invalid_local_import_members(root: Path, tree: ast.Module) -> list[str]:
@@ -480,11 +1013,21 @@ def _repository_import_roots(root: Path) -> set[str]:
 
 class WriteTemplateFile(Tool):
     name = "write_template_file"
-    description = "写入模板适配文件；只允许 main.py 与 requirements.txt。"
+    description = (
+        "写入模板适配文件；只允许 main.py、requirements.txt 与"
+        " tests_ioeb/test_template_contract.py。"
+    )
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "enum": ["main.py", "requirements.txt"]},
+            "path": {
+                "type": "string",
+                "enum": [
+                    "main.py",
+                    "requirements.txt",
+                    "tests_ioeb/test_template_contract.py",
+                ],
+            },
             "content": {"type": "string"},
         },
         "required": ["path", "content"],
@@ -497,25 +1040,38 @@ class WriteTemplateFile(Tool):
     async def execute(self, **kwargs: Any) -> ToolResult:
         relative = str(kwargs.get("path", ""))
         content = str(kwargs.get("content", ""))
-        if relative not in {"main.py", "requirements.txt"}:
+        allowed = {
+            "main.py",
+            "requirements.txt",
+            "tests_ioeb/test_template_contract.py",
+        }
+        if relative not in allowed:
             return ToolResult(error=f"不允许写入: {relative}")
         limit = 200_000 if relative == "main.py" else 50_000
         if not content.strip() or len(content) > limit or "\x00" in content:
             return ToolResult(error=f"{relative} 内容为空、含 NUL 或超过 {limit} 字符")
-        (self.root / relative).write_text(content.rstrip() + "\n", encoding="utf-8")
+        target = self.root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content.rstrip() + "\n", encoding="utf-8")
         return ToolResult(output=f"已写入 {relative} ({len(content)} chars)")
 
 
 class VerifyTemplate(Tool):
     name = "verify_template"
-    description = "按 IOEB 提交模板确定性检查 main.py、main_process、注解、docstring、独立性和真实源码调用。"
+    description = (
+        "按 IOEB 提交模板确定性检查 main.py、main_process、注解、docstring、"
+        "真实源码调用以及可执行契约测试的 JSON fixture、断言和分支覆盖。"
+    )
     parameters = {"type": "object", "properties": {}, "additionalProperties": False}
 
     def __init__(self, project_dir: str | Path) -> None:
         self.root = Path(project_dir).resolve()
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        report = validate_algorithm_template(self.root)
+        report = validate_algorithm_template(
+            self.root,
+            require_contract_test=True,
+        )
         return ToolResult(output=report.to_json() if report.passed else "模板校验失败:\n" + report.to_json())
 
 
@@ -555,7 +1111,8 @@ def build_template_adapter_agent(
             + (
                 "\n这是已有模板候选的定向修复轮次。当前 main.py 和确定性错误已在请求中完整提供；"
                 "禁止重新调用 inspect_repository。只读取错误指向的真实源码模块，保留候选中"
-                "已通过的部分，随后必须覆盖写入修复后的完整 main.py 并调用 verify_template。"
+                "已通过的部分，只覆盖写入错误涉及的 main.py、requirements.txt 或契约测试，"
+                "随后调用 verify_template。"
                 if repair
                 else ""
             )
@@ -586,7 +1143,10 @@ def template_adapter_prompt(ir: RepositoryIR, wrap_intent: str, original_main: s
         "请把当前仓库适配为 IOEB ZIP 算法模板。\n"
         f"wrap_intent（唯一业务需求来源）：{wrap_intent}\n"
         f"{original_note}\n"
-        "只调用一次 inspect_repository，最多读取 12 个最相关文件，随后写 main.py 与 requirements.txt。"
+        "只调用一次 inspect_repository，最多读取 12 个最相关文件，随后写 main.py、"
+        "tests_ioeb/test_template_contract.py 与必要的 requirements.txt。"
+        "契约测试必须用 JSON 字面量直接调用 main_process 的每个公开分支并断言领域输出，"
+        "输入优先来自已读取的原仓库测试/doctest/示例。"
         "不要读取或推断任何 benchmark 答案。完成后调用 verify_template；不要在校验后继续操作。\n"
         "仓库索引摘要：\n"
         + json.dumps(summary, ensure_ascii=False, indent=2)
