@@ -256,8 +256,17 @@ async def adapt_one(
     if resume and derived_path.is_file() and summary_path.is_file() and (repo_dir / ".git").is_dir():
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         if summary.get("status") == "ready":
-            print(f"[{sample_id}] resume: ready", flush=True)
-            return json.loads(derived_path.read_text(encoding="utf-8"))
+            resumed_report = validate_algorithm_template(
+                repo_dir,
+                allow_explicit_unsupported=bool(summary.get("negativeControl")),
+            )
+            if resumed_report.passed:
+                print(f"[{sample_id}] resume: ready", flush=True)
+                return json.loads(derived_path.read_text(encoding="utf-8"))
+            print(
+                f"[{sample_id}] resume: stale validation, regenerating",
+                flush=True,
+            )
 
     recovered_writes = recover_last_template_writes(run_dir) if resume else {}
     shutil.rmtree(run_dir, ignore_errors=True)
