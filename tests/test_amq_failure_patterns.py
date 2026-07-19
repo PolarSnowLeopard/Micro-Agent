@@ -50,6 +50,21 @@ def test_adaptation_classifier_separates_remote_paths_and_missing_assets() -> No
     ]
 
 
+def test_adaptation_classifier_covers_runtime_contract_patterns() -> None:
+    labels = classify_adaptation_errors(
+        [
+            "[contract_test] AssertionError: assert 'trait' in {}",
+            "模板契约输入必须是可审计的 JSON 字面量",
+        ]
+    )
+
+    assert labels == [
+        "contract_fixture_nonliteral",
+        "domain_vocabulary_grounding",
+        "contract_runtime",
+    ]
+
+
 def test_failure_classifier_preserves_unclassified_signal() -> None:
     assert classify_generation_failure("unexpected opaque failure") == [
         "unclassified"
@@ -142,3 +157,38 @@ def test_evaluation_report_deduplicates_retried_samples(
     assert evaluation["sampleCount"] == 1
     assert evaluation["duplicateSampleCounts"] == {"sample-a": 1}
     assert evaluation["failurePatternCounts"] == {"passed": 1}
+
+
+def test_adaptation_run_report_includes_failed_candidates(
+    tmp_path,
+) -> None:
+    failed = tmp_path / "adaptation" / "sample-failed"
+    failed.mkdir(parents=True)
+    (failed / "summary.json").write_text(
+        """
+        {
+          "sampleId": "sample-failed",
+          "status": "failed",
+          "staticRepairAttempts": 3,
+          "runtimeRepairAttempts": 0,
+          "error": "模板契约输入必须是可审计的 JSON 字面量"
+        }
+        """,
+        encoding="utf-8",
+    )
+    ready = tmp_path / "adaptation" / "sample-ready"
+    ready.mkdir(parents=True)
+    (ready / "summary.json").write_text(
+        '{"sampleId":"sample-ready","status":"ready"}',
+        encoding="utf-8",
+    )
+
+    report = build_report([tmp_path], [], [])
+    adaptation = report["adaptationRunCrossSection"]
+
+    assert adaptation["sampleCount"] == 2
+    assert adaptation["statusCounts"] == {"failed": 1, "ready": 1}
+    assert adaptation["failurePatternCounts"] == {
+        "contract_fixture_nonliteral": 1,
+        "passed": 1,
+    }

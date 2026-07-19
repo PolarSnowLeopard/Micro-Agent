@@ -127,6 +127,18 @@ def classify_adaptation_errors(errors: list[str]) -> list[str]:
             "不存在的成员",
             "未调用任何从原仓库导入",
         ),
+        "contract_fixture_nonliteral": (
+            "必须是可审计的 json 字面量",
+        ),
+        "domain_vocabulary_grounding": (
+            " in {}",
+            "keyerror:",
+        ),
+        "control_envelope": ("控制信封",),
+        "contract_runtime": (
+            "[contract_test]",
+            "[contract_test_timeout]",
+        ),
         "unsafe_dynamic_execution": ("动态执行用户文本",),
         "interface_overbroad": (
             "显式参数过多",
@@ -144,7 +156,6 @@ def classify_adaptation_errors(errors: list[str]) -> list[str]:
             "类型注解",
             "google 风格",
             "docstring",
-            "json 字面量",
             "分支",
         ),
         "dependency_manifest": (
@@ -303,6 +314,79 @@ def _adaptation_cross_section(roots: list[Path]) -> dict[str, Any]:
     }
 
 
+def _adaptation_run_cross_section(roots: list[Path]) -> dict[str, Any]:
+    """Aggregate final per-sample adaptation outcomes, including failures."""
+
+    summaries: dict[str, tuple[Path, dict[str, Any]]] = {}
+    duplicate_sample_counts: Counter[str] = Counter()
+    for root in roots:
+        for path in sorted((root.resolve() / "adaptation").glob("*/summary.json")):
+            try:
+                summary = json.loads(
+                    path.read_text(encoding="utf-8", errors="replace")
+                )
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(summary, dict):
+                continue
+            sample_id = str(
+                summary.get("sampleId") or path.parent.name
+            ).strip()
+            if not sample_id:
+                continue
+            if sample_id in summaries:
+                duplicate_sample_counts[sample_id] += 1
+            summaries[sample_id] = (path, summary)
+
+    status_counts: Counter[str] = Counter()
+    pattern_counts: Counter[str] = Counter()
+    affected_samples: defaultdict[str, set[str]] = defaultdict(set)
+    rows: list[dict[str, Any]] = []
+    for sample_id, (path, summary) in sorted(summaries.items()):
+        status = str(summary.get("status", "<unknown>"))
+        status_counts[status] += 1
+        error = str(summary.get("error", ""))
+        patterns = (
+            ["passed"]
+            if status == "ready"
+            else classify_adaptation_errors([error])
+        )
+        for pattern in patterns:
+            pattern_counts[pattern] += 1
+            affected_samples[pattern].add(sample_id)
+        rows.append(
+            {
+                "sampleId": sample_id,
+                "source": str(path),
+                "status": status,
+                "failurePatterns": patterns,
+                "staticRepairAttempts": summary.get(
+                    "staticRepairAttempts"
+                ),
+                "runtimeRepairAttempts": summary.get(
+                    "runtimeRepairAttempts"
+                ),
+                "totalSeconds": summary.get("totalSeconds"),
+                "error": error,
+            }
+        )
+    return {
+        "sampleCount": len(rows),
+        "statusCounts": dict(status_counts),
+        "duplicateSampleCounts": dict(duplicate_sample_counts),
+        "failurePatternCounts": dict(pattern_counts.most_common()),
+        "failurePatternAffectedSamples": {
+            label: sorted(samples)
+            for label, samples in sorted(affected_samples.items())
+        },
+        "samples": rows,
+        "interpretationNote": (
+            "The latest supplied adaptation summary wins for duplicate sample "
+            "ids, so retries are not counted as independent samples."
+        ),
+    }
+
+
 def _generation_history(roots: list[Path]) -> dict[str, Any]:
     paths: set[Path] = set()
     for root in roots:
@@ -454,6 +538,9 @@ def build_report(
             "benchmark task and ground-truth fields are not read."
         ),
         "adaptationCrossSection": _adaptation_cross_section(
+            adaptation_roots
+        ),
+        "adaptationRunCrossSection": _adaptation_run_cross_section(
             adaptation_roots
         ),
         "generationHistory": _generation_history(generation_roots),
