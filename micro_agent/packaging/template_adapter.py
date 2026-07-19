@@ -1335,7 +1335,7 @@ def verify_template_contract_runtime(
         "libexpat1 libgomp1 libgl1 libglib2.0-0 "
         "&& rm -rf /var/lib/apt/lists/*\n"
         "COPY requirements.txt /tmp/requirements.txt\n"
-        "RUN --mount=type=cache,target=/root/.cache/pip "
+        "RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked "
         "python -m pip install --index-url "
         "\"${PIP_INDEX_URL}\" --timeout 120 --retries 5 "
         "\"pytest>=8,<9\" -r /tmp/requirements.txt\n"

@@ -908,7 +908,7 @@ def test_contract():
     assert "PYTHONPATH=/workspace:/workspace/src:/ioeb" in docker_run
     assert docker_run[docker_run.index("--workdir") + 1] == "/workspace"
     assert len(dockerfiles) == 1
-    assert "--mount=type=cache,target=/root/.cache/pip" in dockerfiles[0]
+    assert "--mount=type=cache,target=/root/.cache/pip,sharing=locked" in dockerfiles[0]
     assert "--no-cache-dir" not in dockerfiles[0]
     assert "libexpat1 libgomp1 libgl1 libglib2.0-0" in dockerfiles[0]
     assert not list(project.glob(".ioeb-template-contract-*"))
