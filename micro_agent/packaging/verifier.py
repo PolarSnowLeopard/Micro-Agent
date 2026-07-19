@@ -6,7 +6,7 @@ import ast
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -792,6 +792,18 @@ def _import_aliases_for_names(tree: ast.Module | None, names: set[str]) -> set[s
         for alias in node.names:
             if alias.name in names:
                 result.add(alias.asname or alias.name)
+    explicit_modules = _explicit_algorithm_module_bindings(tree)
+    for node in tree.body:
+        target_names = _assigned_name_targets(node)
+        value = getattr(node, "value", None)
+        if (
+            target_names
+            and isinstance(value, ast.Attribute)
+            and isinstance(value.value, ast.Name)
+            and value.value.id in explicit_modules
+            and value.attr in names
+        ):
+            result.update(target_names)
     return result
 
 
@@ -835,7 +847,131 @@ def _source_call_names(
                         # attribute is sufficient after the module import has
                         # been tied to the reviewed source module here.
                         names.update(source_names)
+    explicit_modules = _explicit_algorithm_module_bindings(tree)
+    for binding, loaded_module in explicit_modules.items():
+        for source_module, source_names in by_module.items():
+            if not (
+                loaded_module == source_module
+                or loaded_module.endswith("." + source_module)
+            ):
+                continue
+            names.update(f"{binding}.{name}" for name in source_names)
+            for node in tree.body:
+                target_names = _assigned_name_targets(node)
+                value = getattr(node, "value", None)
+                if (
+                    target_names
+                    and isinstance(value, ast.Attribute)
+                    and isinstance(value.value, ast.Name)
+                    and value.value.id == binding
+                    and value.attr in source_names
+                ):
+                    names.update(target_names)
     return names
+
+
+def _explicit_algorithm_module_bindings(tree: ast.Module) -> dict[str, str]:
+    """Resolve modules safely loaded from ``ALGORITHM_DIR / '*.py'``."""
+
+    spec_modules: dict[str, str] = {}
+    module_specs: dict[str, str] = {}
+    executed: set[tuple[str, str]] = set()
+    for node in tree.body:
+        target_names = _assigned_name_targets(node)
+        value = getattr(node, "value", None)
+        if len(target_names) != 1 or not isinstance(value, ast.Call):
+            continue
+        call_name = _call_name(value.func) or ""
+        target = next(iter(target_names))
+        if call_name.endswith("spec_from_file_location") and len(value.args) >= 2:
+            module = _algorithm_module_from_path_expression(value.args[1])
+            if module:
+                spec_modules[target] = module
+        elif call_name.endswith("module_from_spec") and value.args:
+            spec_arg = value.args[0]
+            if isinstance(spec_arg, ast.Name):
+                module_specs[target] = spec_arg.id
+    for node in tree.body:
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call) or len(child.args) != 1:
+                continue
+            call_name = _call_name(child.func) or ""
+            module_arg = child.args[0]
+            if (
+                call_name.endswith(".loader.exec_module")
+                and isinstance(module_arg, ast.Name)
+            ):
+                spec_name = call_name.removesuffix(".loader.exec_module")
+                executed.add((spec_name, module_arg.id))
+    return {
+        module_name: spec_modules[spec_name]
+        for module_name, spec_name in module_specs.items()
+        if (spec_name, module_name) in executed and spec_name in spec_modules
+    }
+
+
+def _algorithm_module_from_path_expression(node: ast.AST) -> str | None:
+    relative = _algorithm_relative_path(node)
+    if (
+        relative is None
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or relative.suffix != ".py"
+    ):
+        return None
+    parts = list(relative.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    if not parts or any(not part.isidentifier() for part in parts):
+        return None
+    return ".".join(parts)
+
+
+def _algorithm_relative_path(node: ast.AST) -> PurePosixPath | None:
+    if isinstance(node, ast.Name) and node.id == "ALGORITHM_DIR":
+        return PurePosixPath()
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        parent = _algorithm_relative_path(node.left)
+        child = node.right
+        if (
+            parent is not None
+            and isinstance(child, ast.Constant)
+            and isinstance(child.value, str)
+        ):
+            return parent / child.value
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "joinpath"
+    ):
+        parent = _algorithm_relative_path(node.func.value)
+        if parent is None:
+            return None
+        result = parent
+        for argument in node.args:
+            if not isinstance(argument, ast.Constant) or not isinstance(
+                argument.value, str
+            ):
+                return None
+            result /= argument.value
+        return result
+    return None
+
+
+def _assigned_name_targets(node: ast.AST) -> set[str]:
+    targets: list[ast.AST]
+    if isinstance(node, ast.Assign):
+        targets = list(node.targets)
+    elif isinstance(node, ast.AnnAssign):
+        targets = [node.target]
+    else:
+        return set()
+    return {
+        child.id
+        for target in targets
+        for child in ast.walk(target)
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+    }
 
 
 def _calls_source_capability(

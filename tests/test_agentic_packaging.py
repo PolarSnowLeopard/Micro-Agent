@@ -1921,6 +1921,76 @@ def test_verifier_rejects_removing_template_runtime_dependency(tmp_path):
     )
 
 
+def test_verifier_recognizes_safe_explicit_source_module_loading(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    (artifact / "adapters.py").write_text(
+        '''from algorithm_loader import ALGORITHM_DIR
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location("_algorithm_core", ALGORITHM_DIR / "core.py")
+if _spec is None or _spec.loader is None:
+    raise RuntimeError("cannot load reviewed source")
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+_predict_source = _module.predict
+_evaluate_source = _module.evaluate
+
+def predict_risk(value: float) -> dict[str, float]:
+    return _predict_source(value)
+
+def evaluate_risk(values: list[float]) -> dict[str, float]:
+    return _evaluate_source(values)
+''',
+        encoding="utf-8",
+    )
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert report.passed, report.errors
+    assert not any(
+        "未调用规划中的任何源码能力" in error for error in report.errors
+    )
+
+
+def test_verifier_rejects_unrooted_explicit_module_loading(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "server.py").write_text(_valid_server(), encoding="utf-8")
+    (artifact / "adapters.py").write_text(
+        '''from algorithm_loader import ALGORITHM_DIR
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location("_algorithm_core", "/tmp/core.py")
+if _spec is None or _spec.loader is None:
+    raise RuntimeError("cannot load source")
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+_predict_source = _module.predict
+_evaluate_source = _module.evaluate
+
+def predict_risk(value: float) -> dict[str, float]:
+    return _predict_source(value)
+
+def evaluate_risk(values: list[float]) -> dict[str, float]:
+    return _evaluate_source(values)
+''',
+        encoding="utf-8",
+    )
+
+    report = ArtifactVerifier(artifact, plan).verify()
+
+    assert not report.passed
+    assert sum(
+        "未调用规划中的任何源码能力" in error for error in report.errors
+    ) == 2
+
+
 def test_verifier_rejects_reimplementing_source_with_another_library(tmp_path):
     project = _sample_project(tmp_path)
     ir = RepositoryAnalyzer().analyze(project)
