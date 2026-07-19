@@ -192,6 +192,12 @@ def _select_seeds(
     if "main.py" in python_files:
         seeds.add("main.py")
         reasons["main.py"].append("root template/entrypoint")
+    for path in ir.testFiles:
+        if path not in python_files:
+            continue
+        if path.startswith("tests_ioeb/") or "template_contract" in Path(path).stem.lower():
+            seeds.add(path)
+            reasons[path].append("submitted executable template contract")
 
     terms = _tokens(intent)
     if terms:

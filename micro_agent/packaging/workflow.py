@@ -968,6 +968,7 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "templateContract": template_contract,
         "contractEntrySymbols": contract_symbols if template_contract else [],
         "templateContractEvidenceFiles": template_contract_tests,
+        "verifiedTemplateContract": _verified_template_contract_context(ir),
         "relevanceEvidence": build_relevance_evidence(ir, user_request),
     }
     if template_contract:
@@ -986,15 +987,120 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "它只负责排序证据，不替你决定 Tool，也不会隐藏 benchmark 答案。"
         "必须使用工具核对完整仓库并阅读高相关源码后再决策。"
         + (
-            "该模板仓库提供了 templateContractEvidenceFiles；它们是已随提交交付的"
-            "端到端契约测试，必须在上游库内部单元测试之前优先读取，并优先用其完整输入"
-            "作为各分支 smokeTest 的 fixture/evidence，不能从低层单元测试拼接另一套输入。"
+            "该模板仓库提供了 templateContractEvidenceFiles。若 verifiedTemplateContract."
+            "runtimePassed=true，其中 records 是已经在无网络隔离容器执行成功的主入口输入："
+            "必须按 dispatchParameter/dispatchValue 匹配 Tool，保持 toolSmokeInput 中的值不变，"
+            "直接用 evidence 作为 smokeTest.evidence；分支参数由 adapterStrategy 固定，"
+            "所以不得把它重新放回 Tool input 或 toolSmokeInput。只有对应 records 不存在时，"
+            "才继续读取原仓库测试/doctest/示例寻找输入；这些契约文件必须在上游库内部单元测试"
+            "之前优先读取，绝不能自行拼接另一套 fixture。"
             if template_contract_tests
             else ""
         )
         + "仓库索引如下：\n"
         + json.dumps(overview, ensure_ascii=False, indent=2)
     )
+
+
+def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
+    metadata_path = Path(ir.root) / "template_adaptation.json"
+    if not metadata_path.is_file():
+        return {
+            "runtimePassed": False,
+            "records": [],
+            "reason": "template_adaptation.json is absent",
+        }
+    try:
+        metadata = json.loads(
+            metadata_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except (OSError, json.JSONDecodeError):
+        return {
+            "runtimePassed": False,
+            "records": [],
+            "reason": "template_adaptation.json is invalid",
+        }
+    runtime = metadata.get("contractRuntime")
+    runtime_checks = runtime.get("checks", {}) if isinstance(runtime, dict) else {}
+    runtime_passed = bool(
+        isinstance(runtime, dict)
+        and runtime.get("passed")
+        and runtime_checks.get("functionalVerified")
+    )
+    validation = metadata.get("validation")
+    validation_checks = (
+        validation.get("checks", {}) if isinstance(validation, dict) else {}
+    )
+    fixtures = validation_checks.get("contractFixtures", [])
+    if not isinstance(fixtures, list):
+        fixtures = []
+
+    dispatch_values: list[tuple[str, Any]] = []
+    for branches in planning_dispatch_branches(ir).values():
+        for branch in branches:
+            parameter = branch.get("parameter")
+            if isinstance(parameter, str) and "value" in branch:
+                candidate = (parameter, branch["value"])
+                if candidate not in dispatch_values:
+                    dispatch_values.append(candidate)
+
+    records: list[dict[str, Any]] = []
+    if runtime_passed:
+        for fixture in fixtures[:30]:
+            if not isinstance(fixture, dict) or not isinstance(
+                fixture.get("input"),
+                dict,
+            ):
+                continue
+            main_input = json.loads(
+                json.dumps(fixture["input"], ensure_ascii=False)
+            )
+            line = fixture.get("line")
+            evidence = (
+                f"tests_ioeb/test_template_contract.py:{line}"
+                if isinstance(line, int) and line > 0
+                else "tests_ioeb/test_template_contract.py"
+            )
+            matched = [
+                (parameter, value)
+                for parameter, value in dispatch_values
+                if main_input.get(parameter) == value
+            ]
+            if matched:
+                for parameter, value in matched:
+                    tool_input = dict(main_input)
+                    tool_input.pop(parameter, None)
+                    records.append(
+                        {
+                            "dispatchParameter": parameter,
+                            "dispatchValue": value,
+                            "mainProcessInput": main_input,
+                            "toolSmokeInput": tool_input,
+                            "evidence": [evidence],
+                        }
+                    )
+            else:
+                records.append(
+                    {
+                        "dispatchParameter": None,
+                        "dispatchValue": None,
+                        "mainProcessInput": main_input,
+                        "toolSmokeInput": main_input,
+                        "evidence": [evidence],
+                    }
+                )
+    return {
+        "runtimePassed": runtime_passed,
+        "executionMode": runtime_checks.get("executionMode"),
+        "networkDuringTest": runtime_checks.get("networkDuringTest"),
+        "records": records,
+        "warnings": runtime.get("warnings", []) if isinstance(runtime, dict) else [],
+        "reason": (
+            "verified runtime contract fixtures"
+            if runtime_passed
+            else "contract runtime proof is missing or failed"
+        ),
+    }
 
 
 def planning_candidate_symbols(ir: RepositoryIR) -> set[str]:

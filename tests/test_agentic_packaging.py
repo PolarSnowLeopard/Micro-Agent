@@ -812,6 +812,88 @@ def test_planner_prioritizes_submitted_template_contract_tests(tmp_path):
     assert "必须在上游库内部单元测试之前优先读取" in prompt
 
 
+def test_planner_embeds_verified_contract_fixture_by_dispatch_branch(tmp_path):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        '''from core import evaluate, predict
+
+def main_process(operation: str, value: float) -> dict[str, float]:
+    """Dispatch a repository operation.
+
+    Args:
+        operation: Operation name.
+        value: Input value.
+
+    Returns:
+        Repository result.
+    """
+    if operation == "predict":
+        return predict(value)
+    if operation == "evaluate":
+        return evaluate([value])
+    raise ValueError("unsupported")
+''',
+        encoding="utf-8",
+    )
+    contract_tests = project / "tests_ioeb"
+    contract_tests.mkdir()
+    (contract_tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def test_predict_contract():
+    result = main_process(operation="predict", value=0.5)
+    assert result["score"] == 0.5
+''',
+        encoding="utf-8",
+    )
+    (project / "template_adaptation.json").write_text(
+        json.dumps(
+            {
+                "validation": {
+                    "passed": True,
+                    "checks": {
+                        "contractFixtures": [
+                            {
+                                "line": 4,
+                                "input": {
+                                    "operation": "predict",
+                                    "value": 0.5,
+                                },
+                            }
+                        ]
+                    },
+                },
+                "contractRuntime": {
+                    "passed": True,
+                    "errors": [],
+                    "warnings": [],
+                    "checks": {
+                        "functionalVerified": True,
+                        "executionMode": "repository_source",
+                        "networkDuringTest": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    prompt = _planner_prompt(ir, "wrap the submitted contract")
+    relevance = build_relevance_evidence(ir, "wrap the submitted contract")
+
+    assert '"runtimePassed": true' in prompt
+    assert '"dispatchParameter": "operation"' in prompt
+    assert '"dispatchValue": "predict"' in prompt
+    assert '"toolSmokeInput": {' in prompt
+    assert '"value": 0.5' in prompt
+    assert "tests_ioeb/test_template_contract.py:4" in prompt
+    assert "保持 toolSmokeInput 中的值不变" in prompt
+    assert "tests_ioeb/test_template_contract.py" in {
+        item["path"] for item in relevance["overview"]["seedFiles"]
+    }
+
+
 async def test_project_reader_corrects_artifact_prefixed_source_path(tmp_path):
     project = _sample_project(tmp_path)
 
