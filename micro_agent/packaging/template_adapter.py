@@ -43,6 +43,9 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
    优先复用原仓库测试/doctest/示例中的输入，不得只检查 callable、不得联网、不得启动子进程。
 10. 写完 main.py、契约测试与 requirements.txt 后必须调用 verify_template；该调用会结束本轮，
     外层流程会把确定性错误反馈给下一轮修复。
+11. 禁止 eval、exec、compile 或其他动态执行用户文本的方式。将宽泛意图抽象为少量明确的
+    operation 分支和 JSON 参数，每个分支必须直接调用已从仓库导入的真实函数/类；不得只把
+    函数对象塞进映射后交给动态解释器。
 """
 
 
@@ -90,6 +93,7 @@ def validate_algorithm_template(
         "typedReturn": False,
         "googleDocstring": False,
         "noModuleRuntimeState": False,
+        "noDynamicCodeExecution": False,
         "resolvableRepositoryImports": False,
         "callsRepositoryCode": False,
         "requirementsFile": (root / "requirements.txt").is_file(),
@@ -182,7 +186,6 @@ def validate_algorithm_template(
         for node in ast.walk(function)
     ):
         errors.append("main_process 不得使用省略号代替实现")
-
     runtime_assignments: list[int] = []
     safe_module_calls = {"len", "min", "max", "sum", "tuple", "frozenset"}
     for node in tree.body:
@@ -285,6 +288,24 @@ def validate_algorithm_template(
         for node in ast.walk(reachable)
         if isinstance(node, ast.Name)
     }
+    dynamic_execution = sorted(
+        {
+            node.func.id
+            for reachable in reachable_functions.values()
+            for node in ast.walk(reachable)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"compile", "eval", "exec"}
+        }
+    )
+    if dynamic_execution:
+        errors.append(
+            "main_process 及其辅助函数禁止动态执行用户文本: "
+            + ", ".join(dynamic_execution)
+            + "；请改为显式 operation 分支并直接调用仓库 API"
+        )
+    else:
+        checks["noDynamicCodeExecution"] = True
     indirect_imports: set[str] = set()
     for node in tree.body:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -520,7 +541,14 @@ def _validate_template_contract_test(
         )
 
     assertion_count = sum(
-        isinstance(node, ast.Assert) for node in ast.walk(tree)
+        isinstance(node, ast.Assert)
+        or (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr.startswith("assert")
+            and len(node.func.attr) > len("assert")
+        )
+        for node in ast.walk(tree)
     )
     if fixtures and assertion_count >= len(fixtures):
         checks["contractTestAssertions"] = True

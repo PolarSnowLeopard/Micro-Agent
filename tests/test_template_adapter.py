@@ -178,6 +178,84 @@ def test_contract():
     assert any("必须是可审计的 JSON 字面量" in error for error in report.errors)
 
 
+def test_template_contract_accepts_unittest_assertion_methods(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n    return value * 2\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''import unittest
+from main import main_process
+
+class ContractTest(unittest.TestCase):
+    def test_contract(self):
+        result = main_process(value=2.0)
+        self.assertEqual(result["result"], 4.0)
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(project, require_contract_test=True)
+
+    assert report.passed, report.to_json()
+    assert report.checks["contractTestAssertions"] is True
+
+
+def test_template_validator_rejects_dynamic_execution_in_reachable_helper(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n    return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def _evaluate(expression: str) -> object:
+    return eval(expression)
+
+def main_process(expression: str) -> dict[str, object]:
+    """Evaluate an expression.
+
+    Args:
+        expression: User expression.
+
+    Returns:
+        Computed result.
+    """
+    run(1.0)
+    return {"result": _evaluate(expression)}
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert not report.passed
+    assert report.checks["noDynamicCodeExecution"] is False
+    assert any("禁止动态执行用户文本: eval" in error for error in report.errors)
+
+
 def test_contract_runtime_rejects_non_reproducible_requirements(
     tmp_path: Path,
 ) -> None:
