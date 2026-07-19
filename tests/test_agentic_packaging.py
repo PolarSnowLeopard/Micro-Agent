@@ -1400,6 +1400,9 @@ async def test_save_plan_requires_free_text_smoke_values_from_cited_fixture(tmp_
     )
     assert provenance_result.error
     assert "[smoke_evidence_reference]" in provenance_result.error
+    assert "必须保持 input 不变" in provenance_result.error
+    assert "'documented risk fixture' -> [" in provenance_result.error
+    assert "evidence: examples/fixture.py:1" in provenance_result.error
     assert rejected_store.best_score is not None
     assert rejected_store.best_score[0] == 4
     assert rejected_store.best_candidate is not None

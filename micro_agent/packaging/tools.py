@@ -596,12 +596,36 @@ def _independent_smoke_evidence_errors(
             if any(isinstance(item, str) and path in item for item in evidence)
         }
         if not cited_files:
+            provenance_hint = ""
+            if evidence_root is not None:
+                candidate_paths = _smoke_candidate_files(independent_files)
+                free_text_values = _ungrounded_smoke_strings(
+                    smoke.get("input", {}),
+                    tool.get("inputSchema", {}),
+                    "",
+                )
+                exact_provenance = _smoke_candidate_provenance(
+                    evidence_root,
+                    candidate_paths,
+                    set(free_text_values),
+                )
+                if exact_provenance:
+                    provenance_hint = (
+                        "；当前 input 已在以下独立文件中逐字出现，必须保持 input 不变并将 "
+                        "smokeTest.evidence 改为对应 file:line: "
+                        + ", ".join(
+                            f"{value[:80]!r} -> {exact_provenance[value]}"
+                            for value in free_text_values
+                            if value in exact_provenance
+                        )
+                    )
             errors.append(
                 "[smoke_evidence_reference] "
                 f"{tool.get('name', '<unnamed>')}.smokeTest.evidence "
                 "只引用了生成的 main.py/README.ioeb.md/template_adaptation.json；"
                 "请从原仓库可执行测试、doctest 或示例核对输入；"
                 "找不到独立可执行证据时，该能力不能进入本次生产封装"
+                + provenance_hint
             )
             continue
         if evidence_root is None:
@@ -659,6 +683,11 @@ def _independent_smoke_evidence_errors(
                 + f"{tool.get('name', '<unnamed>')}.smokeTest.input 包含未在所引测试/"
                 f"doctest/示例中出现的自由文本值: {rendered}；"
                 "必须改用被引用文件中的真实可执行 fixture，不能依据模板注释编造"
+                + (
+                    "；当前 input 已在候选独立证据中逐字出现，必须保持 input 不变并仅更新 evidence"
+                    if all_values_exist_elsewhere
+                    else ""
+                )
                 + (
                     "；仓库测试/doctest/示例中的接近字符串候选"
                     "（使用时必须同步更新 evidence 并核对调用上下文）: "

@@ -583,6 +583,17 @@ async def _run_planner(
                 if selected_candidate is not None
                 else "未捕获到可恢复的上一版规划"
             )
+            smoke_reference_only = bool(selected_errors) and all(
+                error.startswith("[smoke_evidence_reference]")
+                for error in selected_errors
+            )
+            error_specific_guidance = (
+                "当前最佳候选已经通过 smoke fixture 逐字值门禁，错误只在 evidence 引用。"
+                "严禁修改任何 smokeTest.input；只把 smokeTest.evidence 替换为错误末尾给出的"
+                "独立 file:line，并保持候选中所有其他字段逐字不变。\n"
+                if smoke_reference_only
+                else ""
+            )
             prompt = (
                 initial_prompt
                 + "\n\n上一次独立质量门禁未接受规划。下面提供上一版完整候选工件；"
@@ -592,7 +603,8 @@ async def _run_planner(
                 "不能放进任一 service。每个工具都必须显式提交 smokeTest；仓库已有可追溯示例时"
                 "不能省略或关闭。若错误指出 smoke 自由文本没有证据，必须先读取候选中引用的"
                 "原仓库测试/doctest/示例并使用其中逐字存在的 fixture，不能再次猜测。\n"
-                "上一版完整候选工件：\n"
+                + error_specific_guidance
+                + "上一版完整候选工件：\n"
                 + previous_candidate
                 + (
                     "\n当前最佳候选的校验错误：\n- " + "\n- ".join(selected_errors)
