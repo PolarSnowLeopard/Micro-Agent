@@ -116,7 +116,20 @@ class ReadProjectFile(Tool):
                         )
                     )
                 )
-            return ToolResult(error=f"文件不存在或不可读: {kwargs.get('path', '')}")
+            suggestions = _file_path_suggestions(self.root, requested)
+            suggestion_text = (
+                "；仓库内可能的真实路径: "
+                + ", ".join(suggestions)
+                + "。请从候选中选择，不要继续重复不存在的路径"
+                if suggestions
+                else ""
+            )
+            return ToolResult(
+                error=(
+                    f"文件不存在或不可读: {kwargs.get('path', '')}"
+                    + suggestion_text
+                )
+            )
         self.calls += 1
         start = max(1, int(kwargs.get("start_line", 1)))
         end = max(start, min(start + 999, int(kwargs.get("end_line", 400))))
@@ -125,6 +138,50 @@ class ReadProjectFile(Tool):
         if len(selected) > self.max_chars:
             selected = selected[: self.max_chars] + "\n...(truncated)"
         return ToolResult(output=f"# {path.relative_to(self.root)} lines {start}-{end}\n{selected}")
+
+
+def _file_path_suggestions(
+    root: Path,
+    requested: str,
+    *,
+    limit: int = 5,
+) -> list[str]:
+    """Suggest contained files for omitted src/ prefixes or close paths."""
+
+    normalized = requested.strip().lstrip("./")
+    name = Path(normalized).name
+    if not name:
+        return []
+    candidates: list[tuple[int, float, str]] = []
+    try:
+        matches = root.rglob(name)
+        for path in matches:
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or any(
+                    part in {".git", ".venv", "venv", "__pycache__"}
+                    for part in path.relative_to(root).parts
+                )
+            ):
+                continue
+            relative = path.relative_to(root).as_posix()
+            suffix_match = int(
+                not (
+                    relative == normalized
+                    or relative.endswith("/" + normalized)
+                )
+            )
+            similarity = difflib.SequenceMatcher(
+                None,
+                normalized,
+                relative,
+            ).ratio()
+            candidates.append((suffix_match, -similarity, relative))
+    except OSError:
+        return []
+    candidates.sort()
+    return [relative for _, _, relative in candidates[:limit]]
 
 
 @dataclass

@@ -1252,6 +1252,29 @@ async def test_project_reader_invalid_path_does_not_consume_read_budget(tmp_path
     assert exhausted.error
 
 
+async def test_project_reader_suggests_src_layout_without_spending_budget(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    nested = project / "src" / "package"
+    nested.mkdir(parents=True)
+    (nested / "model.py").write_text(
+        "def predict(value):\n    return value\n",
+        encoding="utf-8",
+    )
+    reader = ReadProjectFile(project, max_reads=1)
+
+    missing = await reader.execute(path="package/model.py")
+    corrected = await reader.execute(path="src/package/model.py")
+    exhausted = await reader.execute(path="core.py")
+
+    assert missing.error
+    assert "src/package/model.py" in missing.error
+    assert "不要继续重复不存在的路径" in missing.error
+    assert not corrected.error
+    assert exhausted.error
+
+
 def test_non_template_repository_retains_full_public_symbol_audit(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
 
