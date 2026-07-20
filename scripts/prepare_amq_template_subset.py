@@ -630,6 +630,14 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "若缺失模块只来自未使用的训练、指标或 CLI 聚合导入，应改为从更具体"
             "子模块导入真实能力，避免拉入无关可选依赖。"
         )
+        if "/src/__init__.py" in text or "\\src\\__init__.py" in text:
+            advice.append(
+                "当前所谓“具体子模块”仍写成 `from src.<package>...`，Python 会先执行"
+                " src/__init__.py，因此继续触发无关聚合依赖。容器的 `/workspace/src` "
+                "已在 PYTHONPATH：应依据 pyproject 的包布局和仓库现有测试，直接"
+                "`from <package>.<module> import ...`，而不是把目录名 src 当作包名；"
+                "修改后还要核对该子包内部的绝对/相对 import 是否与此拓扑一致。"
+            )
     if any(
         marker in text
         for marker in (

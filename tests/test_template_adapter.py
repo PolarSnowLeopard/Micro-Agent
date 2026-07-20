@@ -1495,6 +1495,14 @@ def main_process(value: float) -> float:
     assert "更具体子模块" in missing_module_advice
     assert "不能只补 traceback 中第一个包" in missing_module_advice
     assert "一次性比对" in missing_module_advice
+    src_layout_advice = _template_runtime_repair_advice(
+        [
+            "File '/workspace/src/__init__.py', line 29",
+            "ModuleNotFoundError: No module named 'composer'",
+        ]
+    )
+    assert "Python 会先执行 src/__init__.py" in src_layout_advice
+    assert "不是把目录名 src 当作包名" in src_layout_advice
     module_state_advice = _template_runtime_repair_advice(
         ["禁止模块级调用初始化运行状态，相关行: 30"]
     )
