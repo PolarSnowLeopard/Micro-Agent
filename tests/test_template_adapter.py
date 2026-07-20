@@ -1111,6 +1111,7 @@ def test_contract():
     assert "--read-only" in docker_run
     assert "--cap-drop" in docker_run and "ALL" in docker_run
     assert "PYTHONPATH=/workspace:/workspace/src:/ioeb" in docker_run
+    assert "HOME=/tmp" in docker_run
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in docker_run
     assert "MPLCONFIGDIR=/tmp/matplotlib" in docker_run
     assert "XDG_CACHE_HOME=/tmp/cache" in docker_run
@@ -1126,6 +1127,7 @@ def test_contract():
     assert "/tmp/requirements-cpu.txt" in dockerfiles[0]
     assert "/tmp/requirements-main.txt" in dockerfiles[0]
     assert "libexpat1 libgomp1 libgl1 libglib2.0-0" in dockerfiles[0]
+    assert "libxrender1 libxext6 libsm6" in dockerfiles[0]
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 

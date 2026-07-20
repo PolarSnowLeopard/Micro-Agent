@@ -1651,6 +1651,7 @@ def verify_template_contract_runtime(
         "WORKDIR /workspace\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends "
         "libexpat1 libgomp1 libgl1 libglib2.0-0 "
+        "libxrender1 libxext6 libsm6 "
         "&& rm -rf /var/lib/apt/lists/*\n"
         "COPY requirements.txt /tmp/requirements.txt\n"
         "RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked "
@@ -1758,6 +1759,8 @@ def verify_template_contract_runtime(
                 "2",
                 "--env",
                 f"PYTHONPATH={python_path}",
+                "--env",
+                "HOME=/tmp",
                 "--env",
                 "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
                 "--env",
