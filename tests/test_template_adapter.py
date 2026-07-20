@@ -410,6 +410,15 @@ def test_runtime_contract_capture_parses_successful_json_inputs() -> None:
     )
 
     assert parsed == payload
+    assert template_adapter._without_runtime_contract_capture(
+        "failure details\n"
+        + template_adapter._CONTRACT_FIXTURE_MARKER
+        + json.dumps(payload)
+        + "\nsummary"
+    ) == (
+        "failure details\nsummary\n"
+        "[contract_fixture_capture] omitted 1 structured payload"
+    )
 
 
 def test_runtime_contract_capture_executes_dynamic_contract(

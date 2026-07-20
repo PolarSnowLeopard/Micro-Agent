@@ -1414,6 +1414,21 @@ def _parse_runtime_contract_capture(stdout: str) -> dict[str, Any] | None:
     return None
 
 
+def _without_runtime_contract_capture(stdout: str) -> str:
+    omitted = 0
+    retained: list[str] = []
+    for line in stdout.splitlines():
+        if line.startswith(_CONTRACT_FIXTURE_MARKER):
+            omitted += 1
+        else:
+            retained.append(line)
+    if omitted:
+        retained.append(
+            f"[contract_fixture_capture] omitted {omitted} structured payload"
+        )
+    return "\n".join(retained)
+
+
 def _apply_runtime_contract_capture(
     checks: dict[str, Any],
     static_report: TemplateValidationReport,
@@ -1760,14 +1775,23 @@ def verify_template_contract_runtime(
                 errors.append(
                     "[contract_test] 仓库源码模式与同名发行包回退模式均失败。"
                     "\n源码模式:\n"
-                    + _safe_process_tail(runtime.stdout, runtime.stderr)
+                    + _safe_process_tail(
+                        _without_runtime_contract_capture(runtime.stdout),
+                        runtime.stderr,
+                    )
                     + "\n发行包回退模式:\n"
-                    + _safe_process_tail(fallback.stdout, fallback.stderr)
+                    + _safe_process_tail(
+                        _without_runtime_contract_capture(fallback.stdout),
+                        fallback.stderr,
+                    )
                 )
         else:
             errors.append(
                 "[contract_test] 无网络只读容器中的模板契约测试失败:\n"
-                + _safe_process_tail(runtime.stdout, runtime.stderr)
+                + _safe_process_tail(
+                    _without_runtime_contract_capture(runtime.stdout),
+                    runtime.stderr,
+                )
             )
     finally:
         dockerfile.unlink(missing_ok=True)
