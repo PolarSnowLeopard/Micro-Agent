@@ -48,6 +48,7 @@ from micro_agent.packaging.workflow import (
     _build_builder_agent,
     _build_planning_agent,
     _builder_implementation_context,
+    _builder_prompt,
     _configure_repair_builder,
     _configure_planner_submission_turn,
     _configure_smoke_revision_builder,
@@ -58,6 +59,7 @@ from micro_agent.packaging.workflow import (
     _smoke_revision_retry_prompt,
     planning_candidate_symbols,
     _extract_planning_json,
+    _llm_safe_json,
     _planner_prompt,
 )
 from api.services.files import extract_zip
@@ -854,6 +856,33 @@ def test_builder_context_passes_bounded_reviewed_source_artifacts(tmp_path):
     assert "core.py" in context["sourceExcerpts"]
     assert sum(len(value) for value in context["sourceExcerpts"].values()) <= 300
     assert "def predict" in context["sourceExcerpts"]["core.py"]
+
+
+def test_large_verified_fixtures_are_summarized_only_in_llm_prompts(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    signal = [float(index) for index in range(20_000)]
+    context = _builder_implementation_context(plan, ir)
+    context["verifiedTemplateContract"] = {
+        "runtimePassed": True,
+        "records": [{"toolSmokeInput": {"signal": signal}}],
+    }
+
+    safe = _llm_safe_json(context)
+    prompt = _builder_prompt(plan, ir, context)
+
+    assert context["verifiedTemplateContract"]["records"][0][
+        "toolSmokeInput"
+    ]["signal"] == signal
+    summary = safe["verifiedTemplateContract"]["records"][0][
+        "toolSmokeInput"
+    ]["signal"]["$ioebLargeValue"]
+    assert summary["length"] == 20_000
+    assert summary["restoredBySystem"] is True
+    assert len(prompt) < 50_000
+    assert "$ioebLargeValue" in prompt
+    assert '"length": 20000' in prompt
 
 
 def test_planner_prioritizes_submitted_template_contract_tests(tmp_path):
