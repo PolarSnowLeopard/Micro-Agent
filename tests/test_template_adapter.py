@@ -1474,6 +1474,15 @@ def main_process(value: float) -> float:
         ["ValueError: Invalid equivalence entry 0"]
     )
     assert "不能再次包装" in equivalency_advice
+    signature_advice = _template_runtime_repair_advice(
+        [
+            "TypeError: FlowPredictorCfg.__init__() got an unexpected "
+            "keyword argument 'model_path'"
+        ]
+    )
+    assert "当前源码签名不一致" in signature_advice
+    assert "禁止沿用其他版本" in signature_advice
+    assert "随机权重" in signature_advice
     dependency_advice = _template_runtime_repair_advice(
         ["ERROR: No matching distribution found for optional-vis-package"]
     )

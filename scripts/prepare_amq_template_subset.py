@@ -684,6 +684,17 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             " `equivalencies=[u.spectral()]`。其他返回列表的工厂同样按此处理。"
         )
     if (
+        "unexpected keyword argument" in text
+        or "got an unexpected keyword" in text
+    ):
+        advice.append(
+            "构造器/函数关键字与当前源码签名不一致：读取 traceback 指向的真实定义"
+            "及同一提交中的调用示例，逐项核对参数名、必填项、默认值和配置分支；只"
+            "传当前签名明确接受的字段，禁止沿用其他版本、相似类或模型名称臆造"
+            " `model_path` 等参数。若真实签名要求 checkpoint/权重而仓库没有资产，"
+            "应拒绝该能力，不能用 None、随机权重或另一算法配置假装可运行。"
+        )
+    if (
         "keyerror:" in text
         or " in {}" in text
         or (
