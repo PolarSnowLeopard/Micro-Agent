@@ -1457,6 +1457,11 @@ def main_process(value: float) -> float:
         ["ValueError: Invalid equivalence entry 0"]
     )
     assert "不能再次包装" in equivalency_advice
+    dependency_advice = _template_runtime_repair_advice(
+        ["ERROR: No matching distribution found for optional-vis-package"]
+    )
+    assert "禁止把原仓库的 Git/VCS 依赖猜成" in dependency_advice
+    assert "未使用的 import" in dependency_advice
     runtime_advice = _template_runtime_repair_advice(
         [
             "[contract_test] 4 failed, 8 passed",

@@ -490,6 +490,15 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "下载，也不能用随机权重替代预训练资产；若仓库没有所需资产，应明确拒绝"
             "适配该能力。"
         )
+    if "no matching distribution found for" in text:
+        advice.append(
+            "依赖名在允许的包索引中不存在：禁止把原仓库的 Git/VCS 依赖猜成相似的"
+            " PyPI 名称。先搜索 main.py 是否真的使用了引入该依赖的可选可视化、CLI"
+            " 或训练模块；若发布能力不需要它，应删除未使用的 import，并从"
+            " requirements.txt 删除该可选依赖。若真实能力必需该包，则只能使用仓库"
+            "已内置源码或索引中确实存在的发行包；两者都没有时应拒绝该能力，不能"
+            "虚构包名或复制第三方实现。"
+        )
     if any(
         marker in text
         for marker in (
