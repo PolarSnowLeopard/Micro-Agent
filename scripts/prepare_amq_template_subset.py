@@ -548,6 +548,12 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "原仓库测试/doctest/示例中确实产生非空结果的字面量。禁止伪造返回键、"
             "硬填空结果或删除领域断言来制造通过。"
         )
+    if "deprecationwarning" in text or "deprecated" in text:
+        advice.append(
+            "运行日志已明确标记当前源码 API deprecated：使用 search_project_text "
+            "搜索警告给出的替代类/函数及其 run/extract 用法，读取替代实现后重构 "
+            "main.py。不得继续围绕弃用入口反复调整参数，也不得仅屏蔽警告。"
+        )
     if not advice:
         return ""
     return (

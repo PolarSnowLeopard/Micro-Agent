@@ -1403,6 +1403,14 @@ def main_process(value: float) -> float:
         ]
     )
     assert "canonical vocabulary" in empty_result_advice
+    deprecation_advice = _template_runtime_repair_advice(
+        [
+            "DeprecationWarning: LegacyProcessor is deprecated. "
+            "Please use ProcessingPipeline instead."
+        ]
+    )
+    assert "search_project_text" in deprecation_advice
+    assert "替代" in deprecation_advice
     assert "禁止伪造返回键" in empty_result_advice
     literal_advice = _template_runtime_repair_advice(
         ["模板契约测试的 main_process 输入必须是可审计的 JSON 字面量"]
