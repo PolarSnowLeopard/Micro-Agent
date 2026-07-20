@@ -647,13 +647,10 @@ async def adapt_one(
             no_op_attempts = 0
             no_op_attempt_budget = max(2, (max_attempts + 1) // 2)
             capability_design = None
+            capability_count = None
             if is_l0:
                 _write_l0_entrypoint(staged, sample["wrap_intent"])
             else:
-                for relative, content in recovered_writes.items():
-                    target = staged / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(content, encoding="utf-8")
                 event_path = run_dir / "events.jsonl"
                 discovery_ir = await asyncio.to_thread(
                     RepositoryAnalyzer().analyze,
@@ -678,6 +675,11 @@ async def adapt_one(
                             + "\n"
                         )
                 capability_design = discovery.store.design
+                capability_count = (
+                    len(capability_design.capabilities)
+                    if capability_design is not None
+                    else None
+                )
                 summary["capabilityDiscovery"] = {
                     "completed": capability_design is not None,
                     "decision": (
@@ -692,11 +694,16 @@ async def adapt_one(
                     ),
                     "errors": discovery.store.last_errors or [],
                 }
+                for relative, content in recovered_writes.items():
+                    target = staged / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content, encoding="utf-8")
                 _save_template_snapshot(staged, run_dir)
                 recovered_report = validate_algorithm_template(
                     staged,
                     require_contract_test=True,
                     allow_runtime_collected_contract=True,
+                    max_contract_success_fixtures=capability_count,
                 )
                 if recovered_writes:
                     _write_json_atomic(run_dir / "validation_recovered.json", recovered_report.to_dict())
@@ -713,6 +720,7 @@ async def adapt_one(
                     runtime_report = await asyncio.to_thread(
                         verify_template_contract_runtime,
                         staged,
+                        max_contract_success_fixtures=capability_count,
                     )
                     _write_json_atomic(
                         run_dir / "contract_runtime_validation_initial.json",
@@ -749,6 +757,7 @@ async def adapt_one(
                             if repair_mode
                             else True
                         ),
+                        capability_count=capability_count,
                     )
                     prompt = template_adapter_prompt(
                         ir,
@@ -790,6 +799,7 @@ async def adapt_one(
                         staged,
                         require_contract_test=True,
                         allow_runtime_collected_contract=True,
+                        max_contract_success_fixtures=capability_count,
                     )
                     _write_json_atomic(run_dir / f"validation_attempt_{attempt}.json", report.to_dict())
                     errors = report.errors
@@ -809,6 +819,7 @@ async def adapt_one(
                     runtime_report = await asyncio.to_thread(
                         verify_template_contract_runtime,
                         staged,
+                        max_contract_success_fixtures=capability_count,
                     )
                     _write_json_atomic(
                         run_dir / f"contract_runtime_validation_attempt_{attempt}.json",
@@ -829,6 +840,7 @@ async def adapt_one(
                 allow_explicit_unsupported=is_l0,
                 require_contract_test=not is_l0,
                 allow_runtime_collected_contract=not is_l0,
+                max_contract_success_fixtures=capability_count,
             )
             _write_json_atomic(run_dir / "validation.json", report.to_dict())
             if not report.passed:
@@ -853,6 +865,11 @@ async def adapt_one(
                 "originalRepoInfo": sample["repo_info"],
                 "originalTreeSha256": source_tree_sha,
                 "negativeControl": is_l0,
+                "capabilityDesign": (
+                    capability_design.to_dict()
+                    if capability_design is not None
+                    else None
+                ),
                 "validation": report.to_dict(),
                 "contractRuntime": (
                     runtime_report.to_dict() if runtime_report is not None else None

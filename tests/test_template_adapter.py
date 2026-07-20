@@ -389,6 +389,60 @@ def test_contract():
     assert runtime_deferred.checks["contractFixtures"] == []
 
 
+def test_template_contract_rejects_random_and_duplicate_success_fixtures(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(values: list[float]) -> float:\n    return sum(values)\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(values: list[float]) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        values: Numeric inputs.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(values)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''import numpy as np
+from main import main_process
+
+def test_first_contract():
+    values = np.random.randn(4).tolist()
+    result = main_process(values=values)
+    assert isinstance(result["result"], float)
+
+def test_duplicate_contract():
+    result = main_process(values=[1.0, 2.0])
+    assert result["result"] == 3.0
+''',
+        encoding="utf-8",
+    )
+
+    report = validate_algorithm_template(
+        project,
+        require_contract_test=True,
+        allow_runtime_collected_contract=True,
+        max_contract_success_fixtures=1,
+    )
+
+    assert not report.passed
+    assert report.checks["contractNondeterministicCallLines"] == [5]
+    assert any("禁止 random/numpy.random" in error for error in report.errors)
+    assert any("只允许一个最小成功 fixture" in error for error in report.errors)
+
+
 def test_runtime_contract_capture_parses_successful_json_inputs() -> None:
     payload = {
         "records": [

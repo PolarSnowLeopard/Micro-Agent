@@ -60,6 +60,9 @@ def _raw_design() -> dict:
                 "composition": "Call core.predict directly after validating a finite number.",
                 "inputNotes": "Accept one finite floating point observation value.",
                 "outputNotes": "Return the source score field as a JSON number.",
+                "fixtureGuidance": (
+                    "Reuse tests/test_core.py:4 with value 0.5 and assert score 0.5."
+                ),
                 "evidence": ["tests/test_core.py:4"],
             },
             {
@@ -73,6 +76,9 @@ def _raw_design() -> dict:
                 "composition": "Call core.evaluate with the validated list of values.",
                 "inputNotes": "Accept a non-empty list of finite floating point values.",
                 "outputNotes": "Return the source mean field as a JSON number.",
+                "fixtureGuidance": (
+                    "Use the README example with a deterministic list and assert its mean."
+                ),
                 "evidence": ["README.md:2"],
             },
         ],
@@ -147,11 +153,41 @@ def test_discovery_agent_has_bounded_evidence_tools(tmp_path: Path) -> None:
     assert set(agent.tools.list_names()) == {
         "inspect_repository",
         "read_project_file",
+        "search_project_text",
         "save_capability_design_json",
     }
     assert agent.terminal_tools == {"save_capability_design_json"}
     assert agent.require_terminal_tool is True
     assert agent.tools.get("read_project_file").max_reads == 10
+    assert agent.tools.get("search_project_text").max_calls == 5
+
+
+@pytest.mark.asyncio
+async def test_discovery_search_finds_source_usage_but_not_generated_candidate(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    generated = project / "tests_ioeb"
+    generated.mkdir()
+    (generated / "test_template_contract.py").write_text(
+        "predict(999)\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    store = CapabilityDesignStore(
+        path=tmp_path / "capability_design.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+    )
+    search = _build_discovery_agent(project, ir, store).tools.get(
+        "search_project_text"
+    )
+
+    result = await search.execute(query="predict")
+
+    assert result.error is None
+    assert "tests/test_core.py" in result.output
+    assert "tests_ioeb/test_template_contract.py" not in result.output
 
 
 def test_discovery_design_becomes_planner_and_template_input(

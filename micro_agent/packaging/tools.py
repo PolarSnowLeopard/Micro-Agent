@@ -164,6 +164,134 @@ class ReadProjectFile(Tool):
         return ToolResult(output=f"# {path.relative_to(self.root)} lines {start}-{end}\n{selected}")
 
 
+class SearchProjectText(Tool):
+    """Bounded, read-only text search over source, tests, docs, and notebooks."""
+
+    name = "search_project_text"
+    description = (
+        "在原仓库源码、测试、示例、文档和 Notebook 中搜索精确文本，返回路径、行号和短上下文；"
+        "用于定位公开符号的真实用法或确定性 fixture，不搜索生成候选。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 200,
+                "description": "要查找的函数、类、参数、资产名或错误文本",
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+    def __init__(
+        self,
+        project_dir: str | Path,
+        *,
+        max_calls: int = 5,
+        max_results: int = 40,
+    ) -> None:
+        self.root = Path(project_dir).resolve()
+        self.max_calls = max_calls
+        self.max_results = max_results
+        self.calls = 0
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        if self.calls >= self.max_calls:
+            return ToolResult(
+                error=(
+                    f"本轮文本检索上限为 {self.max_calls} 次，额度已用完；"
+                    "请使用已有证据完成当前阶段"
+                )
+            )
+        self.calls += 1
+        query = str(kwargs.get("query", "")).strip()
+        if not 2 <= len(query) <= 200 or "\x00" in query:
+            return ToolResult(error="query 长度必须在 2 到 200 个字符之间")
+        needle = query.casefold()
+        ignored_directories = {
+            ".git",
+            ".hg",
+            ".svn",
+            ".tox",
+            ".venv",
+            "venv",
+            "__pycache__",
+            "build",
+            "dist",
+            "node_modules",
+            "tests_ioeb",
+        }
+        allowed_suffixes = {
+            ".cfg",
+            ".ini",
+            ".ipynb",
+            ".json",
+            ".md",
+            ".py",
+            ".rst",
+            ".toml",
+            ".txt",
+            ".yaml",
+            ".yml",
+        }
+        matches: list[str] = []
+        visited_files = 0
+        try:
+            for current, directories, filenames in os.walk(
+                self.root,
+                topdown=True,
+                followlinks=False,
+            ):
+                directories[:] = sorted(
+                    directory
+                    for directory in directories
+                    if directory not in ignored_directories
+                    and not (Path(current) / directory).is_symlink()
+                )
+                for filename in sorted(filenames):
+                    path = Path(current) / filename
+                    relative = path.relative_to(self.root).as_posix()
+                    if (
+                        path.is_symlink()
+                        or path.suffix.casefold() not in allowed_suffixes
+                        or relative in {"main.py", "template_adaptation.json"}
+                    ):
+                        continue
+                    visited_files += 1
+                    if visited_files > 4_000:
+                        break
+                    try:
+                        if path.stat().st_size > 2_000_000:
+                            continue
+                        lines = path.read_text(
+                            encoding="utf-8",
+                            errors="replace",
+                        ).splitlines()
+                    except OSError:
+                        continue
+                    for line_number, line in enumerate(lines, start=1):
+                        if needle not in line.casefold():
+                            continue
+                        compact = " ".join(line.strip().split())
+                        if len(compact) > 320:
+                            compact = compact[:317] + "..."
+                        matches.append(f"{relative}:{line_number}: {compact}")
+                        if len(matches) >= self.max_results:
+                            break
+                    if len(matches) >= self.max_results:
+                        break
+                if len(matches) >= self.max_results or visited_files > 4_000:
+                    break
+        except OSError as exc:
+            return ToolResult(error=f"仓库文本检索失败: {exc}")
+        if not matches:
+            return ToolResult(output=f"未找到文本: {query}")
+        return ToolResult(output="\n".join(matches))
+
+
 def _file_path_suggestions(
     root: Path,
     requested: str,

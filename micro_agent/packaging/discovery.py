@@ -22,7 +22,11 @@ from micro_agent.core.llm import LLM
 from micro_agent.core.schema import AgentEvent
 from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.relevance import build_relevance_evidence
-from micro_agent.packaging.tools import InspectRepository, ReadProjectFile
+from micro_agent.packaging.tools import (
+    InspectRepository,
+    ReadProjectFile,
+    SearchProjectText,
+)
 from micro_agent.tool.base import Tool, ToolResult
 from micro_agent.tool.registry import ToolRegistry
 
@@ -34,10 +38,10 @@ _SNAKE_CASE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 DISCOVERY_SYSTEM_PROMPT = """你是 MCP 封装流程的能力发现 Agent。当前阶段只回答“仓库真实提供哪些适合远程 Agent 使用的业务能力，以及它们由哪些源码实现”，不要生成 server.py、Dockerfile，也不要提前编造 JSON Schema。
 
 按以下顺序工作：
-1. 先且只调用一次 inspect_repository。请求中已包含 DARP/BAGE 相关子图，先从 detailed 层确定候选，再按需阅读 README、测试、示例、入口与核心实现；最多读取 10 个文件。
+1. 先且只调用一次 inspect_repository。请求中已包含 DARP/BAGE 相关子图，先从 detailed 层确定候选，再用 search_project_text 按核心类/函数名定位测试、示例和 Notebook 用法，按需阅读 README、入口与核心实现；最多读取 10 个文件、检索 5 次。
 2. 选择 1–6 个与用户意图最相关、可独立解释的用户能力。不要逐函数机械暴露；一个能力可以组合多个源码符号。也不要把不同输入输出语义的能力压成一个万能 operation。
 3. 训练/推理、解析/转换、评估/解释等只有在状态、依赖和用户目的确实不同且有源码证据时才拆分。日志、文件加载、内部格式转换、health、get_model_info 等不是业务能力。
-4. 每个能力必须引用真实 sourceSymbols、sourceFiles 和 evidence。优先使用原仓库测试、doctest、示例或 README 中可执行用法；composition 要写清调用链、对象初始化和必要的数据转换。
+4. 每个能力必须引用真实 sourceSymbols、sourceFiles 和 evidence。必须先搜索核心符号的用法，优先引用原仓库测试、doctest、示例、Notebook 或示例资产；composition 要写清调用链、对象初始化和必要的数据转换。fixtureGuidance 必须说明一个可重复成功的最小输入从哪个仓库证据取得、如何转换；没有现成 fixture 时才允许说明使用依赖库的领域模拟器及固定种子，禁止手写随机数据。
 5. sourceSymbols 必须逐字来自仓库索引中的 qualifiedName。若能力来自 Notebook 或仓库声明的外部算法依赖而索引没有可引用函数，sourceSymbols 可为空，但 sourceFiles 和 evidence 仍必须指向仓库内证据，并在 risks 说明限制。
 6. 不得使用 benchmark task、ground truth、验证脚本或样例名称特判；不得把不存在的模型、checkpoint、数据文件或联网下载伪装成可用能力。缺少关键资产时记录 risks，仓库确无可调用算法时 decision=reject。
 7. 完成证据收集后立即调用 save_capability_design_json。必须提交完整严格 JSON，不要只在文本中描述。
@@ -56,6 +60,7 @@ DISCOVERY_SYSTEM_PROMPT = """你是 MCP 封装流程的能力发现 Agent。当�
       "composition": "如何调用/组合源码，包括初始化与转换",
       "inputNotes": "真实输入语义、约束、默认值和文件内容转换",
       "outputNotes": "真实返回结构及序列化方式",
+      "fixtureGuidance": "一个确定性成功输入的证据路径、提取/构造步骤和关键断言",
       "evidence": ["tests/test_core.py:42", "README.md:80"]
     }
   ],
@@ -169,7 +174,12 @@ class CapabilityDesign:
             if not source_symbols and not source_files:
                 errors.append(f"{prefix} 没有任何源码实现证据")
 
-            for field in ("composition", "inputNotes", "outputNotes"):
+            for field in (
+                "composition",
+                "inputNotes",
+                "outputNotes",
+                "fixtureGuidance",
+            ):
                 value = capability.get(field)
                 if not isinstance(value, str) or len(value.strip()) < 8:
                     errors.append(f"{prefix}.{field} 必须给出具体源码语义")
@@ -337,6 +347,7 @@ def _build_discovery_agent(
 ) -> Agent:
     tools = ToolRegistry()
     tools.register(InspectRepository(ir, max_calls=1))
+    tools.register(SearchProjectText(project_dir, max_calls=5))
     tools.register(ReadProjectFile(project_dir, max_reads=10))
     tools.register(SaveCapabilityDesignJson(store))
     return Agent(

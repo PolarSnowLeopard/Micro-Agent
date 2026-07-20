@@ -22,7 +22,11 @@ from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.discovery import CapabilityDesign
-from micro_agent.packaging.tools import InspectRepository, ReadProjectFile
+from micro_agent.packaging.tools import (
+    InspectRepository,
+    ReadProjectFile,
+    SearchProjectText,
+)
 from micro_agent.tool.base import Tool, ToolResult
 from micro_agent.tool.registry import ToolRegistry
 
@@ -30,7 +34,9 @@ from micro_agent.tool.registry import ToolRegistry
 TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent。你的任务是给现有仓库增加一个最薄的、真实可调用的模板入口，而不是重写算法或生成演示实现。
 
 必须遵守：
-1. 先且只调用一次 inspect_repository，再阅读 README、依赖文件、与用户封装意图相关的入口、测试和核心源码。每轮最多调用 12 次 read_project_file；证据足够后立即写入口，不得漫无目的遍历仓库。
+1. 先且只调用一次 inspect_repository，再用 search_project_text 按 CapabilityDesign
+   中的源码符号查找原仓库测试、示例、Notebook 与资产用法，然后阅读 README、依赖文件、
+   相关入口和核心源码。每轮最多检索 5 次、读取 12 个文件；证据足够后立即写入口。
 2. 只允许写根目录 main.py、在确有必要时写 requirements.txt，以及
    tests_ioeb/test_template_contract.py。不得修改原算法源码。
 3. main.py 必须提供顶层同步函数 main_process(...)；所有参数和返回值有类型注解，docstring 使用 Google 风格并包含 Args: 与 Returns:。
@@ -39,12 +45,14 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 6. 面向调用者的输入输出应为 JSON 可表达的标量、list、dict；不得要求调用者访问容器内路径。若原算法确实需要文件，可接受 Base64/文本/结构化内容并在函数内部创建临时资源。
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
-9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process，
-   至少用一个完整 JSON 输入覆盖每个准备发布的独立能力；不要求穷举底层库的所有可选算法、
-   配置值或错误边界。优先使用可静态还原的字面量；领域输入确需计算时可在测试内动态构造，
+9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process。
+   每个准备发布的独立能力只保留一个最小成功 fixture；不要为同一能力重复测试不同算法、
+   配置值或错误边界。优先严格复用 CapabilityDesign.fixtureGuidance 指向的原仓库测试、
+   示例、Notebook 或资产。领域输入确需计算时可在测试内动态构造，
    但传给 main_process 的最终参数必须完全 JSON 可序列化、不能含 NaN/Infinity，并会在隔离
-   Docker 中捕获为服务 smoke。每个成功 fixture 至少用一个 assert 检查领域输出。
-   优先复用原仓库测试/doctest/示例中的输入，不得只检查 callable、不得联网、不得启动子进程。
+   Docker 中捕获为服务 smoke；只能使用领域库提供的模拟器及显式固定种子，禁止 random、
+   numpy.random、当前时间或手写随机波形。每个成功 fixture 至少用一个 assert 检查领域输出。
+   不得只检查 callable、不得联网、不得启动子进程。
    可选的错误边界 fixture 必须放在 pytest.raises/相关 assertRaises 上下文中；它们不会成为
    服务 smoke 输入，也不能代替任何公开分支的成功 fixture。
 10. 写完 main.py、契约测试与 requirements.txt 后必须调用 verify_template；该调用会结束本轮，
@@ -53,8 +61,8 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
     operation 分支和 JSON 参数，每个分支必须直接调用已从仓库导入的真实函数/类；不得只把
     函数对象塞进映射后交给动态解释器。
 12. 保持薄封装：main_process 最多 12 个显式参数、最多 8 个不同 operation，契约 fixture
-    最多 30 个。通常选择 1–6 个与 wrap_intent 最相关、由仓库示例支持的内聚能力；可以为
-    同一能力提供多个边界 fixture，但不要机械暴露整个依赖库 API。
+    最多 30 个。通常选择 1–6 个与 wrap_intent 最相关、由仓库示例支持的内聚能力；同一能力
+    不得提供多个成功 fixture，也不要机械暴露整个依赖库 API。
 13. 成功时只返回领域结果；禁止返回 success/operation/result/error 控制信封。底层算法失败
     必须抛出带上下文的异常，不得在 except 中返回 success=false 或错误字符串伪装成功。
 """
@@ -94,6 +102,7 @@ def validate_algorithm_template(
     allow_explicit_unsupported: bool = False,
     require_contract_test: bool = False,
     allow_runtime_collected_contract: bool = False,
+    max_contract_success_fixtures: int | None = None,
 ) -> TemplateValidationReport:
     root = Path(project_dir).resolve()
     errors: list[str] = []
@@ -427,6 +436,7 @@ def validate_algorithm_template(
             root,
             function,
             allow_runtime_collected_contract=allow_runtime_collected_contract,
+            max_contract_success_fixtures=max_contract_success_fixtures,
         )
         errors.extend(contract_errors)
         checks.update(contract_checks)
@@ -545,6 +555,7 @@ def _validate_template_contract_test(
     main_function: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
     allow_runtime_collected_contract: bool = False,
+    max_contract_success_fixtures: int | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     errors: list[str] = []
     checks: dict[str, Any] = {
@@ -617,6 +628,22 @@ def _validate_template_contract_test(
         errors.append(
             "模板契约测试不得访问网络或启动子进程，禁止导入: "
             + ", ".join(sorted(imported_forbidden))
+        )
+    nondeterministic_calls = sorted(
+        {
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and _is_nondeterministic_contract_call(node.func)
+        }
+    )
+    checks["contractNondeterministicCallLines"] = nondeterministic_calls
+    if nondeterministic_calls:
+        errors.append(
+            "模板契约测试必须可重复，禁止 random/numpy.random、当前时间、UUID "
+            "等非确定性输入；请复用仓库 fixture/示例资产，或使用领域模拟器及显式"
+            "固定种子。相关行: "
+            + ", ".join(map(str, nondeterministic_calls))
         )
 
     parameters = [
@@ -829,6 +856,17 @@ def _validate_template_contract_test(
         + sum(outcome == "error" for outcome in dynamic_call_outcomes)
     )
     success_call_count = len(success_fixtures) + dynamic_success_count
+    checks["contractExpectedSuccessCallCount"] = success_call_count
+    if (
+        max_contract_success_fixtures is not None
+        and success_call_count > max_contract_success_fixtures
+    ):
+        errors.append(
+            "每个已发现能力只允许一个最小成功 fixture；"
+            f"当前 success_calls={success_call_count}, "
+            f"capabilities={max_contract_success_fixtures}。"
+            "删除同一能力的算法/配置/边界重复测试"
+        )
     if (
         success_call_count
         and assertion_count + error_fixture_count >= executable_call_count
@@ -905,6 +943,37 @@ def _validate_template_contract_test(
     else:
         checks["contractBranchCoverage"] = True
     return errors, checks
+
+
+def _is_nondeterministic_contract_call(function: ast.AST) -> bool:
+    parts: list[str] = []
+    current = function
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+    parts.reverse()
+    if not parts:
+        return False
+    if parts[0] in {"random", "secrets"} or "random" in parts[:-1]:
+        return True
+    terminal = parts[-1]
+    if terminal in {
+        "default_rng",
+        "rand",
+        "randint",
+        "randn",
+        "random_sample",
+        "uuid1",
+        "uuid4",
+    }:
+        return True
+    return tuple(parts[-2:]) in {
+        ("datetime", "now"),
+        ("datetime", "today"),
+        ("time", "time"),
+    }
 
 
 def _contract_json_literal(
@@ -1485,6 +1554,7 @@ def verify_template_contract_runtime(
     *,
     build_timeout: int = 900,
     runtime_timeout: int = 180,
+    max_contract_success_fixtures: int | None = None,
 ) -> TemplateContractRuntimeReport:
     root = Path(project_dir).resolve()
     checks: dict[str, Any] = {
@@ -1511,6 +1581,7 @@ def verify_template_contract_runtime(
         root,
         require_contract_test=True,
         allow_runtime_collected_contract=True,
+        max_contract_success_fixtures=max_contract_success_fixtures,
     )
     if not static_report.passed:
         return TemplateContractRuntimeReport(
@@ -2261,13 +2332,21 @@ class VerifyTemplate(Tool):
     )
     parameters = {"type": "object", "properties": {}, "additionalProperties": False}
 
-    def __init__(self, project_dir: str | Path) -> None:
+    def __init__(
+        self,
+        project_dir: str | Path,
+        *,
+        max_contract_success_fixtures: int | None = None,
+    ) -> None:
         self.root = Path(project_dir).resolve()
+        self.max_contract_success_fixtures = max_contract_success_fixtures
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         report = validate_algorithm_template(
             self.root,
             require_contract_test=True,
+            allow_runtime_collected_contract=True,
+            max_contract_success_fixtures=self.max_contract_success_fixtures,
         )
         return ToolResult(output=report.to_json() if report.passed else "模板校验失败:\n" + report.to_json())
 
@@ -2292,11 +2371,18 @@ def build_template_adapter_agent(
     *,
     repair: bool = False,
     repair_source_reads: bool = True,
+    capability_count: int | None = None,
 ) -> Agent:
     tools = ToolRegistry()
     if not repair:
         tools.register(BudgetedInspectRepository(ir))
     if not repair or repair_source_reads:
+        tools.register(
+            SearchProjectText(
+                project_dir,
+                max_calls=3 if repair else 5,
+            )
+        )
         tools.register(
             BudgetedReadProjectFile(
                 project_dir,
@@ -2307,7 +2393,12 @@ def build_template_adapter_agent(
     if repair:
         tools.register(ReadTemplateFile(project_dir))
         tools.register(PatchTemplateFile(project_dir))
-    tools.register(VerifyTemplate(project_dir))
+    tools.register(
+        VerifyTemplate(
+            project_dir,
+            max_contract_success_fixtures=capability_count,
+        )
+    )
     return Agent(
         name="ioeb_template_adapter",
         llm=LLM(config.get_llm("reasoning")),
