@@ -557,6 +557,7 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
     if (
         "datapoint does not have an 'ecg' attribute" in text
         or "does not seem to be a ecgrawdataframe" in text
+        or "no valid sampling rate attribute" in text
     ):
         advice.append(
             "当前 Pipeline.run 接受的是 datapoint 对象，不是 pandas DataFrame/Series "
@@ -564,6 +565,13 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "局部轻量适配对象（如 SimpleNamespace），令其 .ecg 为源码校验要求的 "
             "DataFrame，并提供 .sampling_rate_hz/.sampling_rate 等 run() 查找的"
             "采样率属性。不要把 fs 动态属性挂到 Series 后直接传入。"
+        )
+    if "numpy' has no attribute 'trapz" in text:
+        advice.append(
+            "这是 NumPy 2.x 移除 np.trapz 与上游算法库未适配的确定性依赖冲突。"
+            "检查原仓库依赖约束；若该版本仍调用 np.trapz，在 requirements.txt "
+            "将 NumPy 约束为兼容的 `numpy>=1.26,<2`。禁止在 main.py monkeypatch "
+            "numpy、复制上游算法或吞掉 HRV 计算错误。"
         )
     if not advice:
         return ""
