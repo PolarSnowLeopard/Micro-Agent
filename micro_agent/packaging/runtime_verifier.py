@@ -72,8 +72,11 @@ class ContainerRuntimeVerifier:
                 "可执行 smokeTest，缺少: " + ", ".join(missing)
             )
             return report
-        image_tag = f"ioeb-runtime-verify:{uuid.uuid4().hex[:12]}"
+        run_id = uuid.uuid4().hex[:12]
+        image_tag = f"ioeb-runtime-verify:{run_id}"
+        container_name = f"ioeb-runtime-verify-{run_id}"
         built = False
+        container_started = False
         build_started = time.perf_counter()
         try:
             build = self._run(
@@ -93,11 +96,14 @@ class ContainerRuntimeVerifier:
             built = True
 
             runtime_started = time.perf_counter()
+            container_started = True
             runtime = self._run(
                 [
                     "docker",
                     "run",
                     "--rm",
+                    "--name",
+                    container_name,
                     "--network",
                     "none",
                     "--read-only",
@@ -177,6 +183,21 @@ class ContainerRuntimeVerifier:
             report.errors.append(f"[runtime_backend_error] 无法执行容器验收: {exc}")
             return report
         finally:
+            if container_started:
+                try:
+                    cleanup = self._run(
+                        ["docker", "container", "rm", "--force", container_name],
+                        timeout=30,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    cleanup = None
+                if cleanup is None or (
+                    cleanup.returncode != 0
+                    and "no such container" not in _command_output(cleanup).lower()
+                ):
+                    report.warnings.append(
+                        f"未能清理运行验收容器: {container_name}"
+                    )
             if built:
                 try:
                     self._run(

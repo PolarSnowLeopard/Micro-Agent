@@ -1113,6 +1113,16 @@ def test_contract():
     docker_run = next(command for command in commands if command[:2] == ["docker", "run"])
     assert "--network" in docker_run and "none" in docker_run
     assert "--read-only" in docker_run
+    assert "--name" in docker_run
+    container_name = docker_run[docker_run.index("--name") + 1]
+    assert container_name.startswith("ioeb-template-contract-")
+    assert [
+        "docker",
+        "container",
+        "rm",
+        "--force",
+        container_name,
+    ] in commands
     assert "--cap-drop" in docker_run and "ALL" in docker_run
     assert "PYTHONPATH=/workspace:/workspace/src:/ioeb" in docker_run
     assert "HOME=/tmp" in docker_run

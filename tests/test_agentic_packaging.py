@@ -3746,6 +3746,16 @@ async def test_container_runtime_verifier_builds_and_discovers_tools(tmp_path):
     assert "--network" in run_command
     assert "none" in run_command
     assert "--read-only" in run_command
+    assert "--name" in run_command
+    container_name = run_command[run_command.index("--name") + 1]
+    assert container_name.startswith("ioeb-runtime-verify-")
+    assert [
+        "docker",
+        "container",
+        "rm",
+        "--force",
+        container_name,
+    ] in [command for command, _ in commands]
     assert ["docker", "image", "rm"] == next(
         command[:3] for command, _ in commands if command[:3] == ["docker", "image", "rm"]
     )

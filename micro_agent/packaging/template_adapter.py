@@ -1654,6 +1654,8 @@ def verify_template_contract_runtime(
 
     run_id = uuid.uuid4().hex[:12]
     image = f"ioeb-template-contract:{run_id}"
+    container_name = f"ioeb-template-contract-{run_id}"
+    container_started = False
     dockerfile = root / f".ioeb-template-contract-{run_id}.Dockerfile"
     dockerignore = root / f"{dockerfile.name}.dockerignore"
     dockerfile.write_text(
@@ -1757,6 +1759,8 @@ def verify_template_contract_runtime(
                 "docker",
                 "run",
                 "--rm",
+                "--name",
+                container_name,
                 "--network",
                 "none",
                 "--read-only",
@@ -1796,6 +1800,7 @@ def verify_template_contract_runtime(
             ]
 
         try:
+            container_started = True
             runtime = subprocess.run(
                 runtime_command(
                     "/workspace:/workspace/src:/ioeb",
@@ -1910,6 +1915,33 @@ def verify_template_contract_runtime(
     finally:
         dockerfile.unlink(missing_ok=True)
         dockerignore.unlink(missing_ok=True)
+        if container_started:
+            try:
+                container_cleanup = subprocess.run(
+                    [
+                        "docker",
+                        "container",
+                        "rm",
+                        "--force",
+                        container_name,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                container_cleanup = None
+            if container_cleanup is None or (
+                container_cleanup.returncode != 0
+                and "no such container"
+                not in _safe_process_tail(
+                    container_cleanup.stdout,
+                    container_cleanup.stderr,
+                ).lower()
+            ):
+                warnings.append(
+                    f"模板契约运行容器未能自动清理: {container_name}"
+                )
         try:
             cleanup = subprocess.run(
                 ["docker", "image", "rm", "--force", image],
