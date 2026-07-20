@@ -1500,6 +1500,8 @@ def main_process(value: float) -> float:
     )
     assert "不必穷举" in runtime_advice
     assert "逐维记录输入和输出" in runtime_advice
+    assert "(batch, channels, sequence)" in runtime_advice
+    assert "不能继续盲目增大错误轴" in runtime_advice
     assert "隔离运行触发联网下载" in runtime_advice
     assert "真实可解析的最小输入" in runtime_advice
     paired_advice = _template_runtime_repair_advice(

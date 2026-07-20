@@ -550,7 +550,11 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "输入和输出的 batch/sequence/channel/feature 语义。优先修正测试 fixture "
             "或 main.py 中多余/缺失的 unsqueeze、transpose、reshape；不得通过"
             "裁剪、重复、广播 target 或修改领域断言掩盖错误。返回 JSON 时保留原始"
-            "批次语义，并让 output_shape 与真实序列化结果完全一致。"
+            "批次语义，并让 output_shape 与真实序列化结果完全一致。若增大名义上的"
+            " time/sequence 输入后，池化层实际看到的最后一维仍很短，说明轴顺序错误："
+            "必须打印或从 traceback 读取进入模型前的真实 shape，按模型要求直接形成"
+            " `(batch, channels, sequence)`，不能继续盲目增大错误轴，也不能复制一个"
+            "简化网络来绕过原模型。"
         )
     if any(
         marker in text
