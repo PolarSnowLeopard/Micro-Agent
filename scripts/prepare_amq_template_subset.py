@@ -607,10 +607,11 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
         advice.append(
             "运行依赖缺失：先查原仓库 pyproject.toml、setup.cfg、requirements*.txt "
             "和 CI 安装命令，确定 import 模块对应的真实发行包名；模块名与发行包名"
-            "可能不同，禁止直接猜测。只把 main_process 真实执行路径所需的直接依赖"
-            "加入 requirements.txt，并重新构建验证；若缺失模块只来自未使用的训练、"
-            "指标或 CLI 聚合导入，应改为从更具体子模块导入真实能力，避免拉入无关"
-            "可选依赖。"
+            "可能不同，禁止直接猜测。不能只补 traceback 中第一个包：本轮必须沿"
+            " main.py 的本地 import 继续读取其模块级 import 闭包，与仓库声明依赖"
+            "一次性比对，批量补齐真实执行路径所需的直接依赖，再重新构建验证；"
+            "若缺失模块只来自未使用的训练、指标或 CLI 聚合导入，应改为从更具体"
+            "子模块导入真实能力，避免拉入无关可选依赖。"
         )
     if any(
         marker in text

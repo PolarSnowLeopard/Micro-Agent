@@ -1133,6 +1133,7 @@ def test_contract():
     assert "/tmp/requirements-main.txt" in dockerfiles[0]
     assert "libexpat1 libgomp1 libgl1 libglib2.0-0" in dockerfiles[0]
     assert "libxrender1 libxext6 libsm6" in dockerfiles[0]
+    assert "libopenslide0" in dockerfiles[0]
     assert '"-c", "/dev/null"' in dockerfiles[0]
     assert not list(project.glob(".ioeb-template-contract-*"))
 
@@ -1483,6 +1484,8 @@ def main_process(value: float) -> float:
     )
     assert "真实发行包名" in missing_module_advice
     assert "更具体子模块" in missing_module_advice
+    assert "不能只补 traceback 中第一个包" in missing_module_advice
+    assert "一次性比对" in missing_module_advice
     module_state_advice = _template_runtime_repair_advice(
         ["禁止模块级调用初始化运行状态，相关行: 30"]
     )
