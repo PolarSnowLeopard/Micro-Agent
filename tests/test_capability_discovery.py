@@ -229,4 +229,5 @@ def test_discovery_design_becomes_planner_and_template_input(
     assert '"predict_risk"' in planner_prompt
     assert "不能无理由退化为单一 main_process 工具" in planner_prompt
     assert '"evaluate_risk_batch"' in adapter_prompt
+    assert planner.tools.get("inspect_repository") is None
     assert planner.tools.get("read_project_file").max_reads == 4

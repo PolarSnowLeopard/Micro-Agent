@@ -52,7 +52,10 @@ from micro_agent.tool.terminate import Terminate
 PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责不是逐函数机械加装饰器，而是从用户提交的完整算法仓库中抽象稳定、可理解、可测试的服务能力。
 
 必须遵守：
-1. 只调用一次 inspect_repository 查看全仓库，再阅读 README、测试、入口和核心实现等证据；最多读取 14 个最相关文件，不能只看 main.py，也不得漫无目的遍历。
+1. 若初始请求已包含 capabilityDiscovery，说明上游能力发现 Agent 已完成一次全仓库审查；
+   此时不得再调用 inspect_repository，只能依据其中的 DARP/BAGE 摘要、能力设计和模板契约，
+   最多定向读取 4 个必要文件。否则只调用一次 inspect_repository 查看全仓库，再阅读 README、
+   测试、入口和核心实现等证据；最多读取 14 个最相关文件，不能只看 main.py，也不得漫无目的遍历。
 2. 以用户意图划分 MCP Tool。数据加载、日志、格式转换、私有方法、get_model_info/health 等运维元数据通常不应成为 Tool；一个 Tool 可以编排多个源码符号。任何返回都不得泄露容器内模型路径或临时目录。
 3. services 表示逻辑服务边界。按模型生命周期、共享状态、领域内聚性和部署依赖划分，不得为了增加数量而拆分。
    同一源码入口、模型实例或运行依赖被多个 Tool 共享时，这些 Tool 必须位于同一 service；
@@ -943,7 +946,8 @@ def _build_planning_agent(
 ) -> Agent:
     template_contract = bool(_template_contract_entries(ir))
     tools = ToolRegistry()
-    tools.register(InspectRepository(ir, max_calls=1))
+    if capability_design is None:
+        tools.register(InspectRepository(ir, max_calls=1))
     tools.register(
         ReadProjectFile(
             project_dir,
