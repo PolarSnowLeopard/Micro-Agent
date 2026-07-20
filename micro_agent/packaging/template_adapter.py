@@ -1447,6 +1447,8 @@ try:
         [
             "-p",
             "no:cacheprovider",
+            "-c",
+            "/dev/null",
             f"--confcutdir={_contract_root}",
             "-q",
             os.path.join(
@@ -1678,8 +1680,9 @@ def verify_template_contract_runtime(
         "RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin ioeb\n"
         "USER 10001:10001\n"
         "WORKDIR /ioeb\n"
-        "CMD [\"python\", \"-m\", \"pytest\", \"-p\", \"no:cacheprovider\", \"-q\", "
-        "\"--confcutdir=/ioeb\", \"/ioeb/tests_ioeb/test_template_contract.py\"]\n",
+        "CMD [\"python\", \"-m\", \"pytest\", \"-p\", \"no:cacheprovider\", "
+        "\"-c\", \"/dev/null\", \"-q\", \"--confcutdir=/ioeb\", "
+        "\"/ioeb/tests_ioeb/test_template_contract.py\"]\n",
         encoding="utf-8",
     )
     dockerignore.write_text(

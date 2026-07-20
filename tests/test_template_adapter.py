@@ -1120,6 +1120,7 @@ def test_contract():
     assert "MPLCONFIGDIR=/tmp/matplotlib" in docker_run
     assert "XDG_CACHE_HOME=/tmp/cache" in docker_run
     assert "IOEB_CONTRACT_ROOT=/ioeb" in docker_run
+    assert '"-c",\n            "/dev/null"' in docker_run[-1]
     assert "--confcutdir={_contract_root}" in docker_run[-1]
     assert docker_run[docker_run.index("--workdir") + 1] == "/workspace"
     assert docker_run[docker_run.index("--entrypoint") + 1] == "python"
@@ -1132,6 +1133,7 @@ def test_contract():
     assert "/tmp/requirements-main.txt" in dockerfiles[0]
     assert "libexpat1 libgomp1 libgl1 libglib2.0-0" in dockerfiles[0]
     assert "libxrender1 libxext6 libsm6" in dockerfiles[0]
+    assert '"-c", "/dev/null"' in dockerfiles[0]
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 
