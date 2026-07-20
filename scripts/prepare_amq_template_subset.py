@@ -1036,7 +1036,11 @@ async def adapt_one(
                             break
                         static_repair_attempts += 1
                     attempt += 1
-                    ir = await asyncio.to_thread(RepositoryAnalyzer().analyze, staged)
+                    # Original repository evidence is immutable throughout
+                    # adaptation. Re-indexing a large source tree after every
+                    # generated-file repair is both expensive and risks
+                    # treating the candidate itself as source evidence.
+                    ir = discovery_ir
                     repair_candidate = staged / "main.py"
                     repair_mode = bool(errors and repair_candidate.is_file())
                     agent = build_template_adapter_agent(
