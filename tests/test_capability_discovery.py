@@ -7,6 +7,7 @@ import pytest
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.discovery import (
+    DISCOVERY_SYSTEM_PROMPT,
     DISCOVERY_SCHEMA_VERSION,
     CapabilityDesign,
     CapabilityDesignStore,
@@ -160,6 +161,8 @@ def test_discovery_agent_has_bounded_evidence_tools(tmp_path: Path) -> None:
     assert agent.require_terminal_tool is True
     assert agent.tools.get("read_project_file").max_reads == 10
     assert agent.tools.get("search_project_text").max_calls == 5
+    assert "Notebook 的代码单元是可执行源码证据" in DISCOVERY_SYSTEM_PROMPT
+    assert "教程/示例仓库" in DISCOVERY_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio

@@ -857,7 +857,7 @@ async def adapt_one(
                 discovery_errors: list[str] = []
                 if recovered_design_data is not None:
                     try:
-                        capability_design = CapabilityDesign.validate(
+                        recovered_design = CapabilityDesign.validate(
                             recovered_design_data,
                             known_symbols=discovery_ir.known_symbols,
                             known_files={
@@ -867,11 +867,17 @@ async def adapt_one(
                     except CapabilityDesignValidationError as exc:
                         discovery_errors = exc.errors
                     else:
-                        (run_dir / "capability_design.json").write_text(
-                            capability_design.to_json() + "\n",
-                            encoding="utf-8",
-                        )
-                        summary["reusedCapabilityDiscovery"] = True
+                        if recovered_design.decision == "design":
+                            capability_design = recovered_design
+                            (run_dir / "capability_design.json").write_text(
+                                capability_design.to_json() + "\n",
+                                encoding="utf-8",
+                            )
+                            summary["reusedCapabilityDiscovery"] = True
+                        else:
+                            summary[
+                                "discardedRejectedCapabilityDiscovery"
+                            ] = True
                 if capability_design is None:
                     discovery = CapabilityDiscoveryWorkflow(
                         project_dir=staged,
@@ -895,6 +901,18 @@ async def adapt_one(
                             )
                     capability_design = discovery.store.design
                     discovery_errors = discovery.store.last_errors or []
+                if (
+                    capability_design is not None
+                    and capability_design.decision == "reject"
+                ):
+                    reasons = capability_design.to_dict().get(
+                        "rejectionReasons",
+                        [],
+                    )
+                    raise RuntimeError(
+                        "capability discovery rejected repository: "
+                        + "; ".join(str(reason) for reason in reasons)
+                    )
                 capability_count = (
                     len(capability_design.capabilities)
                     if capability_design is not None
