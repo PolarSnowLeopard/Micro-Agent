@@ -22,6 +22,7 @@ from micro_agent.packaging.capability_coverage import (
 )
 from micro_agent.packaging.discovery import (
     CapabilityDesign,
+    CapabilityDesignValidationError,
     CapabilityDiscoveryWorkflow,
 )
 from micro_agent.packaging.models import PackagingPlan
@@ -239,16 +240,36 @@ class AgenticAnalysisWorkflow:
             },
         )
 
-        discovery = CapabilityDiscoveryWorkflow(
-            project_dir=self.project_dir,
-            ir=self.ir,
-            design_path=self.graph_path.with_name("capability_design.json"),
-        )
         discovery_step = 1
-        async for event in discovery.run(request):
-            discovery_step = max(discovery_step, event.step + 1)
-            yield event
-        capability_design = discovery.store.design
+        capability_design = _verified_capability_design(self.ir)
+        if capability_design is None:
+            discovery = CapabilityDiscoveryWorkflow(
+                project_dir=self.project_dir,
+                ir=self.ir,
+                design_path=self.graph_path.with_name(
+                    "capability_design.json"
+                ),
+            )
+            async for event in discovery.run(request):
+                discovery_step = max(discovery_step, event.step + 1)
+                yield event
+            capability_design = discovery.store.design
+        else:
+            self.graph_path.with_name("capability_design.json").write_text(
+                capability_design.to_json() + "\n",
+                encoding="utf-8",
+            )
+            yield AgentEvent(
+                type="think",
+                step=discovery_step,
+                data={
+                    "thought": (
+                        "[能力证据复用] 模板适配阶段的能力设计已通过同一源码符号"
+                        "门禁和隔离运行证明，直接进入严格契约规划。"
+                    )
+                },
+            )
+            discovery_step += 1
         self.agent = _build_planning_agent(
             self.project_dir,
             self.ir,
@@ -355,11 +376,6 @@ class AgenticPackagingWorkflow:
                     self.ir
                 )["records"],
             )
-            discovery = CapabilityDiscoveryWorkflow(
-                project_dir=self.project_dir,
-                ir=self.ir,
-                design_path=self.artifact_dir.parent / "capability_design.json",
-            )
             yield AgentEvent(
                 type="think",
                 step=0,
@@ -369,10 +385,38 @@ class AgenticPackagingWorkflow:
                     )
                 },
             )
-            async for event in discovery.run(request):
-                step_offset = max(step_offset, event.step + 1)
-                yield event
-            capability_design = discovery.store.design
+            capability_design = _verified_capability_design(self.ir)
+            if capability_design is None:
+                discovery = CapabilityDiscoveryWorkflow(
+                    project_dir=self.project_dir,
+                    ir=self.ir,
+                    design_path=(
+                        self.artifact_dir.parent
+                        / "capability_design.json"
+                    ),
+                )
+                async for event in discovery.run(request):
+                    step_offset = max(step_offset, event.step + 1)
+                    yield event
+                capability_design = discovery.store.design
+            else:
+                (
+                    self.artifact_dir.parent / "capability_design.json"
+                ).write_text(
+                    capability_design.to_json() + "\n",
+                    encoding="utf-8",
+                )
+                yield AgentEvent(
+                    type="think",
+                    step=step_offset,
+                    data={
+                        "thought": (
+                            "[能力证据复用] 已复用模板适配阶段经隔离运行证明的"
+                            "能力设计，跳过重复模型发现。"
+                        )
+                    },
+                )
+                step_offset += 1
             planner = _build_planning_agent(
                 self.project_dir,
                 self.ir,
@@ -1263,6 +1307,39 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
             else "contract runtime proof is missing or failed"
         ),
     }
+
+
+def _verified_capability_design(
+    ir: RepositoryIR,
+) -> CapabilityDesign | None:
+    """Reuse adapter discovery only when its isolated runtime proof passed."""
+
+    metadata_path = Path(ir.root) / "template_adaptation.json"
+    try:
+        metadata = json.loads(
+            metadata_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except (OSError, json.JSONDecodeError):
+        return None
+    runtime = metadata.get("contractRuntime")
+    checks = runtime.get("checks", {}) if isinstance(runtime, dict) else {}
+    if not (
+        isinstance(runtime, dict)
+        and runtime.get("passed")
+        and checks.get("functionalVerified")
+    ):
+        return None
+    raw = metadata.get("capabilityDesign")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return CapabilityDesign.validate(
+            raw,
+            known_symbols=ir.known_symbols,
+            known_files={file.path for file in ir.files},
+        )
+    except CapabilityDesignValidationError:
+        return None
 
 
 def _llm_safe_json(value: Any) -> Any:

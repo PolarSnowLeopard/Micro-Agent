@@ -57,6 +57,7 @@ from micro_agent.packaging.workflow import (
     _run_planner,
     _smoke_failure_signature,
     _smoke_revision_retry_prompt,
+    _verified_capability_design,
     planning_candidate_symbols,
     _extract_planning_json,
     _llm_safe_json,
@@ -883,6 +884,53 @@ def test_large_verified_fixtures_are_summarized_only_in_llm_prompts(tmp_path):
     assert len(prompt) < 50_000
     assert "$ioebLargeValue" in prompt
     assert '"length": 20000' in prompt
+
+
+def test_runtime_verified_adapter_capability_design_is_reusable(tmp_path):
+    project = _sample_project(tmp_path)
+    raw_design = {
+        "schemaVersion": "ioeb.capability-discovery/v1",
+        "decision": "design",
+        "summary": "The repository provides a verified single-value risk prediction.",
+        "capabilities": [
+            {
+                "name": "predict_risk",
+                "description": (
+                    "Predict one risk score for a caller that needs a "
+                    "single observation assessment."
+                ),
+                "sourceSymbols": ["core.predict"],
+                "sourceFiles": ["core.py"],
+                "composition": "Call core.predict with a validated finite value.",
+                "inputNotes": "Accept one finite floating point observation.",
+                "outputNotes": "Return the score as a JSON number.",
+                "fixtureGuidance": (
+                    "Reuse tests/test_core.py with value 0.5 and assert score."
+                ),
+                "evidence": ["tests/test_core.py:4"],
+            }
+        ],
+        "excludedSymbols": [],
+        "risks": [],
+    }
+    (project / "template_adaptation.json").write_text(
+        json.dumps(
+            {
+                "capabilityDesign": raw_design,
+                "contractRuntime": {
+                    "passed": True,
+                    "checks": {"functionalVerified": True},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+
+    reused = _verified_capability_design(ir)
+
+    assert reused is not None
+    assert reused.capabilities[0]["name"] == "predict_risk"
 
 
 def test_planner_prioritizes_submitted_template_contract_tests(tmp_path):
