@@ -159,8 +159,10 @@ def test_discovery_agent_has_bounded_evidence_tools(tmp_path: Path) -> None:
     }
     assert agent.terminal_tools == {"save_capability_design_json"}
     assert agent.require_terminal_tool is True
-    assert agent.tools.get("read_project_file").max_reads == 10
-    assert agent.tools.get("search_project_text").max_calls == 5
+    assert agent.max_steps == 24
+    assert agent.tools.get("read_project_file").max_reads == 16
+    assert agent.tools.get("search_project_text").max_calls == 8
+    assert "40K token" in DISCOVERY_SYSTEM_PROMPT
     assert "Notebook 的代码单元是可执行源码证据" in DISCOVERY_SYSTEM_PROMPT
     assert "教程/示例仓库" in DISCOVERY_SYSTEM_PROMPT
 

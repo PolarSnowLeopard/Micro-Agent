@@ -38,7 +38,10 @@ _SNAKE_CASE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 DISCOVERY_SYSTEM_PROMPT = """你是 MCP 封装流程的能力发现 Agent。当前阶段只回答“仓库真实提供哪些适合远程 Agent 使用的业务能力，以及它们由哪些源码实现”，不要生成 server.py、Dockerfile，也不要提前编造 JSON Schema。
 
 按以下顺序工作：
-1. 先且只调用一次 inspect_repository。请求中已包含 DARP/BAGE 相关子图，先从 detailed 层确定候选，再用 search_project_text 按核心类/函数名定位测试、示例和 Notebook 用法，按需阅读 README、入口与核心实现；最多读取 10 个文件、检索 5 次。
+1. 先且只调用一次 inspect_repository。请求中已包含按论文协议分配 40K token
+   预算的 DARP/BAGE 相关子图；先从 detailed 层确定候选，再用
+   search_project_text 按核心类/函数名定位测试、示例和 Notebook 用法，按需阅读
+   README、入口与核心实现；最多读取 16 个文件、检索 8 次。
 2. 选择 1–6 个与用户意图最相关、可独立解释的用户能力。不要逐函数机械暴露；一个能力可以组合多个源码符号。若用户明确要求一条端到端管线及一个组合结果（例如预处理后立即推理/统计），默认设计为一个组合能力，不要按内部阶段拆成多个工具；只有阶段能被独立调用且输入输出语义确实不同才拆分。
 3. 训练/推理、解析/转换、评估/解释等只有在状态、依赖和用户目的确实不同且有源码证据时才拆分。日志、文件加载、内部格式转换、health、get_model_info 等不是业务能力。
 4. 每个能力必须引用真实 sourceSymbols、sourceFiles 和 evidence。必须先搜索核心符号的用法，优先引用原仓库测试、doctest、示例、Notebook 或示例资产；composition 要写清调用链、对象初始化和必要的数据转换。fixtureGuidance 必须说明一个可重复成功的最小输入从哪个仓库证据取得、如何转换；没有现成 fixture 时才允许说明使用依赖库的领域模拟器及固定种子，禁止手写随机数据。
@@ -348,8 +351,8 @@ def _build_discovery_agent(
 ) -> Agent:
     tools = ToolRegistry()
     tools.register(InspectRepository(ir, max_calls=1))
-    tools.register(SearchProjectText(project_dir, max_calls=5))
-    tools.register(ReadProjectFile(project_dir, max_reads=10))
+    tools.register(SearchProjectText(project_dir, max_calls=8))
+    tools.register(ReadProjectFile(project_dir, max_reads=16))
     tools.register(SaveCapabilityDesignJson(store))
     return Agent(
         name="mcp_capability_discovery",
@@ -360,7 +363,7 @@ def _build_discovery_agent(
             "证据足够后立即调用 save_capability_design_json，"
             "不要继续读取或只在文本中总结。"
         ),
-        max_steps=16,
+        max_steps=24,
         max_observe=50_000,
         terminal_tools={"save_capability_design_json"},
         require_terminal_tool=True,
@@ -383,7 +386,7 @@ def capability_discovery_prompt(ir: RepositoryIR, user_request: str) -> str:
         "relevanceEvidence": build_relevance_evidence(
             ir,
             user_request,
-            max_tokens=18_000,
+            max_tokens=40_000,
         ),
     }
     return (
