@@ -255,6 +255,18 @@ def _protected_digest(sample: dict[str, Any]) -> str:
     )
 
 
+def _compose_evaluation_benchmark(
+    samples: list[dict[str, Any]],
+    successful: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep the full selected corpus so adaptation failures remain in metrics."""
+
+    return [
+        successful.get(sample["sample_id"], sample)
+        for sample in samples
+    ]
+
+
 _TEMPLATE_CANDIDATE_FILES = (
     "main.py",
     "requirements.txt",
@@ -1180,6 +1192,19 @@ async def main() -> int:
     target.write_text(
         "".join(json.dumps(sample, ensure_ascii=False) + "\n" for sample in ordered), encoding="utf-8"
     )
+    evaluation_target = output_root / "data" / (
+        "mini30_template_adapted.evaluation.selected.jsonl"
+        if args.sample_id
+        else "mini30_template_adapted.evaluation.jsonl"
+    )
+    evaluation_rows = _compose_evaluation_benchmark(samples, successful)
+    evaluation_target.write_text(
+        "".join(
+            json.dumps(sample, ensure_ascii=False) + "\n"
+            for sample in evaluation_rows
+        ),
+        encoding="utf-8",
+    )
     source_unchanged = sha256_file(benchmark_file) == original_sha
     summary = {
         **protocol,
@@ -1188,6 +1213,10 @@ async def main() -> int:
         "failedSamples": failures,
         "derivedBenchmark": str(target),
         "derivedBenchmarkSha256": sha256_file(target),
+        "evaluationBenchmark": str(evaluation_target),
+        "evaluationBenchmarkSha256": sha256_file(evaluation_target),
+        "evaluationSampleCount": len(evaluation_rows),
+        "evaluationIncludesAdaptationFailures": bool(failures),
         "sourceBenchmarkUnchanged": source_unchanged,
     }
     _write_json_atomic(output_root / "adaptation_summary.json", summary)

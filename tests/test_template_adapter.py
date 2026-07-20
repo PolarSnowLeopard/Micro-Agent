@@ -22,6 +22,7 @@ from micro_agent.packaging.template_adapter import (
 from scripts.prepare_amq_template_subset import (
     acquire_output_lock,
     _candidate_requires_replan,
+    _compose_evaluation_benchmark,
     _is_l0,
     _save_template_snapshot,
     _restore_staged_project_fixtures,
@@ -1890,6 +1891,33 @@ def test_output_lock_prevents_concurrent_adaptation_writers(
 
     second = acquire_output_lock(output)
     second.close()
+
+
+def test_evaluation_benchmark_keeps_failed_adaptations_in_denominator() -> None:
+    original = [
+        {
+            "sample_id": "ready",
+            "repo_info": {"url": "original-ready", "commit_sha": "a"},
+            "task": "one",
+        },
+        {
+            "sample_id": "failed",
+            "repo_info": {"url": "original-failed", "commit_sha": "b"},
+            "task": "two",
+        },
+    ]
+    adapted = {
+        "ready": {
+            **original[0],
+            "repo_info": {"url": "adapted-ready", "commit_sha": "c"},
+        }
+    }
+
+    rows = _compose_evaluation_benchmark(original, adapted)
+
+    assert len(rows) == 2
+    assert rows[0]["repo_info"]["url"] == "adapted-ready"
+    assert rows[1] == original[1]
 
 
 def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) -> None:
