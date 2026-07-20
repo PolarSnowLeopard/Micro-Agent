@@ -1488,6 +1488,11 @@ def main_process(value: float) -> float:
     assert "当前源码签名不一致" in signature_advice
     assert "禁止沿用其他版本" in signature_advice
     assert "随机权重" in signature_advice
+    union_alias_advice = _template_runtime_repair_advice(
+        ["TypeError: 'types.UnionType' object is not callable"]
+    )
+    assert "类型别名/联合类型" in union_alias_advice
+    assert "discriminator" in union_alias_advice
     dependency_advice = _template_runtime_repair_advice(
         ["ERROR: No matching distribution found for optional-vis-package"]
     )

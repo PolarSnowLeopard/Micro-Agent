@@ -716,6 +716,17 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "应拒绝该能力，不能用 None、随机权重或另一算法配置假装可运行。"
         )
     if (
+        "uniontype' object is not callable" in text
+        or "typing.union" in text
+        and "not callable" in text
+    ):
+        advice.append(
+            "候选把类型别名/联合类型当成了运行时构造器：`A | B`、`typing.Union` "
+            "和项目中的 `*Cfg` type alias 只能用于注解。读取该别名定义及配置解析"
+            "代码，根据 `name`/discriminator 选择仓库中真实的具体 dataclass 或"
+            " Pydantic 配置类并实例化；不得给联合别名传参数，也不能自造同名配置类。"
+        )
+    if (
         "keyerror:" in text
         or " in {}" in text
         or (
