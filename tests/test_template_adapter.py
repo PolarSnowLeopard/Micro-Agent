@@ -1442,10 +1442,25 @@ def main_process(value: float) -> float:
     )
     assert "异常被控制信封吞掉" in envelope_advice
     assert "保留原异常" in envelope_advice
+    invariant_advice = _template_runtime_repair_advice(
+        ["AssertionError: assert 56 == 50"]
+    )
+    assert "可由 fixture/输入推导的领域不变量" in invariant_advice
+    reaction_advice = _template_runtime_repair_advice(
+        [
+            "TypeError: '<' not supported between instances of 'Species'",
+            "ValueError: Unknown key: A",
+        ]
+    )
+    assert "稳定字符串标识符" in reaction_advice
+    equivalency_advice = _template_runtime_repair_advice(
+        ["ValueError: Invalid equivalence entry 0"]
+    )
+    assert "不能再次包装" in equivalency_advice
     runtime_advice = _template_runtime_repair_advice(
         [
             "[contract_test] 4 failed, 8 passed",
-            "RuntimeError: size of tensor a must match the size of tensor b",
+            "RuntimeError: max_pool1d Invalid computed output size: 0",
             "URLError: Temporary failure in name resolution",
             "ParseException: invalid formula",
         ]

@@ -452,6 +452,7 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "shape mismatch",
             "output_shape",
             "expected size",
+            "invalid computed output size",
             "broadcast_tensors",
         )
     ):
@@ -461,6 +462,18 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "或 main.py 中多余/缺失的 unsqueeze、transpose、reshape；不得通过"
             "裁剪、重复、广播 target 或修改领域断言掩盖错误。返回 JSON 时保留原始"
             "批次语义，并让 output_shape 与真实序列化结果完全一致。"
+        )
+    if (
+        "assertionerror" in text
+        and "assert" in text
+        and "==" in text
+    ):
+        advice.append(
+            "真实算法调用已经返回、但测试中的固定期望字面量不匹配：先检查输入数据、"
+            "源码和返回结构，确认返回值是由真实数据确定的结果。若测试注释臆测了固定"
+            "行数、形状或计数，应把断言改为可由 fixture/输入推导的领域不变量（例如"
+            "两维分别对应哪些集合、矩阵是否非空、共享维是否一致），不能为了迁就错误"
+            "注释而裁剪、填充或篡改算法结果；也不能无断言地只检查调用不抛异常。"
         )
     if any(
         marker in text
@@ -558,6 +571,21 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "该别名，应在 main.py 显式规范化并映射到真实值；否则只把 fixture 改成"
             "原仓库测试/doctest/示例中确实产生非空结果的字面量。禁止伪造返回键、"
             "硬填空结果或删除领域断言来制造通过。"
+        )
+    if (
+        "unknown key:" in text
+        or (
+            "not supported between instances" in text
+            and any(marker in text for marker in ("species", "substance", "reaction"))
+        )
+    ):
+        advice.append(
+            "领域对象与标识符键不一致：反应物/产物、初始条件和 substance 容器必须"
+            "共享同一组稳定字符串标识符。若库内部会对容器键排序或用反应式字符串做"
+            "查找，应让映射键保持 name/string，而把 Species/Substance 对象作为值；"
+            "不要把不可排序的领域对象本身作为计量字典键，也不要让 ReactionSystem "
+            "收到与 reaction stoichiometry 不同类型的键。依据原仓库现有测试构造"
+            "最小一致系统后再保留成功 fixture。"
         )
     if "deprecationwarning" in text or "deprecated" in text:
         advice.append(
