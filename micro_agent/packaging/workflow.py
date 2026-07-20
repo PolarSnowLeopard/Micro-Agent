@@ -20,6 +20,10 @@ from micro_agent.packaging.analyzer import RepositoryIR
 from micro_agent.packaging.capability_coverage import (
     is_semantic_dispatch_parameter,
 )
+from micro_agent.packaging.discovery import (
+    CapabilityDesign,
+    CapabilityDiscoveryWorkflow,
+)
 from micro_agent.packaging.models import PackagingPlan
 from micro_agent.packaging.relevance import build_relevance_evidence
 from micro_agent.packaging.scaffold import prepare_artifact
@@ -235,11 +239,29 @@ class AgenticAnalysisWorkflow:
             },
         )
 
+        discovery = CapabilityDiscoveryWorkflow(
+            project_dir=self.project_dir,
+            ir=self.ir,
+            design_path=self.graph_path.with_name("capability_design.json"),
+        )
+        discovery_step = 1
+        async for event in discovery.run(request):
+            discovery_step = max(discovery_step, event.step + 1)
+            yield event
+        capability_design = discovery.store.design
+        self.agent = _build_planning_agent(
+            self.project_dir,
+            self.ir,
+            self.plan_store,
+            capability_design=capability_design,
+        )
+
         def fresh_planner() -> Agent:
             self.agent = _build_planning_agent(
                 self.project_dir,
                 self.ir,
                 self.plan_store,
+                capability_design=capability_design,
             )
             return self.agent
 
@@ -249,6 +271,8 @@ class AgenticAnalysisWorkflow:
             self.ir,
             request,
             fresh_agent_factory=fresh_planner,
+            capability_design=capability_design,
+            initial_step_offset=discovery_step,
         ):
             yield event
 
@@ -331,7 +355,30 @@ class AgenticPackagingWorkflow:
                     self.ir
                 )["records"],
             )
-            planner = _build_planning_agent(self.project_dir, self.ir, plan_store)
+            discovery = CapabilityDiscoveryWorkflow(
+                project_dir=self.project_dir,
+                ir=self.ir,
+                design_path=self.artifact_dir.parent / "capability_design.json",
+            )
+            yield AgentEvent(
+                type="think",
+                step=0,
+                data={
+                    "thought": (
+                        "未命中同文件分析缓存，先运行 Agent 能力发现与语义规划阶段。"
+                    )
+                },
+            )
+            async for event in discovery.run(request):
+                step_offset = max(step_offset, event.step + 1)
+                yield event
+            capability_design = discovery.store.design
+            planner = _build_planning_agent(
+                self.project_dir,
+                self.ir,
+                plan_store,
+                capability_design=capability_design,
+            )
             self._active_agent = planner
 
             def fresh_planner() -> Agent:
@@ -339,21 +386,30 @@ class AgenticPackagingWorkflow:
                     self.project_dir,
                     self.ir,
                     plan_store,
+                    capability_design=capability_design,
                 )
                 self._active_agent = fresh
                 return fresh
 
             yield AgentEvent(
                 type="think",
-                step=0,
-                data={"thought": "未命中同文件分析缓存，先运行 Agent 语义规划阶段。"},
+                step=step_offset,
+                data={
+                    "thought": (
+                        "[严格契约规划] 将能力发现结果编译为服务边界、JSON Schema、"
+                        "适配策略和可验证 smoke 契约。"
+                    )
+                },
             )
+            step_offset += 1
             async for event in _run_planner(
                 planner,
                 plan_store,
                 self.ir,
                 request,
                 fresh_agent_factory=fresh_planner,
+                capability_design=capability_design,
+                initial_step_offset=step_offset,
             ):
                 step_offset = max(step_offset, event.step + 1)
                 yield event
@@ -675,9 +731,15 @@ async def _run_planner(
     user_request: str,
     *,
     fresh_agent_factory: Callable[[], Agent] | None = None,
+    capability_design: CapabilityDesign | None = None,
+    initial_step_offset: int = 0,
 ) -> AsyncIterator[AgentEvent]:
-    step_offset = 0
-    initial_prompt = _planner_prompt(ir, user_request)
+    step_offset = initial_step_offset
+    initial_prompt = _planner_prompt(
+        ir,
+        user_request,
+        capability_design=capability_design,
+    )
     for attempt in range(12):
         if attempt and fresh_agent_factory is not None:
             agent = fresh_agent_factory()
@@ -828,11 +890,26 @@ def _extract_planning_json(text: str) -> str | None:
     return json.dumps(parsed, ensure_ascii=False) if isinstance(parsed, dict) else None
 
 
-def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore) -> Agent:
+def _build_planning_agent(
+    project_dir: Path,
+    ir: RepositoryIR,
+    store: PlanStore,
+    *,
+    capability_design: CapabilityDesign | None = None,
+) -> Agent:
     template_contract = bool(_template_contract_entries(ir))
     tools = ToolRegistry()
     tools.register(InspectRepository(ir, max_calls=1))
-    tools.register(ReadProjectFile(project_dir, max_reads=10 if template_contract else 14))
+    tools.register(
+        ReadProjectFile(
+            project_dir,
+            max_reads=(
+                4
+                if capability_design is not None
+                else (10 if template_contract else 14)
+            ),
+        )
+    )
     tools.register(SavePackagingPlanJson(store))
     tools.register(Terminate())
     return Agent(
@@ -841,12 +918,17 @@ def _build_planning_agent(project_dir: Path, ir: RepositoryIR, store: PlanStore)
         tools=tools,
         system_prompt=PLANNER_SYSTEM_PROMPT,
         next_step_prompt=(
+            "能力发现和模板入口证据已在初始请求中。最多补读 4 个必要文件；"
+            "证据足够后立即调用 save_packaging_plan_json，不得重复读取。"
+            if capability_design is not None
+            else (
             "模板入口与文档证据已在初始请求中。最多补读 10 个底层文件；"
             "证据足够后立即调用 save_packaging_plan_json，不得重复读取。"
             if template_contract
             else "证据足够后立即调用 save_packaging_plan_json，不得重复读取。"
+            )
         ),
-        max_steps=16 if template_contract else 24,
+        max_steps=16 if capability_design is not None or template_contract else 24,
         max_observe=50_000,
         terminal_tools={"save_packaging_plan_json", "terminate"},
     )
@@ -961,7 +1043,12 @@ def _configure_smoke_revision_builder(
         )
 
 
-def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
+def _planner_prompt(
+    ir: RepositoryIR,
+    user_request: str,
+    *,
+    capability_design: CapabilityDesign | None = None,
+) -> str:
     contract_symbols = sorted(planning_candidate_symbols(ir))
     template_contract = bool(_template_contract_entries(ir))
     template_contract_tests = [
@@ -985,6 +1072,11 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
         "templateContractEvidenceFiles": template_contract_tests,
         "verifiedTemplateContract": _verified_template_contract_context(ir),
         "relevanceEvidence": build_relevance_evidence(ir, user_request),
+        "capabilityDiscovery": (
+            capability_design.to_dict()
+            if capability_design is not None
+            else None
+        ),
     }
     if template_contract:
         main_path = Path(ir.root) / "main.py"
@@ -998,7 +1090,15 @@ def _planner_prompt(ir: RepositoryIR, user_request: str) -> str:
     return (
         "请分析这个算法仓库，规划可投入真实使用的 MCP 服务。\n"
         f"用户请求补充：{user_request or '无'}\n"
-        "以下索引已使用 DARP 依赖相关度传播和 BAGE 预算自适应编码；"
+        + (
+            "capabilityDiscovery 是独立 Agent 基于源码、测试和示例得到的候选能力设计。"
+            "把它作为规划主骨架：保留有证据的多能力边界，再补全 JSON Schema、服务分组、"
+            "适配策略和 smokeTest。若严格源码核对发现候选错误，可以修正或排除，但必须在"
+            " excludedSymbols/riskNotes 中说明，不能无理由退化为单一 main_process 工具。\n"
+            if capability_design is not None
+            else ""
+        )
+        + "以下索引已使用 DARP 依赖相关度传播和 BAGE 预算自适应编码；"
         "它只负责排序证据，不替你决定 Tool，也不会隐藏 benchmark 答案。"
         "必须使用工具核对完整仓库并阅读高相关源码后再决策。"
         + (

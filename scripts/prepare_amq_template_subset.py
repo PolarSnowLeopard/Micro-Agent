@@ -30,6 +30,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer  # noqa: E402
+from micro_agent.packaging.discovery import CapabilityDiscoveryWorkflow  # noqa: E402
 from micro_agent.packaging.template_adapter import (  # noqa: E402
     TemplateValidationReport,
     build_template_adapter_agent,
@@ -640,6 +641,7 @@ async def adapt_one(
             runtime_repair_budget = max(2, max_attempts)
             no_op_attempts = 0
             no_op_attempt_budget = max(2, (max_attempts + 1) // 2)
+            capability_design = None
             if is_l0:
                 _write_l0_entrypoint(staged, sample["wrap_intent"])
             else:
@@ -647,6 +649,44 @@ async def adapt_one(
                     target = staged / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(content, encoding="utf-8")
+                event_path = run_dir / "events.jsonl"
+                discovery_ir = await asyncio.to_thread(
+                    RepositoryAnalyzer().analyze,
+                    staged,
+                )
+                discovery = CapabilityDiscoveryWorkflow(
+                    project_dir=staged,
+                    ir=discovery_ir,
+                    design_path=run_dir / "capability_design.json",
+                )
+                with event_path.open("a", encoding="utf-8") as handle:
+                    async for event in discovery.run(sample["wrap_intent"]):
+                        handle.write(
+                            json.dumps(
+                                {
+                                    "phase": "capability_discovery",
+                                    **event.to_dict(),
+                                },
+                                ensure_ascii=False,
+                                default=str,
+                            )
+                            + "\n"
+                        )
+                capability_design = discovery.store.design
+                summary["capabilityDiscovery"] = {
+                    "completed": capability_design is not None,
+                    "decision": (
+                        capability_design.decision
+                        if capability_design is not None
+                        else None
+                    ),
+                    "capabilityCount": (
+                        len(capability_design.capabilities)
+                        if capability_design is not None
+                        else 0
+                    ),
+                    "errors": discovery.store.last_errors or [],
+                }
                 _save_template_snapshot(staged, run_dir)
                 recovered_report = validate_algorithm_template(
                     staged,
@@ -676,7 +716,6 @@ async def adapt_one(
                     errors = [] if runtime_report.passed else runtime_report.errors
                 else:
                     errors = recovered_report.errors
-                event_path = run_dir / "events.jsonl"
                 attempt = 0
                 while errors:
                     runtime_phase = (
@@ -705,7 +744,12 @@ async def adapt_one(
                             else True
                         ),
                     )
-                    prompt = template_adapter_prompt(ir, sample["wrap_intent"], original_main)
+                    prompt = template_adapter_prompt(
+                        ir,
+                        sample["wrap_intent"],
+                        original_main,
+                        capability_design=capability_design,
+                    )
                     if errors:
                         prompt += (
                             "\n上一次确定性校验错误，请全部修复：\n"

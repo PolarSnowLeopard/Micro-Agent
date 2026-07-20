@@ -21,6 +21,7 @@ from micro_agent.core.agent import Agent
 from micro_agent.core.config import config
 from micro_agent.core.llm import LLM
 from micro_agent.packaging.analyzer import RepositoryIR
+from micro_agent.packaging.discovery import CapabilityDesign
 from micro_agent.packaging.tools import InspectRepository, ReadProjectFile
 from micro_agent.tool.base import Tool, ToolResult
 from micro_agent.tool.registry import ToolRegistry
@@ -2075,7 +2076,12 @@ def build_template_adapter_agent(
     )
 
 
-def template_adapter_prompt(ir: RepositoryIR, wrap_intent: str, original_main: str | None) -> str:
+def template_adapter_prompt(
+    ir: RepositoryIR,
+    wrap_intent: str,
+    original_main: str | None,
+    capability_design: CapabilityDesign | None = None,
+) -> str:
     summary = {
         "fingerprint": ir.fingerprint,
         "fileCount": len(ir.files),
@@ -2085,6 +2091,11 @@ def template_adapter_prompt(ir: RepositoryIR, wrap_intent: str, original_main: s
         "testFiles": ir.testFiles[:30],
         "parseErrors": ir.parseErrors,
         "truncated": ir.truncated,
+        "capabilityDiscovery": (
+            capability_design.to_dict()
+            if capability_design is not None
+            else None
+        ),
     }
     original_note = (
         f"原仓库已有 main.py，已在适配副本中保留为 {original_main}；需要时从该文件导入。"
@@ -2095,7 +2106,17 @@ def template_adapter_prompt(ir: RepositoryIR, wrap_intent: str, original_main: s
         "请把当前仓库适配为 IOEB ZIP 算法模板。\n"
         f"wrap_intent（唯一业务需求来源）：{wrap_intent}\n"
         f"{original_note}\n"
-        "只调用一次 inspect_repository，最多读取 12 个最相关文件，随后写 main.py、"
+        + (
+            "capabilityDiscovery 是前一阶段独立 Agent 已核对的能力边界与源码证据。"
+            "以其中 1–6 个 capabilities 为模板入口的公开能力骨架；每个能力在 "
+            "main_process 中使用明确的 operation 字面量分支，并从其 evidence 指向的"
+            "原仓库测试/示例提取至少一个最小、直接、可静态求值的成功 fixture。"
+            "若某候选因真实资产缺失无法执行，可删除该能力并在 README.ioeb.md 记录风险，"
+            "但不能用伪数据或随机模型制造成功。\n"
+            if capability_design is not None
+            else ""
+        )
+        + "只调用一次 inspect_repository，最多读取 12 个最相关文件，随后写 main.py、"
         "tests_ioeb/test_template_contract.py 与必要的 requirements.txt。"
         "契约测试必须用 JSON 字面量调用 main_process 的每个公开分支并断言领域输出；"
         "长输入可先赋给同一测试函数内值为纯 JSON 字面量的局部变量，"
