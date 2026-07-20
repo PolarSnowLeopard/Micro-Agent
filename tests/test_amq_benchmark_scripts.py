@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from scripts.run_amq_paper_evaluation import (
     aggregate,
     driver_diagnostic,
     fresh_solver_substitution_metadata,
+    invalidate_mismatched_repo_caches,
     merge_d3_backfill_result,
     paper_goe,
 )
@@ -73,6 +75,43 @@ def test_paper_goe_counts_range_but_not_pattern_as_constraint() -> None:
     result = paper_goe(tools, lambda _: {})
 
     assert result["goe_constraint_richness"] == 0.5
+
+
+def test_evaluation_invalidates_cache_from_a_different_benchmark_commit(
+    tmp_path: Path,
+) -> None:
+    cached = tmp_path / "cache" / "sample"
+    cached.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=cached, check=True)
+    subprocess.run(["git", "config", "user.name", "AMQ Test"], cwd=cached, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "amq-test@example.invalid"],
+        cwd=cached,
+        check=True,
+    )
+    (cached / "main.py").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "main.py"], cwd=cached, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=cached, check=True)
+
+    invalidated = invalidate_mismatched_repo_caches(
+        tmp_path / "cache",
+        [
+            {
+                "sample_id": "sample",
+                "repo_info": {"commit_sha": "adapted-commit"},
+            }
+        ],
+    )
+
+    assert invalidated == [
+        {
+            "sampleId": "sample",
+            "expectedCommit": "adapted-commit",
+            "cachedCommit": invalidated[0]["cachedCommit"],
+        }
+    ]
+    assert invalidated[0]["cachedCommit"]
+    assert not cached.exists()
 
 
 def test_export_submission_uses_harness_repo_as_algorithm(tmp_path: Path) -> None:

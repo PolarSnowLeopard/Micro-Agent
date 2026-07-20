@@ -15,6 +15,8 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import types
 from collections import Counter
@@ -80,6 +82,44 @@ def _write_json_atomic(path: Path, data: Any) -> None:
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temp.replace(path)
+
+
+def invalidate_mismatched_repo_caches(
+    cache_root: Path,
+    samples: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Remove harness caches whose checkout is not the benchmark commit.
+
+    The released harness keys its cache only by sample_id.  Derived benchmark
+    variants can deliberately retain the sample id while pointing at a new,
+    template-adapted commit, so reusing a canonical cache would silently build
+    the wrong repository.
+    """
+    invalidated: list[dict[str, str]] = []
+    for sample in samples:
+        sample_id = str(sample["sample_id"])
+        expected = str(sample.get("repo_info", {}).get("commit_sha", "")).strip()
+        cached = cache_root / sample_id
+        if not cached.exists():
+            continue
+        completed = subprocess.run(
+            ["git", "-C", str(cached), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        actual = completed.stdout.strip() if completed.returncode == 0 else ""
+        if expected and actual == expected:
+            continue
+        shutil.rmtree(cached)
+        invalidated.append(
+            {
+                "sampleId": sample_id,
+                "expectedCommit": expected,
+                "cachedCommit": actual,
+            }
+        )
+    return invalidated
 
 
 def _jaccard_distance(left: set[str], right: set[str]) -> float:
@@ -556,6 +596,17 @@ async def main() -> int:
     elif args.resume and results_file.is_file():
         prior = json.loads(results_file.read_text(encoding="utf-8"))
         completed = {result["sample_id"]: result for result in prior.get("results", [])}
+
+    cache_invalidations = invalidate_mismatched_repo_caches(
+        args.repo_cache_root.resolve(),
+        tasks,
+    )
+    protocol["repoCacheValidation"] = {
+        "key": "sample_id",
+        "commitVerified": True,
+        "invalidatedCount": len(cache_invalidations),
+        "invalidated": cache_invalidations,
+    }
 
     runner = harness.BenchmarkRunner(
         solver_model=args.solver_model,
