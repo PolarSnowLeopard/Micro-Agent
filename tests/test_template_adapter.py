@@ -1399,6 +1399,12 @@ def main_process(value: float) -> float:
             "模板契约 fixture 过多",
         ]
     )
+    assert not _template_repair_needs_source(
+        [
+            "每个已发现能力只允许一个最小成功 fixture；"
+            "当前 success_calls=4, capabilities=1"
+        ]
+    )
     assert _template_repair_needs_source(
         ["AttributeError: module has no attribute 'run'"]
     )
@@ -1499,6 +1505,14 @@ def main_process(value: float) -> float:
     )
     assert "并行输入长度不一致" in paired_advice
     assert "静默截断" in paired_advice
+    fixture_budget_advice = _template_runtime_repair_advice(
+        [
+            "每个已发现能力只允许一个最小成功 fixture；"
+            "当前 success_calls=4, capabilities=1"
+        ]
+    )
+    assert "只保留一个最能覆盖 CapabilityDesign" in fixture_budget_advice
+    assert "只改 tests_ioeb/test_template_contract.py" in fixture_budget_advice
 
 
 @pytest.mark.asyncio

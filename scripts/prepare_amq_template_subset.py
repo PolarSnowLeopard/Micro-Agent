@@ -454,6 +454,14 @@ def _template_repair_needs_source(errors: list[str]) -> bool:
     """Reserve repository reads for source/API/runtime failures only."""
 
     text = "\n".join(errors).lower()
+    if (
+        "只允许一个最小成功 fixture" in text
+        or (
+            "success_calls=" in text
+            and "capabilities=" in text
+        )
+    ):
+        return False
     markers = (
         "不存在的成员",
         "未调用任何从原仓库导入",
@@ -481,6 +489,20 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
 
     text = "\n".join(errors).lower()
     advice: list[str] = []
+    if (
+        "只允许一个最小成功 fixture" in text
+        or (
+            "success_calls=" in text
+            and "capabilities=" in text
+        )
+    ):
+        advice.append(
+            "成功契约数量超过已发现能力数量：只保留一个最能覆盖 CapabilityDesign "
+            "中该能力主路径、且具有领域断言的最小成功测试；删除同一能力的不同"
+            "算法选项、配置值和输入变体。真正必要的错误边界只能使用 pytest.raises，"
+            "不能继续调用成功分支。此修复只改 tests_ioeb/test_template_contract.py，"
+            "无需重新读取仓库或改写已经通过结构校验的 main.py。"
+        )
     if "禁止模块级调用初始化运行状态" in "\n".join(errors):
         advice.append(
             "模板模块导入期创建了运行状态：根作用域只保留 import、类型定义和不可变"
