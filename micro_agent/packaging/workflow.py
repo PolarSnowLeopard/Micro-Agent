@@ -1147,7 +1147,12 @@ def _verified_template_contract_context(ir: RepositoryIR) -> dict[str, Any]:
     validation_checks = (
         validation.get("checks", {}) if isinstance(validation, dict) else {}
     )
-    fixtures = validation_checks.get("contractFixtures", [])
+    runtime_fixtures = runtime_checks.get("contractFixtures", [])
+    fixtures = (
+        runtime_fixtures
+        if isinstance(runtime_fixtures, list) and runtime_fixtures
+        else validation_checks.get("contractFixtures", [])
+    )
     if not isinstance(fixtures, list):
         fixtures = []
 

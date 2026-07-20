@@ -405,6 +405,10 @@ def _template_repair_needs_source(errors: list[str]) -> bool:
         "容器构建",
         "[contract_build]",
         "[contract_test]",
+        "[contract_fixture_capture]",
+        "没有捕获到",
+        "成功 json 输入",
+        "成功 fixture",
     )
     return any(marker in text for marker in markers)
 
@@ -573,6 +577,7 @@ async def adapt_one(
                 repo_dir,
                 allow_explicit_unsupported=negative_control,
                 require_contract_test=not negative_control,
+                allow_runtime_collected_contract=not negative_control,
             )
             adaptation_metadata: dict[str, Any] = {}
             metadata_path = repo_dir / "template_adaptation.json"
@@ -691,6 +696,7 @@ async def adapt_one(
                 recovered_report = validate_algorithm_template(
                     staged,
                     require_contract_test=True,
+                    allow_runtime_collected_contract=True,
                 )
                 if recovered_writes:
                     _write_json_atomic(run_dir / "validation_recovered.json", recovered_report.to_dict())
@@ -783,6 +789,7 @@ async def adapt_one(
                     report = validate_algorithm_template(
                         staged,
                         require_contract_test=True,
+                        allow_runtime_collected_contract=True,
                     )
                     _write_json_atomic(run_dir / f"validation_attempt_{attempt}.json", report.to_dict())
                     errors = report.errors
@@ -821,6 +828,7 @@ async def adapt_one(
                 staged,
                 allow_explicit_unsupported=is_l0,
                 require_contract_test=not is_l0,
+                allow_runtime_collected_contract=not is_l0,
             )
             _write_json_atomic(run_dir / "validation.json", report.to_dict())
             if not report.passed:

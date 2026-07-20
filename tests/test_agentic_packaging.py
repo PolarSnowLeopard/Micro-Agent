@@ -1011,6 +1011,18 @@ def test_invalid_contract():
                         "functionalVerified": True,
                         "executionMode": "repository_source",
                         "networkDuringTest": False,
+                        "contractFixtures": [
+                            {
+                                "line": 5,
+                                "input": {
+                                    "operation": "predict",
+                                    "output_type": "structured",
+                                    "model_variant": "plain",
+                                    "value": 0.75,
+                                },
+                                "expectedOutcome": "success",
+                            }
+                        ],
                     },
                 },
             }
@@ -1029,7 +1041,7 @@ def test_invalid_contract():
     assert '"parameter": "output_type"' in prompt
     assert '"value": "structured"' in prompt
     assert '"toolSmokeInput": {' in prompt
-    assert '"value": 0.5' in prompt
+    assert '"value": 0.75' in prompt
     assert "tests_ioeb/test_template_contract.py:5" in prompt
     assert "保持 toolSmokeInput 中的值不变" in prompt
     context = _builder_implementation_context(_plan(ir), ir)
@@ -1040,13 +1052,13 @@ def test_invalid_contract():
         "operation": "predict",
         "output_type": "structured",
         "model_variant": "plain",
-        "value": 0.5,
+        "value": 0.75,
     }
     assert context["verifiedTemplateContract"]["records"][0][
         "toolSmokeInput"
-    ] == {"model_variant": "plain", "value": 0.5}
+    ] == {"model_variant": "plain", "value": 0.75}
     assert len(context["verifiedTemplateContract"]["records"]) == 1
-    assert context["verifiedTemplateContract"]["excludedErrorFixtureCount"] == 1
+    assert context["verifiedTemplateContract"]["excludedErrorFixtureCount"] == 0
     assert "tests_ioeb/test_template_contract.py" in {
         item["path"] for item in relevance["overview"]["seedFiles"]
     }

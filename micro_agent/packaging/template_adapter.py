@@ -40,9 +40,10 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
 9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process，
-   至少用一个可静态还原的完整 JSON 输入覆盖每个准备发布的独立能力；不要求穷举底层库的
-   所有可选算法、配置值或错误边界。过长输入可先赋给同一测试函数内的局部变量，并可使用
-   由常量组成的 list/string 拼接或重复表达式。每个成功 fixture 至少用一个 assert 检查领域输出。
+   至少用一个完整 JSON 输入覆盖每个准备发布的独立能力；不要求穷举底层库的所有可选算法、
+   配置值或错误边界。优先使用可静态还原的字面量；领域输入确需计算时可在测试内动态构造，
+   但传给 main_process 的最终参数必须完全 JSON 可序列化、不能含 NaN/Infinity，并会在隔离
+   Docker 中捕获为服务 smoke。每个成功 fixture 至少用一个 assert 检查领域输出。
    优先复用原仓库测试/doctest/示例中的输入，不得只检查 callable、不得联网、不得启动子进程。
    可选的错误边界 fixture 必须放在 pytest.raises/相关 assertRaises 上下文中；它们不会成为
    服务 smoke 输入，也不能代替任何公开分支的成功 fixture。
@@ -92,6 +93,7 @@ def validate_algorithm_template(
     *,
     allow_explicit_unsupported: bool = False,
     require_contract_test: bool = False,
+    allow_runtime_collected_contract: bool = False,
 ) -> TemplateValidationReport:
     root = Path(project_dir).resolve()
     errors: list[str] = []
@@ -121,6 +123,7 @@ def validate_algorithm_template(
         "contractSuccessFixtureCount": 0,
         "contractUncollectedCallCount": 0,
         "contractStaticBindingCount": 0,
+        "contractRuntimeCollectionRequired": False,
         "serverPathParameters": [],
         "noServerPathInterface": False,
         "controlEnvelopeReturnLines": [],
@@ -423,6 +426,7 @@ def validate_algorithm_template(
         contract_errors, contract_checks = _validate_template_contract_test(
             root,
             function,
+            allow_runtime_collected_contract=allow_runtime_collected_contract,
         )
         errors.extend(contract_errors)
         checks.update(contract_checks)
@@ -539,6 +543,8 @@ def _control_envelope_return_lines(
 def _validate_template_contract_test(
     root: Path,
     main_function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    allow_runtime_collected_contract: bool = False,
 ) -> tuple[list[str], dict[str, Any]]:
     errors: list[str] = []
     checks: dict[str, Any] = {
@@ -553,6 +559,7 @@ def _validate_template_contract_test(
         "contractSuccessFixtureCount": 0,
         "contractUncollectedCallCount": 0,
         "contractStaticBindingCount": 0,
+        "contractRuntimeCollectionRequired": False,
     }
     relative = Path("tests_ioeb") / "test_template_contract.py"
     path = root / relative
@@ -642,6 +649,8 @@ def _validate_template_contract_test(
     uncollected_calls = 0
     static_binding_count = 0
     dynamic_input_lines: list[int] = []
+    executable_call_count = 0
+    dynamic_call_outcomes: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -663,6 +672,7 @@ def _validate_template_contract_test(
                 "@pytest.fixture 或普通 helper 中"
             )
             continue
+        executable_call_count += 1
         fixture: dict[str, Any] = {}
         invalid_literal = False
         fixture_static_binding_count = 0
@@ -696,6 +706,12 @@ def _validate_template_contract_test(
                 invalid_literal = True
         if invalid_literal:
             dynamic_input_lines.append(node.lineno)
+            dynamic_call_outcomes.append(
+                _contract_call_expected_outcome(
+                    node,
+                    parent_by_node,
+                )
+            )
             continue
         unknown = sorted(set(fixture) - set(parameter_names))
         missing = sorted(required - set(fixture))
@@ -732,7 +748,13 @@ def _validate_template_contract_test(
     checks["contractStaticBindingCount"] = static_binding_count
     checks["contractDynamicInputCallCount"] = len(dynamic_input_lines)
     checks["contractDynamicInputLines"] = sorted(dynamic_input_lines)
-    if dynamic_input_lines and not fixtures:
+    checks["contractExecutableCallCount"] = executable_call_count
+    checks["contractRuntimeCollectionRequired"] = bool(dynamic_input_lines)
+    if (
+        dynamic_input_lines
+        and not fixtures
+        and not allow_runtime_collected_contract
+    ):
         errors.append(
             "模板契约测试的 main_process 输入必须是可审计的 JSON 字面量，"
             "至少一个成功 smoke 调用的完整输入必须能静态还原；允许直接字面量、"
@@ -743,30 +765,50 @@ def _validate_template_contract_test(
             + ", ".join(map(str, sorted(dynamic_input_lines)))
         )
 
-    if fixtures:
+    if fixtures or (
+        allow_runtime_collected_contract
+        and executable_call_count
+    ):
         checks["contractTestCallsMainProcess"] = True
         checks["contractFixtures"] = fixtures
     else:
-        errors.append(
-            "模板契约测试必须至少一次直接调用从 main 导入的 main_process，"
-            "并使用完整、可静态求值的 JSON 字面量输入"
-        )
+        if allow_runtime_collected_contract:
+            errors.append(
+                "模板契约测试必须至少一次在 pytest/unittest 可收集测试中"
+                "直接调用从 main 导入的 main_process"
+            )
+        else:
+            errors.append(
+                "模板契约测试必须至少一次直接调用从 main 导入的 main_process，"
+                "并使用完整、可静态求值的 JSON 字面量输入"
+            )
     success_fixtures = [
         fixture
         for fixture in fixtures
         if fixture["expectedOutcome"] == "success"
     ]
     checks["contractSuccessFixtureCount"] = len(success_fixtures)
-    if fixtures and not success_fixtures:
+    dynamic_success_count = sum(
+        outcome == "success"
+        for outcome in dynamic_call_outcomes
+    )
+    if (
+        fixtures
+        and not success_fixtures
+        and not (
+            allow_runtime_collected_contract
+            and dynamic_success_count
+        )
+    ):
         errors.append(
             "模板契约测试只有预期失败输入；至少需要一个可作为服务 smoke 的成功 fixture"
         )
-    if len(fixtures) <= 30:
+    if executable_call_count <= 30:
         checks["contractFixtureBudget"] = True
     else:
         errors.append(
             "模板契约 fixture 过多，薄封装最多允许 30 个；"
-            f"当前 {len(fixtures)} 个，请只保留与 wrap_intent 最相关的内聚能力"
+            f"当前 {executable_call_count} 个，请只保留与 wrap_intent 最相关的内聚能力"
         )
 
     assertion_count = sum(
@@ -781,13 +823,21 @@ def _validate_template_contract_test(
         )
         for node in ast.walk(tree)
     )
-    error_fixture_count = len(fixtures) - len(success_fixtures)
-    if fixtures and assertion_count + error_fixture_count >= len(fixtures):
+    error_fixture_count = (
+        len(fixtures)
+        - len(success_fixtures)
+        + sum(outcome == "error" for outcome in dynamic_call_outcomes)
+    )
+    success_call_count = len(success_fixtures) + dynamic_success_count
+    if (
+        success_call_count
+        and assertion_count + error_fixture_count >= executable_call_count
+    ):
         checks["contractTestAssertions"] = True
     else:
         errors.append(
             "每个成功模板契约 fixture 至少需要一个 assert 验证领域输出；"
-            f"当前 success_calls={len(success_fixtures)}, "
+            f"当前 success_calls={success_call_count}, "
             f"asserts={assertion_count}"
         )
 
@@ -1250,6 +1300,171 @@ def _literal_dispatch_cases(
     return result
 
 
+_CONTRACT_FIXTURE_MARKER = "IOEB_TEMPLATE_CONTRACT_FIXTURES="
+_CONTRACT_CAPTURE_RUNNER = r'''
+import functools
+import inspect
+import json
+import sys
+
+import main
+import pytest
+
+_real_main_process = main.main_process
+_records = []
+_rejected = []
+_truncated = False
+
+
+def _caller_line():
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back.f_back if frame and frame.f_back else None
+        return int(caller.f_lineno) if caller is not None else None
+    finally:
+        del frame
+
+
+def _json_input(arguments):
+    encoded = json.dumps(
+        dict(arguments),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+    if len(encoded.encode("utf-8")) > 524288:
+        raise ValueError("captured input exceeds 512 KiB")
+    return json.loads(encoded)
+
+
+@functools.wraps(_real_main_process)
+def _capturing_main_process(*args, **kwargs):
+    global _truncated
+    line = _caller_line()
+    bound = inspect.signature(_real_main_process).bind(*args, **kwargs)
+    bound.apply_defaults()
+    result = _real_main_process(*args, **kwargs)
+    try:
+        captured = _json_input(bound.arguments)
+    except (TypeError, ValueError) as exc:
+        if len(_rejected) < 30:
+            _rejected.append({"line": line, "reason": str(exc)})
+        return result
+    if len(_records) < 30:
+        _records.append(
+            {
+                "line": line,
+                "input": captured,
+                "expectedOutcome": "success",
+            }
+        )
+    else:
+        _truncated = True
+    return result
+
+
+main.main_process = _capturing_main_process
+try:
+    _exit_code = pytest.main(
+        [
+            "-p",
+            "no:cacheprovider",
+            "-q",
+            "tests_ioeb/test_template_contract.py",
+        ]
+    )
+finally:
+    print(
+        "IOEB_TEMPLATE_CONTRACT_FIXTURES="
+        + json.dumps(
+            {
+                "records": _records,
+                "rejected": _rejected,
+                "truncated": _truncated,
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
+sys.exit(int(_exit_code))
+'''
+
+
+def _parse_runtime_contract_capture(stdout: str) -> dict[str, Any] | None:
+    for line in reversed(stdout.splitlines()):
+        if not line.startswith(_CONTRACT_FIXTURE_MARKER):
+            continue
+        try:
+            payload = json.loads(line.removeprefix(_CONTRACT_FIXTURE_MARKER))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        records = payload.get("records")
+        rejected = payload.get("rejected")
+        if not isinstance(records, list) or not isinstance(rejected, list):
+            return None
+        return {
+            "records": records,
+            "rejected": rejected,
+            "truncated": bool(payload.get("truncated")),
+        }
+    return None
+
+
+def _apply_runtime_contract_capture(
+    checks: dict[str, Any],
+    static_report: TemplateValidationReport,
+    completed: subprocess.CompletedProcess[str],
+) -> str | None:
+    capture = _parse_runtime_contract_capture(completed.stdout)
+    static_success = [
+        fixture
+        for fixture in static_report.checks.get("contractFixtures", [])
+        if isinstance(fixture, dict)
+        and fixture.get("expectedOutcome") == "success"
+    ]
+    if capture is None:
+        if static_report.checks.get("contractRuntimeCollectionRequired"):
+            return (
+                "[contract_fixture_capture] 契约测试包含动态输入，"
+                "但隔离运行时未返回可解析的成功调用记录"
+            )
+        records = static_success
+        rejected: list[Any] = []
+        truncated = False
+    else:
+        records = [
+            record
+            for record in capture["records"]
+            if isinstance(record, dict)
+            and isinstance(record.get("input"), dict)
+        ]
+        rejected = capture["rejected"]
+        truncated = capture["truncated"]
+    checks["contractFixtures"] = records
+    checks["contractSuccessFixtureCount"] = len(records)
+    checks["contractRejectedFixtureInputs"] = rejected
+    checks["contractFixtureCaptureTruncated"] = truncated
+    if truncated:
+        return "[contract_fixture_budget] 隔离运行时捕获到超过 30 个成功 fixture"
+    if not records:
+        detail = ""
+        if rejected:
+            detail = "；无法作为 JSON 服务输入的调用: " + json.dumps(
+                rejected[:5],
+                ensure_ascii=False,
+            )
+        return (
+            "[contract_fixture_capture] 契约测试通过但没有捕获到"
+            "可作为服务 smoke 的成功 JSON 输入"
+            + detail
+        )
+    return None
+
+
 def verify_template_contract_runtime(
     project_dir: str | Path,
     *,
@@ -1270,12 +1485,17 @@ def verify_template_contract_runtime(
         "testExitCode": None,
         "testSeconds": None,
         "functionalVerified": False,
+        "contractFixtures": [],
+        "contractSuccessFixtureCount": 0,
+        "contractRejectedFixtureInputs": [],
+        "contractFixtureCaptureTruncated": False,
     }
     errors: list[str] = []
     warnings: list[str] = []
     static_report = validate_algorithm_template(
         root,
         require_contract_test=True,
+        allow_runtime_collected_contract=True,
     )
     if not static_report.passed:
         return TemplateContractRuntimeReport(
@@ -1431,9 +1651,19 @@ def verify_template_contract_runtime(
                 "2",
                 "--env",
                 f"PYTHONPATH={python_path}",
+                "--env",
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+                "--env",
+                "MPLCONFIGDIR=/tmp/matplotlib",
+                "--env",
+                "XDG_CACHE_HOME=/tmp/cache",
                 "--workdir",
                 workdir,
+                "--entrypoint",
+                "python",
                 image,
+                "-c",
+                _CONTRACT_CAPTURE_RUNNER,
             ]
 
         try:
@@ -1464,7 +1694,15 @@ def verify_template_contract_runtime(
         checks["sourceTestExitCode"] = runtime.returncode
         checks["testExitCode"] = runtime.returncode
         if runtime.returncode == 0:
-            checks["functionalVerified"] = True
+            capture_error = _apply_runtime_contract_capture(
+                checks,
+                static_report,
+                runtime,
+            )
+            if capture_error:
+                errors.append(capture_error)
+            else:
+                checks["functionalVerified"] = True
         elif fallback_candidates and _looks_like_local_distribution_shadow(
             runtime.stdout,
             runtime.stderr,
@@ -1504,12 +1742,20 @@ def verify_template_contract_runtime(
             )
             checks["testExitCode"] = fallback.returncode
             if fallback.returncode == 0:
-                checks["executionMode"] = "installed_distribution_fallback"
-                checks["functionalVerified"] = True
-                warnings.append(
-                    "仓库源码包缺少可导入的编译产物；契约改用 requirements.txt "
-                    "中的同名发行包验证，源码优先尝试及回退模式均已记录"
+                capture_error = _apply_runtime_contract_capture(
+                    checks,
+                    static_report,
+                    fallback,
                 )
+                if capture_error:
+                    errors.append(capture_error)
+                else:
+                    checks["executionMode"] = "installed_distribution_fallback"
+                    checks["functionalVerified"] = True
+                    warnings.append(
+                        "仓库源码包缺少可导入的编译产物；契约改用 requirements.txt "
+                        "中的同名发行包验证，源码优先尝试及回退模式均已记录"
+                    )
             else:
                 errors.append(
                     "[contract_test] 仓库源码模式与同名发行包回退模式均失败。"

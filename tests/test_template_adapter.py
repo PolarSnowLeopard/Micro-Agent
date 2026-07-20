@@ -334,6 +334,148 @@ def test_contract():
     )
 
 
+def test_template_contract_defers_dynamic_json_input_to_isolated_runtime(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(values: list[float]) -> float:\n    return sum(values)\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(values: list[float]) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        values: Numeric inputs.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(values)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def make_values():
+    return [1.0, 2.0, 3.0]
+
+def test_contract():
+    result = main_process(values=make_values())
+    assert result["result"] == 6.0
+''',
+        encoding="utf-8",
+    )
+
+    static_only = validate_algorithm_template(
+        project,
+        require_contract_test=True,
+    )
+    runtime_deferred = validate_algorithm_template(
+        project,
+        require_contract_test=True,
+        allow_runtime_collected_contract=True,
+    )
+
+    assert not static_only.passed
+    assert runtime_deferred.passed, runtime_deferred.to_json()
+    assert runtime_deferred.checks["contractTestCallsMainProcess"] is True
+    assert runtime_deferred.checks["contractRuntimeCollectionRequired"] is True
+    assert runtime_deferred.checks["contractFixtures"] == []
+
+
+def test_runtime_contract_capture_parses_successful_json_inputs() -> None:
+    payload = {
+        "records": [
+            {
+                "line": 12,
+                "input": {"values": [1.0, 2.0]},
+                "expectedOutcome": "success",
+            }
+        ],
+        "rejected": [],
+        "truncated": False,
+    }
+
+    parsed = template_adapter._parse_runtime_contract_capture(
+        "pytest output\n"
+        + template_adapter._CONTRACT_FIXTURE_MARKER
+        + json.dumps(payload)
+        + "\n"
+    )
+
+    assert parsed == payload
+
+
+def test_runtime_contract_capture_executes_dynamic_contract(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(values: list[float]) -> float:\n    return sum(values)\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(values: list[float]) -> dict[str, float]:
+    """Run the repository function.
+
+    Args:
+        values: Numeric inputs.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(values)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def make_values():
+    return [1.0, 2.0, 3.0]
+
+def test_contract():
+    result = main_process(values=make_values())
+    assert result["result"] == 6.0
+''',
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            template_adapter.sys.executable,
+            "-c",
+            template_adapter._CONTRACT_CAPTURE_RUNNER,
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    captured = template_adapter._parse_runtime_contract_capture(
+        completed.stdout
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert captured is not None
+    assert captured["records"] == [
+        {
+            "line": 7,
+            "input": {"values": [1.0, 2.0, 3.0]},
+            "expectedOutcome": "success",
+        }
+    ]
+
+
 def test_template_contract_accepts_bounded_json_expressions_and_ignores_extra_dynamic_calls(
     tmp_path: Path,
 ) -> None:
@@ -906,7 +1048,12 @@ def test_contract():
     assert "--read-only" in docker_run
     assert "--cap-drop" in docker_run and "ALL" in docker_run
     assert "PYTHONPATH=/workspace:/workspace/src:/ioeb" in docker_run
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in docker_run
+    assert "MPLCONFIGDIR=/tmp/matplotlib" in docker_run
+    assert "XDG_CACHE_HOME=/tmp/cache" in docker_run
     assert docker_run[docker_run.index("--workdir") + 1] == "/workspace"
+    assert docker_run[docker_run.index("--entrypoint") + 1] == "python"
+    assert template_adapter._CONTRACT_FIXTURE_MARKER in docker_run[-1]
     assert len(dockerfiles) == 1
     assert "--mount=type=cache,target=/root/.cache/pip,sharing=locked" in dockerfiles[0]
     assert "--no-cache-dir" not in dockerfiles[0]

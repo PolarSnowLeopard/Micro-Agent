@@ -207,7 +207,11 @@ def _nonnegative_int(value: Any) -> int:
 
 
 def analyze_adaptation_repo(sample_id: str, repo: Path) -> dict[str, Any]:
-    report = validate_algorithm_template(repo, require_contract_test=True)
+    report = validate_algorithm_template(
+        repo,
+        require_contract_test=True,
+        allow_runtime_collected_contract=True,
+    )
     parameters: list[str] = []
     dispatch_counts: dict[str, int] = {}
     main_path = repo / "main.py"
