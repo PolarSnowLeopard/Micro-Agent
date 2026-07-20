@@ -1411,6 +1411,14 @@ def main_process(value: float) -> float:
     )
     assert "search_project_text" in deprecation_advice
     assert "替代" in deprecation_advice
+    datapoint_advice = _template_runtime_repair_advice(
+        [
+            "The given datapoint does not have an 'ecg' attribute.",
+            "The passed object does not seem to be a EcgRawDataFrame.",
+        ]
+    )
+    assert "SimpleNamespace" in datapoint_advice
+    assert ".sampling_rate_hz" in datapoint_advice
     assert "禁止伪造返回键" in empty_result_advice
     literal_advice = _template_runtime_repair_advice(
         ["模板契约测试的 main_process 输入必须是可审计的 JSON 字面量"]

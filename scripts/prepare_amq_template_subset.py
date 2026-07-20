@@ -554,6 +554,17 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "搜索警告给出的替代类/函数及其 run/extract 用法，读取替代实现后重构 "
             "main.py。不得继续围绕弃用入口反复调整参数，也不得仅屏蔽警告。"
         )
+    if (
+        "datapoint does not have an 'ecg' attribute" in text
+        or "does not seem to be a ecgrawdataframe" in text
+    ):
+        advice.append(
+            "当前 Pipeline.run 接受的是 datapoint 对象，不是 pandas DataFrame/Series "
+            "本身。读取 run() 对 datapoint 属性的访问方式；在 main_process 内构造一个"
+            "局部轻量适配对象（如 SimpleNamespace），令其 .ecg 为源码校验要求的 "
+            "DataFrame，并提供 .sampling_rate_hz/.sampling_rate 等 run() 查找的"
+            "采样率属性。不要把 fs 动态属性挂到 Series 后直接传入。"
+        )
     if not advice:
         return ""
     return (
