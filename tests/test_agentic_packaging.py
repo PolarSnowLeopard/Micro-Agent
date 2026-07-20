@@ -3761,6 +3761,41 @@ async def test_container_runtime_verifier_builds_and_discovers_tools(tmp_path):
     )
 
 
+async def test_container_runtime_verifier_removes_container_after_timeout(tmp_path):
+    project = _sample_project(tmp_path)
+    ir = RepositoryAnalyzer().analyze(project)
+    plan = _plan(ir)
+    artifact = prepare_artifact(project, tmp_path / "artifact", plan)
+    (artifact / "adapters.py").write_text(_valid_adapters(), encoding="utf-8")
+    commands = []
+
+    def runner(command, **kwargs):
+        commands.append((command, kwargs))
+        if command[:2] == ["docker", "build"]:
+            return subprocess.CompletedProcess(command, 0, stdout="built", stderr="")
+        if command[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    report = await ContainerRuntimeVerifier(
+        artifact,
+        plan,
+        command_runner=runner,
+    ).verify()
+
+    assert not report.passed
+    assert report.checks["runtimeTimedOut"] is True
+    run_command = next(command for command, _ in commands if command[:2] == ["docker", "run"])
+    container_name = run_command[run_command.index("--name") + 1]
+    assert [
+        "docker",
+        "container",
+        "rm",
+        "--force",
+        container_name,
+    ] in [command for command, _ in commands]
+
+
 def test_runtime_probe_is_valid_python_and_checks_smoke_output_schema():
     source = _runtime_probe_source(17)
 

@@ -1148,6 +1148,65 @@ def test_contract():
     assert not list(project.glob(".ioeb-template-contract-*"))
 
 
+def test_contract_runtime_removes_container_after_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value: float) -> float:\n    return value * 2\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''from algorithm import run
+
+def main_process(value: float) -> dict[str, float]:
+    """Run the repository algorithm.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Computed result.
+    """
+    return {"result": run(value)}
+''',
+    )
+    tests = project / "tests_ioeb"
+    tests.mkdir()
+    (tests / "test_template_contract.py").write_text(
+        '''from main import main_process
+
+def test_contract():
+    assert main_process(value=2.0)["result"] == 4.0
+''',
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(template_adapter.subprocess, "run", fake_run)
+
+    report = verify_template_contract_runtime(project)
+
+    assert not report.passed
+    assert report.errors == ["[contract_test_timeout] 模板契约测试超过 180 秒"]
+    docker_run = next(command for command in commands if command[:2] == ["docker", "run"])
+    container_name = docker_run[docker_run.index("--name") + 1]
+    assert [
+        "docker",
+        "container",
+        "rm",
+        "--force",
+        container_name,
+    ] in commands
+
+
 def test_contract_runtime_records_installed_distribution_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
