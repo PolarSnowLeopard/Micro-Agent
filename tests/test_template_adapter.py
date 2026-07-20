@@ -1499,6 +1499,14 @@ def main_process(value: float) -> float:
         ["禁止模块级调用初始化运行状态，相关行: 30"]
     )
     assert "模型构造、数据加载" in module_state_advice
+    import_mutation_advice = _template_runtime_repair_advice(
+        [
+            "禁止修改 sys.path 或通过 sys.modules/ModuleType "
+            "伪造依赖模块，相关行: 30"
+        ]
+    )
+    assert "篡改 Python 导入状态" in import_mutation_advice
+    assert "不能伪造空模块" in import_mutation_advice
     runtime_advice = _template_runtime_repair_advice(
         [
             "[contract_test] 4 failed, 8 passed",
@@ -1726,6 +1734,42 @@ def main_process(value: float) -> float:
 
     assert not report.passed
     assert any("模块级调用" in error for error in report.errors)
+
+
+def test_template_validator_rejects_import_path_and_fake_module_mutation(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "algorithm.py").write_text(
+        "def run(value):\n    return value\n",
+        encoding="utf-8",
+    )
+    project = _project(
+        tmp_path,
+        '''import sys
+import types
+from algorithm import run
+
+sys.path.insert(0, "src")
+sys.modules["missing_dep"] = types.ModuleType("missing_dep")
+
+def main_process(value: float) -> float:
+    """Run an algorithm.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Output value.
+    """
+    return run(value)
+''',
+    )
+
+    report = validate_algorithm_template(project)
+
+    assert not report.passed
+    assert report.checks["noImportRuntimeMutation"] is False
+    assert any("伪造依赖模块" in error for error in report.errors)
 
 
 def test_template_validator_allows_pure_derived_module_constants_and_type_ellipsis(

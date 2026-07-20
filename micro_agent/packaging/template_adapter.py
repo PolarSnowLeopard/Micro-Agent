@@ -121,6 +121,7 @@ def validate_algorithm_template(
         "typedReturn": False,
         "googleDocstring": False,
         "noModuleRuntimeState": False,
+        "noImportRuntimeMutation": False,
         "noDynamicCodeExecution": False,
         "resolvableRepositoryImports": False,
         "callsRepositoryCode": False,
@@ -265,6 +266,15 @@ def validate_algorithm_template(
         )
     else:
         checks["noModuleRuntimeState"] = True
+    import_mutation_lines = _import_runtime_mutation_lines(tree)
+    if import_mutation_lines:
+        errors.append(
+            "禁止修改 sys.path 或通过 sys.modules/ModuleType 伪造依赖模块，相关行: "
+            + ", ".join(map(str, import_mutation_lines))
+            + "；必须使用正常包路径和真实依赖"
+        )
+    else:
+        checks["noImportRuntimeMutation"] = True
 
     local_import_roots: set[str] = set()
     for candidate in root.iterdir():
@@ -2120,6 +2130,55 @@ def _contains_forbidden_pass(function: ast.FunctionDef | ast.AsyncFunctionDef) -
         return False
 
     return visit(function)
+
+
+def _import_runtime_mutation_lines(tree: ast.Module) -> list[int]:
+    """Reject import-path mutation and fake dependency injection."""
+
+    lines: set[int] = set()
+
+    def sys_attribute(node: ast.AST, name: str) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "sys"
+            and node.attr == name
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                (
+                    isinstance(target, ast.Subscript)
+                    and sys_attribute(target.value, "modules")
+                )
+                or sys_attribute(target, "path")
+                or sys_attribute(target, "modules")
+                for target in targets
+            ):
+                lines.add(node.lineno)
+        if not isinstance(node, ast.Call) or not isinstance(
+            node.func,
+            ast.Attribute,
+        ):
+            continue
+        owner = node.func.value
+        if (
+            sys_attribute(owner, "path")
+            and node.func.attr in {"append", "extend", "insert"}
+        ) or (
+            sys_attribute(owner, "modules")
+            and node.func.attr in {"setdefault", "update"}
+        ):
+            lines.add(node.lineno)
+        if (
+            isinstance(owner, ast.Name)
+            and owner.id in {"types", "_types"}
+            and node.func.attr == "ModuleType"
+        ):
+            lines.add(node.lineno)
+    return sorted(lines)
 
 
 def _is_safe_module_call(call: ast.Call, safe_names: set[str]) -> bool:

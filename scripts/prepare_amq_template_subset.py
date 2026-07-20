@@ -489,6 +489,15 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
 
     text = "\n".join(errors).lower()
     advice: list[str] = []
+    if "禁止修改 sys.path" in "\n".join(errors) or "伪造依赖模块" in "\n".join(
+        errors
+    ):
+        advice.append(
+            "候选正在篡改 Python 导入状态：删除所有 `sys.path.insert/append`、"
+            "`sys.modules[...] = ModuleType(...)` 和同类 monkeypatch。容器已把"
+            "仓库根目录与 src 加入 PYTHONPATH；缺失第三方模块必须依据仓库声明安装"
+            "真实发行包，或改用不触发无关可选依赖的具体子模块，不能伪造空模块。"
+        )
     if (
         "只允许一个最小成功 fixture" in text
         or (
