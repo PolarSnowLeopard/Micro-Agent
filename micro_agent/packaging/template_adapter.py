@@ -469,6 +469,7 @@ _CONTENT_PARAMETER_SUFFIXES = (
     "_text",
     "_zip",
 )
+_MAX_CONTRACT_FIXTURE_BYTES = 2 * 1024 * 1024
 _PATH_DESCRIPTION_MARKERS = (
     "file path",
     "paths to",
@@ -1136,8 +1137,8 @@ def _contract_json_expression(
 
 def _validate_contract_json_value(value: Any) -> None:
     encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
-    if len(encoded.encode("utf-8")) > 512_000:
-        raise ValueError("contract JSON expression exceeds 512KB")
+    if len(encoded.encode("utf-8")) > _MAX_CONTRACT_FIXTURE_BYTES:
+        raise ValueError("contract JSON expression exceeds 2 MiB")
 
 
 def _contract_call_expected_outcome(
@@ -1403,8 +1404,8 @@ def _json_input(arguments):
         allow_nan=False,
         separators=(",", ":"),
     )
-    if len(encoded.encode("utf-8")) > 524288:
-        raise ValueError("captured input exceeds 512 KiB")
+    if len(encoded.encode("utf-8")) > 2097152:
+        raise ValueError("captured input exceeds 2 MiB")
     return json.loads(encoded)
 
 

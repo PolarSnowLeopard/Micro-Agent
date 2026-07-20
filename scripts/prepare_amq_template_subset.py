@@ -30,7 +30,11 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from micro_agent.packaging.analyzer import RepositoryAnalyzer  # noqa: E402
-from micro_agent.packaging.discovery import CapabilityDiscoveryWorkflow  # noqa: E402
+from micro_agent.packaging.discovery import (  # noqa: E402
+    CapabilityDesign,
+    CapabilityDesignValidationError,
+    CapabilityDiscoveryWorkflow,
+)
 from micro_agent.packaging.template_adapter import (  # noqa: E402
     TemplateValidationReport,
     build_template_adapter_agent,
@@ -625,6 +629,17 @@ async def adapt_one(
             )
 
     recovered_writes = recover_last_template_writes(run_dir) if resume else {}
+    recovered_design_data: dict[str, Any] | None = None
+    recovered_design_path = run_dir / "capability_design.json"
+    if resume and recovered_design_path.is_file():
+        try:
+            candidate = json.loads(
+                recovered_design_path.read_text(encoding="utf-8")
+            )
+            if isinstance(candidate, dict):
+                recovered_design_data = candidate
+        except (OSError, json.JSONDecodeError):
+            recovered_design_data = None
     shutil.rmtree(run_dir, ignore_errors=True)
     shutil.rmtree(repo_dir, ignore_errors=True)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -681,25 +696,48 @@ async def adapt_one(
                     RepositoryAnalyzer().analyze,
                     staged,
                 )
-                discovery = CapabilityDiscoveryWorkflow(
-                    project_dir=staged,
-                    ir=discovery_ir,
-                    design_path=run_dir / "capability_design.json",
-                )
-                with event_path.open("a", encoding="utf-8") as handle:
-                    async for event in discovery.run(sample["wrap_intent"]):
-                        handle.write(
-                            json.dumps(
-                                {
-                                    "phase": "capability_discovery",
-                                    **event.to_dict(),
-                                },
-                                ensure_ascii=False,
-                                default=str,
-                            )
-                            + "\n"
+                capability_design = None
+                discovery_errors: list[str] = []
+                if recovered_design_data is not None:
+                    try:
+                        capability_design = CapabilityDesign.validate(
+                            recovered_design_data,
+                            known_symbols=discovery_ir.known_symbols,
+                            known_files={
+                                file.path for file in discovery_ir.files
+                            },
                         )
-                capability_design = discovery.store.design
+                    except CapabilityDesignValidationError as exc:
+                        discovery_errors = exc.errors
+                    else:
+                        (run_dir / "capability_design.json").write_text(
+                            capability_design.to_json() + "\n",
+                            encoding="utf-8",
+                        )
+                        summary["reusedCapabilityDiscovery"] = True
+                if capability_design is None:
+                    discovery = CapabilityDiscoveryWorkflow(
+                        project_dir=staged,
+                        ir=discovery_ir,
+                        design_path=run_dir / "capability_design.json",
+                    )
+                    with event_path.open("a", encoding="utf-8") as handle:
+                        async for event in discovery.run(
+                            sample["wrap_intent"]
+                        ):
+                            handle.write(
+                                json.dumps(
+                                    {
+                                        "phase": "capability_discovery",
+                                        **event.to_dict(),
+                                    },
+                                    ensure_ascii=False,
+                                    default=str,
+                                )
+                                + "\n"
+                            )
+                    capability_design = discovery.store.design
+                    discovery_errors = discovery.store.last_errors or []
                 capability_count = (
                     len(capability_design.capabilities)
                     if capability_design is not None
@@ -717,7 +755,7 @@ async def adapt_one(
                         if capability_design is not None
                         else 0
                     ),
-                    "errors": discovery.store.last_errors or [],
+                    "errors": discovery_errors,
                 }
                 for relative, content in recovered_writes.items():
                     target = staged / relative
