@@ -1462,6 +1462,15 @@ def main_process(value: float) -> float:
     )
     assert "禁止把原仓库的 Git/VCS 依赖猜成" in dependency_advice
     assert "未使用的 import" in dependency_advice
+    missing_module_advice = _template_runtime_repair_advice(
+        ["ModuleNotFoundError: No module named 'composer'"]
+    )
+    assert "真实发行包名" in missing_module_advice
+    assert "更具体子模块" in missing_module_advice
+    module_state_advice = _template_runtime_repair_advice(
+        ["禁止模块级调用初始化运行状态，相关行: 30"]
+    )
+    assert "模型构造、数据加载" in module_state_advice
     runtime_advice = _template_runtime_repair_advice(
         [
             "[contract_test] 4 failed, 8 passed",

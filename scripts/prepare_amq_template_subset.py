@@ -422,6 +422,14 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
 
     text = "\n".join(errors).lower()
     advice: list[str] = []
+    if "禁止模块级调用初始化运行状态" in "\n".join(errors):
+        advice.append(
+            "模板模块导入期创建了运行状态：根作用域只保留 import、类型定义和不可变"
+            "常量；模型构造、数据加载、随机种子设置、设备选择和仓库函数调用必须移入"
+            " main_process 或其调用的函数体。若对象构造昂贵，也不能用模块级调用绕过"
+            "门禁；当前模板验收先采用每次请求局部构造，后续服务生成阶段再依据已验证"
+            "生命周期设计安全缓存。"
+        )
     if "[contract_test]" in text:
         advice.append(
             "契约真实执行失败：逐个失败先判断是 wrapper/fixture 与源码 API 不匹配，"
@@ -498,6 +506,15 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             " requirements.txt 删除该可选依赖。若真实能力必需该包，则只能使用仓库"
             "已内置源码或索引中确实存在的发行包；两者都没有时应拒绝该能力，不能"
             "虚构包名或复制第三方实现。"
+        )
+    if "modulenotfounderror: no module named" in text:
+        advice.append(
+            "运行依赖缺失：先查原仓库 pyproject.toml、setup.cfg、requirements*.txt "
+            "和 CI 安装命令，确定 import 模块对应的真实发行包名；模块名与发行包名"
+            "可能不同，禁止直接猜测。只把 main_process 真实执行路径所需的直接依赖"
+            "加入 requirements.txt，并重新构建验证；若缺失模块只来自未使用的训练、"
+            "指标或 CLI 聚合导入，应改为从更具体子模块导入真实能力，避免拉入无关"
+            "可选依赖。"
         )
     if any(
         marker in text
