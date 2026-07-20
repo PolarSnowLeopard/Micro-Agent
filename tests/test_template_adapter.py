@@ -1512,6 +1512,8 @@ def main_process(value: float) -> float:
     assert "(batch, channels, sequence)" in runtime_advice
     assert "不能继续盲目增大错误轴" in runtime_advice
     assert "隔离运行触发联网下载" in runtime_advice
+    assert "先区分用户数据与算法必需资产" in runtime_advice
+    assert "JSON 内容、文本或 Base64" in runtime_advice
     assert "真实可解析的最小输入" in runtime_advice
     paired_advice = _template_runtime_repair_advice(
         ["ValueError: Dataframe has less rows than non-null values in columns. "
