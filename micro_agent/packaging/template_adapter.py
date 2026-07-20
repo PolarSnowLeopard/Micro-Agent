@@ -469,7 +469,7 @@ _CONTENT_PARAMETER_SUFFIXES = (
     "_text",
     "_zip",
 )
-_MAX_CONTRACT_FIXTURE_BYTES = 2 * 1024 * 1024
+_MAX_CONTRACT_FIXTURE_BYTES = 8 * 1024 * 1024
 _PATH_DESCRIPTION_MARKERS = (
     "file path",
     "paths to",
@@ -1138,7 +1138,7 @@ def _contract_json_expression(
 def _validate_contract_json_value(value: Any) -> None:
     encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
     if len(encoded.encode("utf-8")) > _MAX_CONTRACT_FIXTURE_BYTES:
-        raise ValueError("contract JSON expression exceeds 2 MiB")
+        raise ValueError("contract JSON expression exceeds 8 MiB")
 
 
 def _contract_call_expected_outcome(
@@ -1377,6 +1377,7 @@ _CONTRACT_CAPTURE_RUNNER = r'''
 import functools
 import inspect
 import json
+import os
 import sys
 
 import main
@@ -1386,6 +1387,7 @@ _real_main_process = main.main_process
 _records = []
 _rejected = []
 _truncated = False
+_contract_root = os.environ.get("IOEB_CONTRACT_ROOT", ".")
 
 
 def _caller_line():
@@ -1404,8 +1406,8 @@ def _json_input(arguments):
         allow_nan=False,
         separators=(",", ":"),
     )
-    if len(encoded.encode("utf-8")) > 2097152:
-        raise ValueError("captured input exceeds 2 MiB")
+    if len(encoded.encode("utf-8")) > 8388608:
+        raise ValueError("captured input exceeds 8 MiB")
     return json.loads(encoded)
 
 
@@ -1441,8 +1443,13 @@ try:
         [
             "-p",
             "no:cacheprovider",
+            f"--confcutdir={_contract_root}",
             "-q",
-            "tests_ioeb/test_template_contract.py",
+            os.path.join(
+                _contract_root,
+                "tests_ioeb",
+                "test_template_contract.py",
+            ),
         ]
     )
 finally:
@@ -1667,7 +1674,7 @@ def verify_template_contract_runtime(
         "USER 10001:10001\n"
         "WORKDIR /ioeb\n"
         "CMD [\"python\", \"-m\", \"pytest\", \"-p\", \"no:cacheprovider\", \"-q\", "
-        "\"tests_ioeb/test_template_contract.py\"]\n",
+        "\"--confcutdir=/ioeb\", \"/ioeb/tests_ioeb/test_template_contract.py\"]\n",
         encoding="utf-8",
     )
     dockerignore.write_text(
@@ -1757,6 +1764,8 @@ def verify_template_contract_runtime(
                 "MPLCONFIGDIR=/tmp/matplotlib",
                 "--env",
                 "XDG_CACHE_HOME=/tmp/cache",
+                "--env",
+                "IOEB_CONTRACT_ROOT=/ioeb",
                 "--workdir",
                 workdir,
                 "--entrypoint",

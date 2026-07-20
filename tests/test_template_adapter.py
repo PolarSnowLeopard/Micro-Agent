@@ -1114,6 +1114,8 @@ def test_contract():
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in docker_run
     assert "MPLCONFIGDIR=/tmp/matplotlib" in docker_run
     assert "XDG_CACHE_HOME=/tmp/cache" in docker_run
+    assert "IOEB_CONTRACT_ROOT=/ioeb" in docker_run
+    assert "--confcutdir={_contract_root}" in docker_run[-1]
     assert docker_run[docker_run.index("--workdir") + 1] == "/workspace"
     assert docker_run[docker_run.index("--entrypoint") + 1] == "python"
     assert template_adapter._CONTRACT_FIXTURE_MARKER in docker_run[-1]

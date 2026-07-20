@@ -536,6 +536,13 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "用嵌套列表逐元素格式化，不能用会把返回字符串重新强制转换为符号的"
             " `Matrix.applyfunc(serializer)`。"
         )
+    if "invalid equivalence entry" in text:
+        advice.append(
+            "等价关系参数出现嵌套容器：读取目标 API 的 equivalencies 参数约定。"
+            "Astropy 等价关系构造器通常已经返回 equivalency 列表，应直接传"
+            " `equivalencies=u.spectral()`，不能再次包装为"
+            " `equivalencies=[u.spectral()]`。其他返回列表的工厂同样按此处理。"
+        )
     if (
         "keyerror:" in text
         or " in {}" in text
