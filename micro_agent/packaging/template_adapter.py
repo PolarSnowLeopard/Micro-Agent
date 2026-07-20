@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -45,6 +46,9 @@ TEMPLATE_ADAPTER_SYSTEM_PROMPT = """你是 IOEB 算法仓库模板适配 Agent�
    search_project_text 定位并迁移到替代 API，不能只在注释中承认弃用后继续调用旧入口。
 5. 模型加载、配置读取和资源解析必须在函数调用内部完成；禁止模块级 model = load_model() 或其他可变运行状态。
 6. 面向调用者的输入输出应为 JSON 可表达的标量、list、dict；不得要求调用者访问容器内路径。若原算法确实需要文件，可接受 Base64/文本/结构化内容并在函数内部创建临时资源。
+   若仓库提交了小型真实二进制样例，可调用 stage_project_fixture 将它复制到契约测试目录，
+   测试中读取该固定资产并把 Base64/文本内容传给 main_process；不得把仓库路径设计成公开参数，
+   不得暂存下载文件、生成文件或模型臆造的数据。
 7. requirements.txt 只保留该入口运行所需的直接依赖，使用合法 PEP 508 规格；不得写本机绝对路径、git 凭证或不存在的版本。
 8. 只能依据用户 wrap_intent 与仓库证据适配。你看不到、也不得猜测 benchmark task、ground truth 或验证脚本。
 9. 必须生成 tests_ioeb/test_template_contract.py：直接从 main 导入 main_process。
@@ -2350,6 +2354,127 @@ class PatchTemplateFile(Tool):
         )
 
 
+class StageProjectFixture(Tool):
+    """Copy a bounded repository asset into the isolated contract test tree."""
+
+    name = "stage_project_fixture"
+    description = (
+        "把仓库中已提交的真实小型二进制/文本资产复制到 "
+        "tests_ioeb/fixtures，供隔离契约测试读取。源路径必须位于仓库内，"
+        "目标只能是一个安全文件名，单文件最多 8 MiB；返回哈希而不把二进制"
+        "内容放进模型上下文。公开 main_process 仍必须接收 Base64、文本或"
+        "结构化 JSON，不能接收服务器路径。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "source_path": {
+                "type": "string",
+                "description": "仓库根目录下已有资产的相对路径",
+            },
+            "fixture_name": {
+                "type": "string",
+                "description": "tests_ioeb/fixtures 下的安全文件名（含扩展名）",
+            },
+        },
+        "required": ["source_path", "fixture_name"],
+        "additionalProperties": False,
+    }
+
+    _MAX_BYTES = 8 * 1024 * 1024
+    _MANIFEST = Path("tests_ioeb/fixtures/.ioeb-fixtures.json")
+    _SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+
+    def __init__(self, project_dir: str | Path, *, max_copies: int = 3) -> None:
+        self.root = Path(project_dir).resolve()
+        self.max_copies = max(1, max_copies)
+        self._copies = 0
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        if self._copies >= self.max_copies:
+            return ToolResult(error=f"契约资产暂存次数已达上限 {self.max_copies}")
+        source_relative = str(kwargs.get("source_path", "")).strip()
+        fixture_name = str(kwargs.get("fixture_name", "")).strip()
+        if not self._SAFE_NAME.fullmatch(fixture_name):
+            return ToolResult(
+                error="fixture_name 只能是 1–128 字符的安全文件名，不能包含目录"
+            )
+        try:
+            source = (self.root / source_relative).resolve()
+        except (OSError, RuntimeError):
+            return ToolResult(error=f"源资产路径无效: {source_relative}")
+        if (
+            not source_relative
+            or not source.is_relative_to(self.root)
+            or not source.is_file()
+            or source.is_symlink()
+        ):
+            return ToolResult(
+                error=f"源资产不存在、不是普通文件或路径越界: {source_relative}"
+            )
+        if source.is_relative_to((self.root / "tests_ioeb/fixtures").resolve()):
+            return ToolResult(error="源资产必须来自原仓库，不能再次暂存生成的测试资产")
+        try:
+            size = source.stat().st_size
+        except OSError as exc:
+            return ToolResult(error=f"无法读取源资产元数据: {exc}")
+        if size <= 0 or size > self._MAX_BYTES:
+            return ToolResult(
+                error=f"源资产必须为 1–{self._MAX_BYTES} 字节，当前 {size} 字节"
+            )
+        payload = source.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        destination_relative = Path("tests_ioeb/fixtures") / fixture_name
+        destination = self.root / destination_relative
+        manifest_path = self.root / self._MANIFEST
+        manifest: dict[str, Any] = {
+            "schemaVersion": "ioeb.template-fixtures/v1",
+            "files": [],
+        }
+        if manifest_path.is_file() and not manifest_path.is_symlink():
+            try:
+                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return ToolResult(error="现有契约资产清单损坏，拒绝覆盖")
+            if not isinstance(loaded, dict) or not isinstance(
+                loaded.get("files"), list
+            ):
+                return ToolResult(error="现有契约资产清单格式无效，拒绝覆盖")
+            manifest = loaded
+        entry = {
+            "sourcePath": source.relative_to(self.root).as_posix(),
+            "destinationPath": destination_relative.as_posix(),
+            "bytes": size,
+            "sha256": digest,
+        }
+        entries = [
+            item
+            for item in manifest["files"]
+            if isinstance(item, dict)
+            and item.get("destinationPath") != entry["destinationPath"]
+        ]
+        entries.append(entry)
+        if len(entries) > self.max_copies:
+            return ToolResult(error=f"契约资产最多允许 {self.max_copies} 个")
+        manifest["files"] = sorted(
+            entries,
+            key=lambda item: str(item["destinationPath"]),
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self._copies += 1
+        return ToolResult(
+            output=(
+                f"已暂存 {destination_relative.as_posix()} "
+                f"(bytes={size}, sha256={digest})"
+            )
+        )
+
+
 class VerifyTemplate(Tool):
     name = "verify_template"
     description = (
@@ -2415,6 +2540,7 @@ def build_template_adapter_agent(
                 max_reads=4 if repair else 12,
             )
         )
+        tools.register(StageProjectFixture(project_dir))
     tools.register(WriteTemplateFile(project_dir))
     if repair:
         tools.register(ReadTemplateFile(project_dir))

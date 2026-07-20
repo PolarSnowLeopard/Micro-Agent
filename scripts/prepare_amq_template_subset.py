@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -258,6 +259,7 @@ _TEMPLATE_CANDIDATE_FILES = (
     "main.py",
     "requirements.txt",
     "tests_ioeb/test_template_contract.py",
+    "tests_ioeb/fixtures/.ioeb-fixtures.json",
 )
 
 
@@ -337,6 +339,55 @@ def recover_last_template_writes(run_dir: Path) -> dict[str, str]:
     return recovered
 
 
+def _restore_staged_project_fixtures(project: Path) -> int:
+    """Recreate bounded binary test assets recorded by StageProjectFixture."""
+
+    manifest_path = project / "tests_ioeb/fixtures/.ioeb-fixtures.json"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        return 0
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schemaVersion") != "ioeb.template-fixtures/v1"
+        or not isinstance(manifest.get("files"), list)
+    ):
+        raise ValueError("invalid staged project fixture manifest")
+    restored = 0
+    fixture_root = (project / "tests_ioeb/fixtures").resolve()
+    for entry in manifest["files"]:
+        if not isinstance(entry, dict):
+            raise ValueError("invalid staged project fixture entry")
+        source = (project / str(entry.get("sourcePath", ""))).resolve()
+        destination = (
+            project / str(entry.get("destinationPath", ""))
+        ).resolve()
+        expected_size = entry.get("bytes")
+        expected_sha = entry.get("sha256")
+        if (
+            not source.is_relative_to(project.resolve())
+            or not destination.is_relative_to(fixture_root)
+            or source.is_relative_to(fixture_root)
+            or not source.is_file()
+            or source.is_symlink()
+            or not isinstance(expected_size, int)
+            or expected_size <= 0
+            or expected_size > 8 * 1024 * 1024
+            or not isinstance(expected_sha, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
+        ):
+            raise ValueError("unsafe staged project fixture entry")
+        payload = source.read_bytes()
+        if (
+            len(payload) != expected_size
+            or hashlib.sha256(payload).hexdigest() != expected_sha
+        ):
+            raise ValueError("staged project fixture source digest changed")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+        restored += 1
+    return restored
+
+
 def _template_candidate_context(project: Path) -> str:
     sections: list[str] = []
     for relative, limit in (
@@ -380,11 +431,7 @@ def _candidate_requires_replan(
 
 def _template_candidate_digest(project: Path) -> str:
     digest = hashlib.sha256()
-    for relative in (
-        "main.py",
-        "requirements.txt",
-        "tests_ioeb/test_template_contract.py",
-    ):
+    for relative in _TEMPLATE_CANDIDATE_FILES:
         path = project / relative
         digest.update(relative.encode("utf-8"))
         digest.update(path.read_bytes() if path.is_file() else b"<missing>")
@@ -470,6 +517,21 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "或 main.py 中多余/缺失的 unsqueeze、transpose、reshape；不得通过"
             "裁剪、重复、广播 target 或修改领域断言掩盖错误。返回 JSON 时保留原始"
             "批次语义，并让 output_shape 与真实序列化结果完全一致。"
+        )
+    if any(
+        marker in text
+        for marker in (
+            "must have the same length",
+            "length mismatch",
+            "inconsistent numbers of samples",
+            "arrays must all be same length",
+        )
+    ):
+        advice.append(
+            "成对/并行输入长度不一致：先从原仓库测试、示例或数据 schema 确认每个"
+            "数组的共同样本维，修正契约 fixture 使时间、标签、目标值等逐项对齐。"
+            "不得在 main.py 中静默截断、填充或重复任一数组；公开入口应在调用真实"
+            "算法前明确校验长度并抛出带字段名的 ValueError。"
         )
     if (
         "assertionerror" in text
@@ -822,6 +884,14 @@ async def adapt_one(
                     target = staged / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(content, encoding="utf-8")
+                restored_fixture_count = (
+                    _restore_staged_project_fixtures(staged)
+                    if "tests_ioeb/fixtures/.ioeb-fixtures.json"
+                    in recovered_writes
+                    else 0
+                )
+                if restored_fixture_count:
+                    summary["restoredProjectFixtures"] = restored_fixture_count
                 _save_template_snapshot(staged, run_dir)
                 recovered_report = validate_algorithm_template(
                     staged,

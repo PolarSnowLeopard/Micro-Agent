@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ from micro_agent.packaging.analyzer import RepositoryAnalyzer
 from micro_agent.packaging.template_adapter import (
     PatchTemplateFile,
     ReadTemplateFile,
+    StageProjectFixture,
     WriteTemplateFile,
     _runtime_requirement_errors,
     build_template_adapter_agent,
@@ -22,6 +24,7 @@ from scripts.prepare_amq_template_subset import (
     _candidate_requires_replan,
     _is_l0,
     _save_template_snapshot,
+    _restore_staged_project_fixtures,
     _template_repair_needs_source,
     _template_runtime_repair_advice,
     ensure_output_outside_source_repo,
@@ -1369,6 +1372,7 @@ def main_process(value: float) -> float:
     assert agent.tools.get("read_project_file").max_reads == 4
     assert agent.tools.get("read_template_file") is not None
     assert agent.tools.get("patch_template_file") is not None
+    assert agent.tools.get("stage_project_fixture") is not None
     assert agent.tools.get("terminate") is None
     assert agent.max_steps == 16
     assert agent.require_terminal_tool is True
@@ -1384,6 +1388,7 @@ def main_process(value: float) -> float:
     )
     assert local_only.tools.get("read_project_file") is None
     assert local_only.tools.get("read_template_file") is not None
+    assert local_only.tools.get("stage_project_fixture") is None
     assert "源码读取工具已关闭" in local_only.system_prompt
     assert not _template_repair_needs_source(
         [
@@ -1485,6 +1490,106 @@ def main_process(value: float) -> float:
     assert "逐维记录输入和输出" in runtime_advice
     assert "隔离运行触发联网下载" in runtime_advice
     assert "真实可解析的最小输入" in runtime_advice
+    paired_advice = _template_runtime_repair_advice(
+        ["ValueError: Dataframe has less rows than non-null values in columns. "
+         "ds and y must have the same length"]
+    )
+    assert "并行输入长度不一致" in paired_advice
+    assert "静默截断" in paired_advice
+
+
+@pytest.mark.asyncio
+async def test_stage_project_fixture_copies_bounded_asset_and_records_manifest(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tests" / "data" / "sample.tif"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"II*\x00binary-raster")
+    tool = StageProjectFixture(tmp_path)
+
+    result = await tool.execute(
+        source_path="tests/data/sample.tif",
+        fixture_name="raster-input.tif",
+    )
+
+    assert result.error is None
+    destination = tmp_path / "tests_ioeb/fixtures/raster-input.tif"
+    assert destination.read_bytes() == source.read_bytes()
+    manifest = json.loads(
+        (tmp_path / "tests_ioeb/fixtures/.ioeb-fixtures.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["files"][0]["sourcePath"] == "tests/data/sample.tif"
+    assert manifest["files"][0]["destinationPath"] == (
+        "tests_ioeb/fixtures/raster-input.tif"
+    )
+    assert manifest["files"][0]["bytes"] == len(source.read_bytes())
+
+
+@pytest.mark.asyncio
+async def test_stage_project_fixture_rejects_traversal_and_oversize(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path.parent / "outside.bin"
+    outside.write_bytes(b"outside")
+    tool = StageProjectFixture(tmp_path)
+    traversal = await tool.execute(
+        source_path="../outside.bin",
+        fixture_name="outside.bin",
+    )
+    bad_name = await tool.execute(
+        source_path="../outside.bin",
+        fixture_name="../outside.bin",
+    )
+    large = tmp_path / "large.bin"
+    large.write_bytes(b"\0" * (8 * 1024 * 1024 + 1))
+    oversize = await tool.execute(
+        source_path="large.bin",
+        fixture_name="large.bin",
+    )
+
+    assert "路径越界" in traversal.error
+    assert "安全文件名" in bad_name.error
+    assert "8388608" in oversize.error
+
+
+def test_staged_project_fixture_manifest_survives_snapshot_resume(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    run_dir = tmp_path / "run"
+    (project / "tests/data").mkdir(parents=True)
+    run_dir.mkdir()
+    payload = b"fixture-payload"
+    source = project / "tests/data/input.bin"
+    source.write_bytes(payload)
+    fixture_dir = project / "tests_ioeb/fixtures"
+    fixture_dir.mkdir(parents=True)
+    manifest = {
+        "schemaVersion": "ioeb.template-fixtures/v1",
+        "files": [
+            {
+                "sourcePath": "tests/data/input.bin",
+                "destinationPath": "tests_ioeb/fixtures/input.bin",
+                "bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        ],
+    }
+    (fixture_dir / ".ioeb-fixtures.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    (project / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _save_template_snapshot(project, run_dir)
+    shutil_target = fixture_dir / "input.bin"
+    shutil_target.unlink(missing_ok=True)
+
+    recovered = recover_last_template_writes(run_dir)
+    assert "tests_ioeb/fixtures/.ioeb-fixtures.json" in recovered
+    assert _restore_staged_project_fixtures(project) == 1
+    assert shutil_target.read_bytes() == payload
 
 
 async def test_patch_template_file_requires_one_exact_match(
