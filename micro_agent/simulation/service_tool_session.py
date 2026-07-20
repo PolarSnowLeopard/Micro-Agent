@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
+import os
 import re
+import socket
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from micro_agent.simulation.logging_mcp_tool import LoggingMCPTool
 from micro_agent.simulation.sandbox_tool import SandboxTool
@@ -83,6 +87,7 @@ class ServiceToolSession:
             raise ServiceConnectionError(f"真实 MCP 配置无效 [{service_name}]：不支持 {method}")
         if not endpoint.startswith(("http://", "https://")):
             raise ServiceConnectionError(f"真实 MCP 配置无效 [{service_name}]：缺少 HTTP 地址")
+        _validate_mcp_endpoint(endpoint, service_name)
         server = ServerConfig(
             connection_type="sse" if method == "sse" else "streamable_http",
             server_url=endpoint,
@@ -141,6 +146,80 @@ class ServiceToolSession:
     async def __aexit__(self, *args: object) -> None:
         await self.close()
 
+
+
+
+def _mcp_url_allowed_hosts() -> set[str]:
+    raw = os.getenv("MICRO_AGENT_MCP_ALLOW_HOSTS", "")
+    return {h.strip().lower() for h in raw.split(",") if h.strip()}
+
+
+def _mcp_url_allow_private() -> bool:
+    return os.getenv("MICRO_AGENT_MCP_ALLOW_PRIVATE", "").lower() in {"1", "true", "yes"}
+
+
+def _validate_mcp_endpoint(endpoint: str, service_name: str) -> None:
+    """Reject SSRF-prone MCP URLs before initiating a connection.
+
+    Blocks loopback, link-local, private, multicast, reserved and
+    unspecified addresses (both IPv4 and IPv6) unless the host is
+    explicitly listed in MICRO_AGENT_MCP_ALLOW_HOSTS, or
+    MICRO_AGENT_MCP_ALLOW_PRIVATE is set (for trusted intranet
+    deployments).
+    """
+    try:
+        parts = urlsplit(endpoint)
+    except ValueError as exc:  # pragma: no cover - urlsplit is lenient
+        raise ServiceConnectionError(
+            f"真实 MCP 配置无效 [{service_name}]：URL 解析失败 ({exc})"
+        )
+    if parts.scheme not in {"http", "https"}:
+        raise ServiceConnectionError(
+            f"真实 MCP 配置无效 [{service_name}]：仅支持 http/https"
+        )
+    host = (parts.hostname or "").strip()
+    if not host:
+        raise ServiceConnectionError(
+            f"真实 MCP 配置无效 [{service_name}]：缺少主机名"
+        )
+    host_l = host.lower()
+    allow_hosts = _mcp_url_allowed_hosts()
+    if host_l in allow_hosts:
+        return
+    if _mcp_url_allow_private():
+        return
+    # Reject obvious loopback aliases before DNS resolution.
+    if host_l in {"localhost", "ip6-localhost", "ip6-loopback"} or host_l.endswith(".localhost"):
+        raise ServiceConnectionError(
+            f"MCP 目标被拒绝 [{service_name}] {endpoint}: 禁止访问回环地址"
+        )
+    # Resolve all A/AAAA records and reject if any is non-global.
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        # DNS resolution failed; let the connection layer surface the error
+        # rather than blocking here. SSRF is only possible after a successful
+        # resolve to an internal IP.
+        return
+    for info in infos:
+        addr = info[4][0]
+        # Strip IPv6 scope id if present.
+        addr = addr.split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ServiceConnectionError(
+                f"MCP 目标被拒绝 [{service_name}] {endpoint}: 禁止访问内网/回环地址 ({addr})"
+            )
 
 def _sanitize(value: Any, max_len: int = 128) -> str:
     ident = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "srv"))
