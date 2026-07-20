@@ -731,6 +731,14 @@ def _template_runtime_repair_advice(errors: list[str]) -> str:
             "原仓库测试/doctest/示例中确实产生非空结果的字面量。禁止伪造返回键、"
             "硬填空结果或删除领域断言来制造通过。"
         )
+    if "not in index" in text and "keyerror" in text:
+        advice.append(
+            "DataFrame/表格返回缺少候选假定的列：先检查真实 API 在当前参数组合下"
+            "实际返回的 columns。某些列（如置信区间、诊断量）会在对应计算被关闭时"
+            "合法缺失；公共结果应始终序列化必备列，并仅在真实存在时加入可选列，"
+            "同时把 docstring、返回类型和领域断言改为准确的可选语义。禁止伪造缺失"
+            "列、用零填充，或为了固定返回键强行开启昂贵/随机计算。"
+        )
     if (
         "unknown key:" in text
         or (

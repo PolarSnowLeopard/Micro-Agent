@@ -1447,6 +1447,11 @@ def main_process(value: float) -> float:
     assert "numpy>=1.26,<2" in numpy_advice
     assert "monkeypatch" in numpy_advice
     assert "禁止伪造返回键" in empty_result_advice
+    optional_column_advice = _template_runtime_repair_advice(
+        ["KeyError: \"['yhat_lower', 'yhat_upper'] not in index\""]
+    )
+    assert "仅在真实存在时加入可选列" in optional_column_advice
+    assert "禁止伪造缺失列" in optional_column_advice
     literal_advice = _template_runtime_repair_advice(
         ["模板契约测试的 main_process 输入必须是可审计的 JSON 字面量"]
     )
