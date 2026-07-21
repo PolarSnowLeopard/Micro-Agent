@@ -25,6 +25,8 @@ Local integration changes are deliberately bounded:
    request instead of paying for the same semantic analysis twice.
 5. A bounded completion nudge and one-shot JSON compiler prevent smaller
    production models from spending every analysis step on import exploration.
+6. Agents return immediately after their required output files exist; later
+   deterministic validation remains responsible for accepting those files.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.

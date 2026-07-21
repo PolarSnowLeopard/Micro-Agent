@@ -121,6 +121,11 @@ class MCPAgent(BaseAgent):
             if response.has_tool_calls:
                 self._handle_tool_calls(response, step)
 
+                if self.completion_check and self.completion_check():
+                    if self.verbose:
+                        print(f"\n✅ Agent 完成条件已满足 (step {step + 1})")
+                    return "completion artifact written"
+
                 if (
                     self.force_completion_after is not None
                     and step + 1 >= self.force_completion_after
