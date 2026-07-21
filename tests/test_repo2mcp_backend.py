@@ -401,3 +401,60 @@ def test_vendor_bounds_structured_compiler_evidence():
     length, starts, ends = completed.stdout.splitlines()
     assert int(length) < 17_000
     assert (starts, ends) == ("True", "True")
+
+
+def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    (source / "models").mkdir(parents=True)
+    output.mkdir()
+    (source / "main.py").write_text(
+        "from models.eomt import run\n",
+        encoding="utf-8",
+    )
+    (source / "models" / "eomt.py").write_text(
+        "import torch\nimport timm\nfrom PIL import Image\ndef run(): pass\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text(
+        "timm==1.0.15\ntorch==2.7.0\nPillow==11.1.0\npytest\n",
+        encoding="utf-8",
+    )
+    server = output / "server.py"
+    server.write_text("from main import run\n", encoding="utf-8")
+    requirements = output / "requirements.txt"
+    requirements.write_text("mcp[cli]\nPillow\n", encoding="utf-8")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; from src.wrapper import MCPWrapper; "
+                "print(json.dumps(MCPWrapper._merge_declared_runtime_dependencies("
+                "sys.argv[1],sys.argv[2],sys.argv[3])))"
+            ),
+            str(server),
+            str(source),
+            str(output),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    fixes = json.loads(completed.stdout)
+    assert len(fixes) == 2
+    assert requirements.read_text(encoding="utf-8").splitlines() == [
+        "mcp[cli]",
+        "Pillow",
+        "timm==1.0.15",
+        "torch==2.7.0",
+    ]

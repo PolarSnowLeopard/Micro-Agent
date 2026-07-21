@@ -486,6 +486,12 @@ FIX_SYSTEM_PROMPT = BASH_GUIDE + MCP_REFERENCE + """
 ## 你的角色
 你是代码修复专家。MCP 服务的 Docker 构建失败了，你需要分析错误并修复。
 
+## 隔离边界
+- 禁止在宿主机执行 `pip install`、`apt install` 或下载模型来试错。
+- Docker 构建和容器健康检查才是运行环境的权威证据。
+- 缺少 Python 包时直接修改 output/requirements.txt；缺少系统包时修改 Dockerfile。
+- 修改完成即结束，不要在宿主机重复安装或验证第三方依赖。
+
 ## 工作环境
 - 生成的文件在 output 目录（server.py, Dockerfile, requirements.txt）
 - 原始仓库代码在 source 目录

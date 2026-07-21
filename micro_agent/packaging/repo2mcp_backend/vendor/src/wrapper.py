@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import ast
 from pathlib import Path
 
 from config import AgentConfig, default_config
@@ -366,7 +367,12 @@ class MCPWrapper:
                 if missing:
                     return self._fail("generation", f"缺少必要文件: {missing}")
 
-            dependency_fixes = self._normalize_generated_requirements(output_dir)
+            dependency_fixes = self._merge_declared_runtime_dependencies(
+                server_py_path=os.path.join(output_dir, "server.py"),
+                source_dir=source_dir,
+                output_dir=output_dir,
+            )
+            dependency_fixes.extend(self._normalize_generated_requirements(output_dir))
             for fix_msg in dependency_fixes:
                 print(f"  🔧 {fix_msg}")
 
@@ -519,7 +525,13 @@ class MCPWrapper:
                     verbose=self._agent_verbose,
                 )
                 fix_agent.run(fix_task)
-                for fix_msg in self._normalize_generated_requirements(output_dir):
+                fix_messages = self._merge_declared_runtime_dependencies(
+                    server_py_path=server_py_path,
+                    source_dir=source_dir,
+                    output_dir=output_dir,
+                )
+                fix_messages.extend(self._normalize_generated_requirements(output_dir))
+                for fix_msg in fix_messages:
                     print(f"  🔧 {fix_msg}")
                 self._validate_and_fix_dockerfile(dockerfile_path, output_dir)
 
@@ -698,6 +710,142 @@ class MCPWrapper:
             encoding="utf-8",
         )
         return fixes
+
+    @staticmethod
+    def _merge_declared_runtime_dependencies(
+        server_py_path: str,
+        source_dir: str,
+        output_dir: str,
+        *,
+        max_local_modules: int = 64,
+    ) -> list[str]:
+        """Complete generated requirements from the imported local module closure.
+
+        The repository remains the authority for package declarations.  We only
+        add a declared distribution when its import is reachable from server.py,
+        avoiding the unrelated dev/build dependencies found in many repositories.
+        """
+        source_root = Path(source_dir)
+        declared_path = source_root / "requirements.txt"
+        generated_path = Path(output_dir) / "requirements.txt"
+        if not declared_path.is_file() or not generated_path.is_file():
+            return []
+
+        stdlib = set(getattr(sys, "stdlib_module_names", ())) | {
+            "__future__", "typing_extensions",
+        }
+        external_imports: set[str] = set()
+        visited: set[Path] = set()
+        queue: list[Path] = [Path(server_py_path)]
+
+        def local_module_file(module: str) -> Path | None:
+            if not module:
+                return None
+            base = source_root.joinpath(*module.split("."))
+            py_file = base.with_suffix(".py")
+            if py_file.is_file():
+                return py_file
+            init_file = base / "__init__.py"
+            if init_file.is_file():
+                return init_file
+            return None
+
+        while queue and len(visited) < max_local_modules:
+            current = queue.pop(0)
+            resolved = current.resolve()
+            if resolved in visited or not current.is_file():
+                continue
+            visited.add(resolved)
+            try:
+                tree = ast.parse(current.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, SyntaxError):
+                continue
+
+            try:
+                relative = current.resolve().relative_to(source_root.resolve())
+                module_parts = list(relative.with_suffix("").parts)
+                package_parts = (
+                    module_parts[:-1]
+                    if module_parts[-1] != "__init__"
+                    else module_parts[:-1]
+                )
+            except ValueError:
+                package_parts = []
+
+            for node in ast.walk(tree):
+                candidates: list[str] = []
+                if isinstance(node, ast.Import):
+                    candidates.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level:
+                        ascend = max(node.level - 1, 0)
+                        base = package_parts[: max(len(package_parts) - ascend, 0)]
+                        if node.module:
+                            candidates.append(".".join(base + node.module.split(".")))
+                        else:
+                            candidates.extend(
+                                ".".join(base + [alias.name]) for alias in node.names
+                            )
+                    elif node.module:
+                        candidates.append(node.module)
+
+                for module in candidates:
+                    local = local_module_file(module)
+                    if local is not None:
+                        if local.resolve() not in visited:
+                            queue.append(local)
+                        continue
+                    top_level = module.split(".", 1)[0]
+                    if top_level and top_level not in stdlib and top_level != "mcp":
+                        external_imports.add(top_level.lower())
+
+        import_aliases = {
+            "pillow": "pil",
+            "opencv-python": "cv2",
+            "opencv-python-headless": "cv2",
+            "scikit-learn": "sklearn",
+            "pyyaml": "yaml",
+            "scikit-image": "skimage",
+            "biopython": "bio",
+            "pymupdf": "fitz",
+            "openslide-python": "openslide",
+        }
+
+        def distribution_name(line: str) -> str | None:
+            match = re.match(r"^([A-Za-z0-9_.-]+)", line)
+            if not match:
+                return None
+            return re.sub(r"[-_.]+", "-", match.group(1)).lower()
+
+        generated_lines = generated_path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+        present = {
+            name for line in generated_lines if (name := distribution_name(line.strip()))
+        }
+        additions: list[str] = []
+        for raw_line in declared_path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("#", "-r", "--", "-e")):
+                continue
+            name = distribution_name(line)
+            if not name or name in present:
+                continue
+            import_name = import_aliases.get(name, name).replace("-", "_")
+            if import_name.lower() not in external_imports:
+                continue
+            generated_lines.append(line)
+            present.add(name)
+            additions.append(f"requirements: add reachable repository dependency {line}")
+
+        if additions:
+            generated_path.write_text(
+                "\n".join(generated_lines) + "\n",
+                encoding="utf-8",
+            )
+        return additions
 
     @staticmethod
     def _get_tool_functions(server_py_path: str) -> list:
