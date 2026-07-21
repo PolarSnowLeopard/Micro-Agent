@@ -772,7 +772,12 @@ class MCPWrapper:
 
     @staticmethod
     def _verify_imports(server_py_path: str, source_dir: str, sandbox) -> list:
-        """预验证 server.py 中来自仓库的 import 路径"""
+        """Statically validate imports that resolve to files in the repository.
+
+        Executing imports on the worker before generated dependencies are
+        installed creates false failures and expensive Agent loops. External
+        packages are therefore deferred to the authoritative Docker build.
+        """
         issues = []
         try:
             content = Path(server_py_path).read_text(encoding="utf-8")
@@ -783,16 +788,20 @@ class MCPWrapper:
                          "abc", "functools", "collections", "dataclasses", "enum",
                          "datetime", "math", "itertools", "copy", "base64", "hashlib")
         import_lines = re.findall(r'^from\s+([\w.]+)\s+import\s+(.+)', content, re.MULTILINE)
+        source_root = Path(source_dir)
 
         for module, names in import_lines[:8]:
             if any(module.startswith(p) for p in skip_prefixes):
                 continue
-            verify = sandbox.exec(
-                f"cd {source_dir} && python3 -c "
-                f"\"import sys; sys.path.insert(0, '.'); from {module} import {names.split(',')[0].strip().split(' ')[0]}\" 2>&1",
-                timeout=30,
-            )
-            if not verify.success or "Error" in (verify.stdout or "") or "Error" in (verify.stderr or ""):
+            parts = module.split(".")
+            top_level = source_root / parts[0]
+            if not (top_level.is_dir() or top_level.with_suffix(".py").is_file()):
+                continue
+            module_path = source_root.joinpath(*parts)
+            if not (
+                module_path.with_suffix(".py").is_file()
+                or (module_path / "__init__.py").is_file()
+            ):
                 issues.append(f"from {module} import {names.strip()} → FAIL")
         return issues
 

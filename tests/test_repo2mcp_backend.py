@@ -256,3 +256,44 @@ def test_vendor_normalizes_import_names_before_docker_build(tmp_path):
     assert (output / "requirements-cpu.txt").read_text(
         encoding="utf-8"
     ).splitlines() == ["torch>=2", "torchvision"]
+
+
+def test_vendor_import_precheck_defers_external_packages(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    source = tmp_path / "source"
+    (source / "local_pkg").mkdir(parents=True)
+    (source / "local_pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (source / "local_pkg" / "valid.py").write_text("def run(): pass\n", encoding="utf-8")
+    server = tmp_path / "server.py"
+    server.write_text(
+        "from local_pkg.valid import run\n"
+        "from local_pkg.missing import absent\n"
+        "from numpy.linalg import norm\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; from src.wrapper import MCPWrapper; "
+                "print(json.dumps(MCPWrapper._verify_imports(sys.argv[1], sys.argv[2], None)))"
+            ),
+            str(server),
+            str(source),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(completed.stdout) == [
+        "from local_pkg.missing import absent → FAIL"
+    ]

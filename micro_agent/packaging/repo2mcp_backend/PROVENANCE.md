@@ -35,6 +35,8 @@ Local integration changes are deliberately bounded:
    names before Docker build, avoiding predictable repair-agent loops.
 10. Torch-family dependencies are installed from the official CPU wheel index
     before ordinary requirements, preventing accidental CUDA downloads.
+11. Import prevalidation is static for repository-owned modules; third-party
+    imports are deferred to the dependency-complete Docker build.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.
