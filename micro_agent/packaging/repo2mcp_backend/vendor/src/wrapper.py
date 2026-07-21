@@ -870,10 +870,28 @@ class MCPWrapper:
         generated_lines = generated_path.read_text(
             encoding="utf-8", errors="replace"
         ).splitlines()
+        local_top_levels = {
+            child.stem if child.is_file() else child.name
+            for child in source_root.iterdir()
+            if (child.is_file() and child.suffix == ".py") or child.is_dir()
+        }
+        filtered_lines: list[str] = []
+        additions: list[str] = []
+        for line in generated_lines:
+            name = distribution_name(line.strip())
+            import_name = (
+                import_aliases.get(name, name).replace("-", "_") if name else None
+            )
+            if import_name and import_name in local_top_levels:
+                additions.append(
+                    f"requirements: remove repository-local module dependency {line.strip()}"
+                )
+                continue
+            filtered_lines.append(line)
+        generated_lines = filtered_lines
         present = {
             name for line in generated_lines if (name := distribution_name(line.strip()))
         }
-        additions: list[str] = []
         for raw_line in declared_path.read_text(
             encoding="utf-8", errors="replace"
         ).splitlines():
