@@ -16,17 +16,9 @@ RUN mkdir -p /var/run/sshd \
 
 WORKDIR /app
 
-# Public runtime defaults. Compose/environment values can still override these.
-# Keeping them in the image prevents legacy mounted config files from silently
-# overriding the selected OpenRouter endpoint.
-ENV LLM_MODEL="openrouter/qwen/qwen3.6-flash" \
-    LLM_BASE_URL="https://openrouter.ai/api/v1" \
-    LLM_REASONING_ENABLED="false"
-
 COPY . /app
 
-RUN pip install --no-cache-dir -e ".[all]" \
-    && python -c "import orjson"
+RUN pip install --no-cache-dir -e ".[all]"
 
 EXPOSE 8010 22 8000
 
