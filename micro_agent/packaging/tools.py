@@ -662,6 +662,8 @@ def _ground_plan_smoke_from_verified_contract(
             smoke_input = selected["toolSmokeInput"]
             for key, value in smoke_input.items():
                 if key in properties:
+                    if value is None:
+                        _allow_runtime_verified_null(properties[key])
                     continue
                 properties[key] = json.loads(
                     json.dumps(
@@ -690,6 +692,50 @@ def _ground_plan_smoke_from_verified_contract(
             }
             grounded.append(name)
     return grounded
+
+
+def _allow_runtime_verified_null(schema: Any) -> None:
+    """Make a property nullable when the isolated contract executed ``None``.
+
+    The planner occasionally preserves an optional parameter's ``default: null``
+    while emitting only its non-null JSON type.  A runtime-captured fixture is
+    stronger evidence than that contradictory provider formatting: the public
+    template entry point has already accepted the explicit null in an offline
+    container.  Widen only that property and keep every other constraint intact.
+    """
+
+    if not isinstance(schema, dict) or _schema_accepts_null(schema):
+        return
+    type_name = schema.get("type")
+    if isinstance(type_name, str):
+        schema["type"] = [type_name, "null"]
+        enum = schema.get("enum")
+        if isinstance(enum, list) and None not in enum:
+            enum.append(None)
+        return
+    if isinstance(type_name, list):
+        schema["type"] = [*type_name, "null"]
+        return
+    variants_key = "anyOf" if isinstance(schema.get("anyOf"), list) else "oneOf"
+    variants = schema.get(variants_key)
+    if isinstance(variants, list):
+        variants.append({"type": "null"})
+
+
+def _schema_accepts_null(schema: dict[str, Any]) -> bool:
+    type_name = schema.get("type")
+    if type_name == "null" or (
+        isinstance(type_name, list) and "null" in type_name
+    ):
+        return True
+    variants = schema.get("anyOf") or schema.get("oneOf")
+    return bool(
+        isinstance(variants, list)
+        and any(
+            isinstance(item, dict) and _schema_accepts_null(item)
+            for item in variants
+        )
+    )
 
 
 def _contract_value_schema(name: str, value: Any) -> dict[str, Any]:

@@ -581,7 +581,15 @@ def _validate_smoke_input(smoke_input: dict[str, Any], input_schema: dict[str, A
         errors.append(f"input 缺少必填字段: {missing}")
     for name, value in smoke_input.items():
         child = properties.get(name)
-        if not isinstance(child, dict) or not isinstance(value, str):
+        if not isinstance(child, dict):
+            continue
+        if value is None and not _schema_allows_null(child):
+            errors.append(
+                f"字段 {name} 显式传入 null，但其 schema 不允许 null；"
+                "若参数可空请声明 nullable 类型，否则从 smoke input 省略该可选字段"
+            )
+            continue
+        if not isinstance(value, str):
             continue
         description = str(child.get("description", "")).lower()
         looks_base64 = "base64" in name.lower() or "base64" in description or child.get("contentEncoding") == "base64"
@@ -596,6 +604,22 @@ def _validate_smoke_input(smoke_input: dict[str, Any], input_schema: dict[str, A
             if not zipfile.is_zipfile(io.BytesIO(decoded)):
                 errors.append(f"字段 {name} 不是完整有效的 ZIP；没有真实 fixture 时应设置 enabled=false")
     return errors
+
+
+def _schema_allows_null(schema: dict[str, Any]) -> bool:
+    type_name = schema.get("type")
+    if type_name == "null" or (
+        isinstance(type_name, list) and "null" in type_name
+    ):
+        return True
+    variants = schema.get("anyOf") or schema.get("oneOf")
+    return bool(
+        isinstance(variants, list)
+        and any(
+            isinstance(item, dict) and _schema_allows_null(item)
+            for item in variants
+        )
+    )
 
 
 def _looks_like_user_capability(symbol: str) -> bool:

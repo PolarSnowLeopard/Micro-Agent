@@ -1303,6 +1303,109 @@ async def test_runtime_grounded_dynamic_binary_smoke_needs_no_source_literal(
     )
 
 
+async def test_runtime_grounded_null_widens_only_verified_property(
+    tmp_path,
+    monkeypatch,
+):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "from core import predict\n\n"
+        "def main_process(value: float, activation: str | None = None) -> dict:\n"
+        "    return {'score': predict(value), 'activation': activation}\n",
+        encoding="utf-8",
+    )
+    contract_dir = project / "tests_ioeb"
+    contract_dir.mkdir()
+    (contract_dir / "test_template_contract.py").write_text(
+        "from main import main_process\n\n"
+        "def test_predict_contract():\n"
+        "    assert main_process(0.5, activation=None)['score'] == 0.5\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"] = [raw["services"][0]["tools"][0]]
+    tool = raw["services"][0]["tools"][0]
+    tool["sourceSymbols"] = ["main.main_process"]
+    tool["inputSchema"]["properties"]["activation"] = {
+        "type": "string",
+        "description": "Optional activation accepted by the public algorithm contract.",
+        "default": None,
+    }
+    tool["smokeTest"] = {
+        "enabled": True,
+        "input": {"value": 0.7},
+        "evidence": ["tests/test_core.py:4"],
+    }
+    store = PlanStore(
+        path=tmp_path / "plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        symbol_required_parameters={"main.main_process": ["value"]},
+        verified_contract_records=[
+            {
+                "mainProcessInput": {"value": 0.5, "activation": None},
+                "toolSmokeInput": {"value": 0.5, "activation": None},
+                "evidence": ["tests_ioeb/test_template_contract.py:4"],
+            }
+        ],
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert not result.error
+    assert store.plan is not None
+    grounded = store.plan.tools[0]
+    assert grounded["inputSchema"]["properties"]["activation"]["type"] == [
+        "string",
+        "null",
+    ]
+    assert grounded["smokeTest"]["input"]["activation"] is None
+
+    artifact = prepare_artifact(project, tmp_path / "artifact", store.plan)
+    (artifact / "adapters.py").write_text(
+        "def predict_risk(value, activation=None):\n"
+        "    return {'score': value}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(artifact))
+    sys.modules.pop("adapters", None)
+    spec = importlib.util.spec_from_file_location(
+        "generated_nullable_contract_server",
+        artifact / "server.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    generated = module.mcp._tool_manager.get_tool("predict_risk")
+    assert generated is not None
+    _, structured = await generated.run(
+        {"value": 0.5, "activation": None},
+        convert_result=True,
+    )
+    assert structured == {"score": 0.5}
+
+
+def test_plan_rejects_explicit_null_for_non_nullable_smoke_property(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    tool = raw["services"][0]["tools"][0]
+    tool["inputSchema"]["properties"]["threshold"] = {
+        "type": "number",
+        "description": "Optional non-null decision threshold.",
+    }
+    tool["smokeTest"]["input"]["threshold"] = None
+
+    try:
+        PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+    except PlanValidationError as exc:
+        assert "显式传入 null" in str(exc)
+    else:
+        raise AssertionError("explicit null must be rejected by a non-null schema")
+
+
 async def test_plan_store_never_regrounds_runtime_rejected_contract_smoke(
     tmp_path,
 ):
