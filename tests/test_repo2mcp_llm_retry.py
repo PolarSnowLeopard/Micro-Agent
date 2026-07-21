@@ -91,3 +91,45 @@ def test_llm_client_does_not_retry_non_transient_error(vendor_client, monkeypatc
         vendor_client.LLMClient(config).chat([{"role": "user", "content": "x"}])
 
     assert len(calls) == 1
+
+
+def test_simple_chat_forwards_structured_output_options(vendor_client, monkeypatch):
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "Response",
+            (),
+            {
+                "choices": [
+                    type(
+                        "Choice",
+                        (),
+                        {
+                            "message": type(
+                                "Message", (), {"content": '{"tools": []}', "tool_calls": None}
+                            )(),
+                            "finish_reason": "stop",
+                        },
+                    )()
+                ],
+                "usage": None,
+                "_hidden_params": {},
+            },
+        )()
+
+    monkeypatch.setattr(vendor_client, "completion", fake_completion)
+    config = vendor_client.LLMConfig(
+        model="openrouter/qwen/qwen3.6-flash",
+        api_key="test",
+    )
+
+    vendor_client.LLMClient(config).simple_chat(
+        "compile",
+        max_tokens=8192,
+        response_format={"type": "json_object"},
+    )
+
+    assert captured["max_tokens"] == 8192
+    assert captured["response_format"] == {"type": "json_object"}

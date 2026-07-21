@@ -288,3 +288,20 @@ class MCPAgent(BaseAgent):
             return response.content or "任务未完成 - 已达到最大步数"
         except Exception as e:
             return f"任务执行中断: {e}"
+
+    def evidence_digest(self, max_chars: int = 16_000) -> str:
+        """Return recent concrete tool evidence without replaying the full dialogue."""
+        evidence: list[str] = []
+        for message in self.messages:
+            if message.get("role") != "tool":
+                continue
+            content = str(message.get("content", "")).strip()
+            if not content or content.startswith("[历史工具输出已压缩]"):
+                continue
+            evidence.append(content)
+        digest = "\n\n--- tool evidence ---\n".join(evidence[-8:])
+        if len(digest) <= max_chars:
+            return digest
+        head = max_chars * 3 // 4
+        tail = max_chars - head
+        return digest[:head] + "\n\n[older evidence truncated]\n\n" + digest[-tail:]

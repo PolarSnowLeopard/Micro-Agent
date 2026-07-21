@@ -335,3 +335,69 @@ def test_vendor_compacts_initial_darp_context_after_first_turn():
     lines = completed.stdout.splitlines()
     assert int(lines[0]) < 9_000
     assert lines[1:] == ["True", "True"]
+
+
+def test_vendor_extracts_nested_tool_design_from_text(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    target = tmp_path / "tool_design.json"
+    response = (
+        "prefix that is not JSON\n"
+        '{"tools":[{"name":"balance_reaction","parameters":[],"implementation":'
+        '{"source_file":"chempy/chemistry.py","notes":{"nested":true}}}],'
+        '"dependencies":{"python":["chempy"]}}\ntrailing text'
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from src.wrapper import MCPWrapper; "
+                "print(MCPWrapper._try_extract_json_from_response(sys.argv[1], sys.argv[2]))"
+            ),
+            response,
+            str(target),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert completed.stdout.splitlines()[-1] == "True"
+    parsed = json.loads(target.read_text(encoding="utf-8"))
+    assert parsed["tools"][0]["implementation"]["notes"]["nested"] is True
+
+
+def test_vendor_bounds_structured_compiler_evidence():
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from src.wrapper import MCPWrapper; "
+                "value=MCPWrapper._compact_analysis_evidence('HEAD'+('x'*30000)+'TAIL'); "
+                "print(len(value)); print(value.startswith('HEAD')); print(value.endswith('TAIL'))"
+            ),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    length, starts, ends = completed.stdout.splitlines()
+    assert int(length) < 17_000
+    assert (starts, ends) == ("True", "True")

@@ -63,6 +63,7 @@ class LLMClient:
         tools: Optional[List[Dict]] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> LLMResponse:
         kwargs = {
             "model": self.config.model,
@@ -79,6 +80,8 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+        if response_format:
+            kwargs["response_format"] = response_format
 
         logger.debug(f"LLM request: model={self.config.model}, messages={len(messages)}")
 
@@ -202,10 +205,21 @@ class LLMClient:
         self.total_cost = 0.0
         self.call_count = 0
 
-    def simple_chat(self, prompt: str, system: Optional[str] = None) -> str:
+    def simple_chat(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        *,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        response = self.chat(messages)
+        response = self.chat(
+            messages,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
         return response.content or ""

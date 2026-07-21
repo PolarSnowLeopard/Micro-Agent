@@ -221,11 +221,32 @@ class MCPWrapper:
                 self._try_extract_json_from_response(analysis_result, tool_design_path)
 
             if not os.path.isfile(tool_design_path):
-                print("  ⚠️ tool_design.json 未生成，使用一次性 JSON 编译回退...")
-                fallback_response = llm.simple_chat(
-                    analysis_task,
-                    system=ANALYSIS_JSON_FALLBACK_PROMPT,
+                print("  ⚠️ tool_design.json 未生成，使用探索证据进行结构化 JSON 编译...")
+                compact_ast = self._compact_analysis_evidence(ast_summary_text)
+                explored_evidence = analysis_agent.evidence_digest()
+                fallback_task = (
+                    f"Packaging intent:\n{wrap_intent}\n\n"
+                    f"Relevant DARP AST evidence:\n{compact_ast}\n\n"
+                    f"Evidence collected by the analysis agent:\n{explored_evidence}\n\n"
+                    "Compile the final tool_design.json object now."
                 )
+                try:
+                    fallback_response = llm.simple_chat(
+                        fallback_task,
+                        system=ANALYSIS_JSON_FALLBACK_PROMPT,
+                        max_tokens=8192,
+                        response_format={"type": "json_object"},
+                    )
+                except Exception as structured_error:
+                    logger.warning(
+                        "Structured tool-design response unsupported; retrying as plain JSON: %s",
+                        structured_error,
+                    )
+                    fallback_response = llm.simple_chat(
+                        fallback_task,
+                        system=ANALYSIS_JSON_FALLBACK_PROMPT,
+                        max_tokens=8192,
+                    )
                 self._try_extract_json_from_response(
                     fallback_response,
                     tool_design_path,
@@ -498,6 +519,9 @@ class MCPWrapper:
                     verbose=self._agent_verbose,
                 )
                 fix_agent.run(fix_task)
+                for fix_msg in self._normalize_generated_requirements(output_dir):
+                    print(f"  🔧 {fix_msg}")
+                self._validate_and_fix_dockerfile(dockerfile_path, output_dir)
 
             repo_in_build = os.path.join(output_dir, "repo")
             if os.path.exists(repo_in_build):
@@ -963,28 +987,38 @@ class MCPWrapper:
         """尝试从 Agent 文本响应中提取 tool_design JSON 并写入文件"""
         if not response:
             return False
-        try:
-            match = re.search(
-                r'```(?:json)?\s*(\{[\s\S]*?"tools"\s*:\s*\[[\s\S]*?\][\s\S]*?\})\s*```',
-                response,
-            )
-            if not match:
-                match = re.search(
-                    r'(\{[\s\S]*?"tools"\s*:\s*\[[\s\S]*?\][\s\S]*?\})',
-                    response,
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", response):
+            try:
+                parsed, _ = decoder.raw_decode(response[match.start():])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if (
+                isinstance(parsed, dict)
+                and isinstance(parsed.get("tools"), list)
+                and parsed["tools"]
+            ):
+                Path(target_path).write_text(
+                    json.dumps(parsed, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
                 )
-            if match:
-                candidate = match.group(1).strip()
-                parsed = json.loads(candidate)
-                if isinstance(parsed.get("tools"), list) and len(parsed["tools"]) > 0:
-                    Path(target_path).write_text(
-                        json.dumps(parsed, indent=2, ensure_ascii=False), encoding="utf-8"
-                    )
-                    print(f"  📝 从 Agent 响应中提取 tool_design.json（{len(parsed['tools'])} 个工具）")
-                    return True
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            pass
+                print(f"  📝 从 Agent 响应中提取 tool_design.json（{len(parsed['tools'])} 个工具）")
+                return True
         return False
+
+    @staticmethod
+    def _compact_analysis_evidence(text: str, max_chars: int = 16_000) -> str:
+        """Keep the highest-ranked DARP evidence within a bounded compiler prompt."""
+        if len(text) <= max_chars:
+            return text
+        head = max_chars * 3 // 4
+        tail = max_chars - head
+        omitted = len(text) - max_chars
+        return (
+            text[:head]
+            + f"\n\n[DARP evidence compacted: {omitted} characters omitted]\n\n"
+            + text[-tail:]
+        )
 
     @staticmethod
     def _cleanup_docker(image_tag: str):
