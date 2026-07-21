@@ -509,6 +509,7 @@ def test_vendor_cleanup_removes_only_the_sample_image():
     "command",
     [
         "pip install geopandas",
+        "cd /tmp/repo && pip install geopandas | tail -5",
         "python3 -m pip install torch",
         "sudo apt-get install -y g++",
         "conda install scipy",
@@ -547,6 +548,48 @@ def test_vendor_bash_tool_rejects_host_package_installation(command):
     result = json.loads(completed.stdout.splitlines()[-1])
     assert result["success"] is False
     assert "Host package installation is forbidden" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -i '2a RUN apt-get install -y g++' Dockerfile",
+        "python3 -c \"content='RUN apt-get install -y g++'\"",
+        "cat Dockerfile",
+    ],
+)
+def test_vendor_bash_tool_allows_package_declarations_as_data(command):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys\n"
+                "from types import SimpleNamespace\n"
+                "from src.tools.bash import BashTool\n"
+                "class Sandbox:\n"
+                "    def exec(self, command):\n"
+                "        return SimpleNamespace(success=True,stdout='ok',stderr='')\n"
+                "result=BashTool(Sandbox()).execute(command=sys.argv[1])\n"
+                "print(json.dumps({'success':result.success,'output':result.output}))\n"
+            ),
+            command,
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    result = json.loads(completed.stdout.splitlines()[-1])
+    assert result == {"success": True, "output": "ok"}
 
 
 def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
