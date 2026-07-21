@@ -741,13 +741,22 @@ def test_vendor_includes_imports_in_module_level_runtime_guards(tmp_path):
     )
     (source / "models" / "runtime.py").write_text(
         "import torchvision\n"
+        "import local_helper\n"
+        "try:\n"
+        "    import optional_accel\n"
+        "except ImportError:\n"
+        "    optional_accel = None\n"
         "class Runtime:\n"
         "    def run(self):\n"
         "        import optional_solver\n",
         encoding="utf-8",
     )
+    (source / "models" / "local_helper.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
     (source / "requirements.txt").write_text(
-        "torchvision==0.22.0\noptional-solver\n",
+        "torchvision==0.22.0\nlocal-helper\noptional-accel\noptional-solver\n",
         encoding="utf-8",
     )
     server = output / "server.py"

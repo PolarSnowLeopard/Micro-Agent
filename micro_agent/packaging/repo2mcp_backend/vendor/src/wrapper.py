@@ -751,6 +751,9 @@ class MCPWrapper:
         external_imports: set[str] = set()
         visited: set[Path] = set()
         queue: list[Path] = [Path(server_py_path)]
+        shallow_local_modules: dict[str, list[Path]] = {}
+        for candidate in source_root.glob("*/*.py"):
+            shallow_local_modules.setdefault(candidate.stem, []).append(candidate)
 
         def local_module_file(module: str) -> Path | None:
             if not module:
@@ -762,7 +765,62 @@ class MCPWrapper:
             init_file = base / "__init__.py"
             if init_file.is_file():
                 return init_file
+            if "." not in module:
+                matches = shallow_local_modules.get(module, [])
+                if len(matches) == 1:
+                    return matches[0]
             return None
+
+        def imported_names(body: list[ast.stmt]) -> set[str]:
+            names: set[str] = set()
+            for statement in body:
+                if isinstance(statement, ast.Import):
+                    names.update(
+                        alias.asname or alias.name.split(".", 1)[0]
+                        for alias in statement.names
+                    )
+                elif isinstance(statement, ast.ImportFrom):
+                    names.update(alias.asname or alias.name for alias in statement.names)
+            return names
+
+        def defined_names(body: list[ast.stmt]) -> set[str]:
+            names: set[str] = set()
+            for statement in body:
+                if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names.add(statement.name)
+                elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                    targets = (
+                        statement.targets
+                        if isinstance(statement, ast.Assign)
+                        else [statement.target]
+                    )
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            names.add(target.id)
+            return names
+
+        def catches_import_error(handler: ast.ExceptHandler) -> bool:
+            if isinstance(handler.type, ast.Name):
+                return handler.type.id == "ImportError"
+            if isinstance(handler.type, ast.Tuple):
+                return any(
+                    isinstance(item, ast.Name) and item.id == "ImportError"
+                    for item in handler.type.elts
+                )
+            return False
+
+        def has_import_fallback(statement: ast.Try) -> bool:
+            imported = imported_names(statement.body)
+            if not imported:
+                return False
+            for handler in statement.handlers:
+                if not catches_import_error(handler):
+                    continue
+                if handler.body and all(isinstance(item, ast.Pass) for item in handler.body):
+                    return True
+                if imported <= defined_names(handler.body):
+                    return True
+            return False
 
         def import_time_statements(body: list[ast.stmt]):
             """Yield statements executed while a module is imported.
@@ -780,9 +838,9 @@ class MCPWrapper:
                 elif isinstance(statement, (ast.With, ast.AsyncWith)):
                     nested_bodies.append(statement.body)
                 elif isinstance(statement, ast.Try):
-                    nested_bodies.extend(
-                        [statement.body, statement.orelse, statement.finalbody]
-                    )
+                    if not has_import_fallback(statement):
+                        nested_bodies.append(statement.body)
+                    nested_bodies.extend([statement.orelse, statement.finalbody])
                     nested_bodies.extend(handler.body for handler in statement.handlers)
                 elif isinstance(statement, ast.Match):
                     nested_bodies.extend(case.body for case in statement.cases)
