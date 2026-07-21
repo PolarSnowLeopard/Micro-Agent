@@ -463,6 +463,57 @@ class MCPWrapper:
                 for fix_msg in quality_fixes:
                     print(f"  🔧 {fix_msg}")
 
+            semantic_issues = self._find_server_semantic_stubs(server_py_path)
+            if semantic_issues:
+                print(f"  ⚠️ 语义占位实现检测失败: {semantic_issues}")
+                semantic_fix_task = (
+                    f"生成的 MCP 工具包含不可接受的语义占位实现:\n"
+                    + "\n".join(f"  - {issue}" for issue in semantic_issues)
+                    + f"\n\n请修复 {server_py_path}。原始仓库位于 {source_dir}/。\n"
+                    "必须实际调用仓库算法或模型，并从真实返回值/张量计算领域结果。"
+                    "禁止 predicted_word、dummy/mock/placeholder、固定置信度、pass、"
+                    "NotImplemented 或伪造成功。用 bash 修改文件后立即结束。"
+                )
+                semantic_fix_system = (
+                    FIX_SYSTEM_PROMPT.replace("SOURCE_DIR", source_dir)
+                    .replace("OUTPUT_DIR", output_dir)
+                )
+                semantic_fix_agent = MCPAgent(
+                    llm=llm,
+                    tools=tools,
+                    system_prompt=semantic_fix_system,
+                    max_steps=min(self.fix_steps, 8),
+                    verbose=self._agent_verbose,
+                    completion_check=lambda: not self._find_server_semantic_stubs(
+                        server_py_path
+                    ),
+                    completion_nudge=(
+                        f"立即用 bash 修复 {server_py_path} 中列出的语义占位实现。"
+                    ),
+                    force_completion_after=6,
+                    compact_initial_task_after=1,
+                )
+                semantic_fix_agent.run(semantic_fix_task)
+                remaining_semantic_issues = self._find_server_semantic_stubs(
+                    server_py_path
+                )
+                if remaining_semantic_issues:
+                    return self._fail(
+                        "generation",
+                        "语义占位实现未修复: "
+                        + "; ".join(remaining_semantic_issues),
+                    )
+                dependency_fixes = self._merge_declared_runtime_dependencies(
+                    server_py_path=server_py_path,
+                    source_dir=source_dir,
+                    output_dir=output_dir,
+                )
+                dependency_fixes.extend(
+                    self._normalize_generated_requirements(output_dir)
+                )
+                for fix_msg in dependency_fixes:
+                    print(f"  🔧 {fix_msg}")
+
             print(f"\n{'='*60}")
             print(f"Stage 3: 构建与测试 (max_retries={self.max_fix_retries})")
             print(f"{'='*60}")
@@ -1140,6 +1191,65 @@ class MCPWrapper:
             Path(server_py_path).write_text("\n".join(lines), encoding="utf-8")
 
         return fixes
+
+    @staticmethod
+    def _find_server_semantic_stubs(server_py_path: str) -> list[str]:
+        """Reject generated tools that pretend to execute domain logic."""
+        try:
+            import ast as _ast
+
+            tree = _ast.parse(Path(server_py_path).read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+        issues: list[str] = []
+        stub_markers = (
+            "predicted_word",
+            "placeholder",
+            "dummy_result",
+            "dummy result",
+            "mock_result",
+            "mock result",
+            "not implemented",
+        )
+        for func in MCPWrapper._get_tool_functions(server_py_path):
+            body = func.body[1:] if _ast.get_docstring(func) else func.body
+            for node in _ast.walk(_ast.Module(body=body, type_ignores=[])):
+                if isinstance(node, _ast.Pass):
+                    issues.append(f"{func.name}: pass placeholder")
+                elif (
+                    isinstance(node, _ast.Raise)
+                    and isinstance(node.exc, _ast.Call)
+                    and isinstance(node.exc.func, _ast.Name)
+                    and node.exc.func.id == "NotImplementedError"
+                ):
+                    issues.append(f"{func.name}: NotImplementedError placeholder")
+                elif isinstance(node, _ast.Constant) and isinstance(node.value, str):
+                    normalized = node.value.strip().lower()
+                    marker = next(
+                        (item for item in stub_markers if item in normalized),
+                        None,
+                    )
+                    if marker:
+                        issues.append(f"{func.name}: placeholder literal {marker!r}")
+                elif isinstance(node, (_ast.Assign, _ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, _ast.Assign) else [node.target]
+                    value = node.value
+                    if not isinstance(value, _ast.Constant) or not isinstance(
+                        value.value, (int, float)
+                    ):
+                        continue
+                    for target in targets:
+                        if isinstance(target, _ast.Name) and target.id.lower() in {
+                            "confidence",
+                            "probability",
+                            "score",
+                        }:
+                            issues.append(
+                                f"{func.name}: hard-coded {target.id}={value.value!r}"
+                            )
+
+        return list(dict.fromkeys(issues))
 
     @staticmethod
     def _verify_imports(server_py_path: str, source_dir: str, sandbox) -> list:

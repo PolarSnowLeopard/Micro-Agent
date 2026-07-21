@@ -596,6 +596,12 @@ GENERATION_SINGLE_CALL_PROMPT = MCP_REFERENCE + """
    ```
    - error 消息**必须包含导致错误的参数名和值**
 9. 底部：`if __name__ == "__main__": mcp.run(transport="sse")`
+10. **禁止语义占位实现**：不得返回 `predicted_word`、dummy/mock/placeholder、固定置信度、
+    示例值或伪造成功结果；返回的领域结果必须由 verified_import 指向的真实仓库代码、
+    模型输出或算法计算得到。不得计算 `outputs`/`result` 后丢弃并改用常量。
+11. 不得使用 `pass`、`NotImplementedError`、TODO 或省略号代替工具实现。若仓库能力
+    需要模型、配置或文件，必须真实加载并调用，无法满足时应返回包含实际异常的 error，
+    不能伪造成功。
 
 ## Dockerfile 生成规则
 - 默认使用 `FROM python:3.11-slim`（如果依赖 torch/tensorflow 则用对应基础镜像）

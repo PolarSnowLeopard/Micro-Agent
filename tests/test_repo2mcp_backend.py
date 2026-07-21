@@ -902,3 +902,44 @@ def test_vendor_supports_src_layout_local_packages(tmp_path):
     assert "ENV PYTHONPATH=/app/repo:/app/repo/src" in dockerfile.read_text(
         encoding="utf-8"
     )
+
+
+def test_vendor_detects_semantic_stub_outputs(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    server = tmp_path / "server.py"
+    server.write_text(
+        "from mcp.server.fastmcp import FastMCP\n"
+        "mcp = FastMCP('test')\n"
+        "@mcp.tool()\n"
+        "def fill_mask(text: str):\n"
+        "    outputs = object()\n"
+        "    confidence = 0.95\n"
+        "    return text.replace('[MASK]', 'predicted_word')\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; from src.wrapper import MCPWrapper; "
+                "print(json.dumps(MCPWrapper._find_server_semantic_stubs(sys.argv[1])))"
+            ),
+            str(server),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(completed.stdout) == [
+        "fill_mask: hard-coded confidence=0.95",
+        "fill_mask: placeholder literal 'predicted_word'",
+    ]
