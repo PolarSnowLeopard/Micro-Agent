@@ -494,7 +494,7 @@ def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
     )
     (source / "models" / "eomt.py").write_text(
         "import torch\nimport timm\nimport transformers\n"
-        "from PIL import Image\ndef run(): pass\n",
+        "from PIL import Image\ndef run():\n    import optional_solver\n",
         encoding="utf-8",
     )
     (source / "requirements.txt").write_text(

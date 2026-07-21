@@ -786,7 +786,10 @@ class MCPWrapper:
             except ValueError:
                 package_parts = []
 
-            for node in ast.walk(tree):
+            # Import-time health only depends on module-level imports.  Walking
+            # function bodies would pull in optional solver/visualization extras
+            # that are never touched by the selected MCP tools at startup.
+            for node in tree.body:
                 candidates: list[str] = []
                 if isinstance(node, ast.Import):
                     candidates.extend(alias.name for alias in node.names)
