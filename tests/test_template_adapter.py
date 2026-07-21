@@ -29,6 +29,7 @@ from scripts.prepare_amq_template_subset import (
     _template_repair_needs_source,
     _template_runtime_repair_advice,
     ensure_output_outside_source_repo,
+    load_persisted_adaptation_results,
     load_mini30,
     recover_last_template_writes,
 )
@@ -2081,6 +2082,52 @@ def test_evaluation_benchmark_keeps_failed_adaptations_in_denominator() -> None:
     assert len(rows) == 2
     assert rows[0]["repo_info"]["url"] == "adapted-ready"
     assert rows[1] == original[1]
+
+
+def test_persisted_adaptation_aggregation_preserves_failures(
+    tmp_path: Path,
+) -> None:
+    samples = [
+        {
+            "sample_id": "ready",
+            "wrap_intent": "wrap ready",
+            "repo_info": {"url": "original-ready", "commit_sha": "a"},
+            "task": "one",
+        },
+        {
+            "sample_id": "failed",
+            "wrap_intent": "wrap failed",
+            "repo_info": {"url": "original-failed", "commit_sha": "b"},
+            "task": "two",
+        },
+    ]
+    ready_dir = tmp_path / "adaptation" / "ready"
+    ready_dir.mkdir(parents=True)
+    (ready_dir / "summary.json").write_text(
+        json.dumps({"status": "ready"}), encoding="utf-8"
+    )
+    (ready_dir / "derived_sample.json").write_text(
+        json.dumps(
+            {
+                **samples[0],
+                "repo_info": {"url": "adapted-ready", "commit_sha": "c"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    failed_dir = tmp_path / "adaptation" / "failed"
+    failed_dir.mkdir(parents=True)
+    (failed_dir / "summary.json").write_text(
+        json.dumps({"status": "failed", "error": "runtime failed"}),
+        encoding="utf-8",
+    )
+
+    results = load_persisted_adaptation_results(samples, tmp_path)
+
+    assert isinstance(results[0], dict)
+    assert results[0]["repo_info"]["url"] == "adapted-ready"
+    assert isinstance(results[1], RuntimeError)
+    assert "runtime failed" in str(results[1])
 
 
 def test_recover_last_template_writes_uses_latest_agent_content(tmp_path: Path) -> None:

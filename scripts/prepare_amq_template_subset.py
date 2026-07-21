@@ -83,6 +83,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help=(
+            "Rebuild partial/evaluation JSONL and the run summary from persisted "
+            "per-sample results without invoking any construction Agent."
+        ),
+    )
+    parser.add_argument(
         "--sample-id",
         action="append",
         default=[],
@@ -136,6 +144,42 @@ def acquire_output_lock(output_root: Path) -> Any:
             f"another adaptation process is already writing {output_root}"
         ) from exc
     return handle
+
+
+def load_persisted_adaptation_results(
+    samples: list[dict[str, Any]],
+    output_root: Path,
+) -> list[dict[str, Any] | BaseException]:
+    """Recover one auditable result per sample after an interrupted run."""
+
+    results: list[dict[str, Any] | BaseException] = []
+    for sample in samples:
+        sample_id = sample["sample_id"]
+        run_dir = output_root / "adaptation" / sample_id
+        summary_path = run_dir / "summary.json"
+        derived_path = run_dir / "derived_sample.json"
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            results.append(RuntimeError(f"persisted summary unavailable: {exc}"))
+            continue
+        if summary.get("status") != "ready" or not derived_path.is_file():
+            error = str(summary.get("error") or "adaptation did not reach ready")
+            results.append(RuntimeError(error))
+            continue
+        try:
+            derived = json.loads(derived_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            results.append(RuntimeError(f"persisted derived sample unavailable: {exc}"))
+            continue
+        if derived.get("sample_id") != sample_id:
+            results.append(RuntimeError("persisted derived sample id mismatch"))
+            continue
+        if _protected_digest(derived) != _protected_digest(sample):
+            results.append(RuntimeError("persisted protected benchmark fields changed"))
+            continue
+        results.append(derived)
+    return results
 
 
 def _json_digest(value: Any) -> str:
@@ -1269,7 +1313,13 @@ async def main() -> int:
                 resume=args.resume,
             )
 
-    results = await asyncio.gather(*(bounded(sample) for sample in samples), return_exceptions=True)
+    if args.aggregate_only:
+        results = load_persisted_adaptation_results(samples, output_root)
+    else:
+        results = await asyncio.gather(
+            *(bounded(sample) for sample in samples),
+            return_exceptions=True,
+        )
     failures = {
         samples[index]["sample_id"]: f"{type(result).__name__}: {result}"
         for index, result in enumerate(results)
