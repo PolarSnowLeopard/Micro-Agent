@@ -37,6 +37,8 @@ Local integration changes are deliberately bounded:
     before ordinary requirements, preventing accidental CUDA downloads.
 11. Import prevalidation is static for repository-owned modules; third-party
     imports are deferred to the dependency-complete Docker build.
+12. Tool-design prompts distinguish independent user capabilities from internal
+    loading/initialization pipeline steps; tool count is never a target itself.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.

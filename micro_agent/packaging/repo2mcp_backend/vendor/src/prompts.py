@@ -233,6 +233,11 @@ HEREDOC_EOF
 
 ## 关键约束（必须遵守）
 - tools 数组**禁止为空**——必须至少定义 1 个工具
+- Tool 必须对应最终用户可直接选择的领域结果。数据读取、模型初始化、权重加载、
+  格式转换、缓存、日志、健康检查等流水线步骤应由端到端 Tool 内部编排，不能单独暴露。
+- Tool 数量由独立用户能力决定：单一预测任务可以只有 1 个 Tool；当仓库确有预测、解释、
+  评估、转换等输入输出语义不同的能力时必须分别保留。禁止为了显得“多工具”而拆内部步骤，
+  也禁止把多个独立能力重新压成一个带 operation 字段的万能 Tool。
 - 禁止使用占位符名称（如 "example_tool"、"tool_name"）
 - 每个工具必须包含 **verified_import**（已验证的 import 语句）和 **function_signature**（完整签名）
 - 每个工具的 implementation 中的函数必须是仓库中**实际存在**的
@@ -298,7 +303,10 @@ Rules:
 - Output exactly one JSON object and no Markdown or commentary.
 - Define every independent, user-facing capability supported by the supplied AST evidence;
   do not collapse a multi-capability repository into a generic main_process tool.
-- Prefer 2-12 cohesive tools when evidence supports them. Never invent a tool to reach a count.
+- Prefer the smallest complete set, normally 1-12 cohesive tools. Never invent a tool to reach a count.
+- Data loading, model initialization, weight loading, conversion, caching, logging,
+  and health checks are internal pipeline steps unless they independently deliver
+  a domain result a user would intentionally request.
 - Each tool requires name, description, parameters, returns, and implementation.
 - implementation requires source_file, function_or_class, verified_import,
   function_signature, and notes. Derive these statically from the supplied source evidence;
