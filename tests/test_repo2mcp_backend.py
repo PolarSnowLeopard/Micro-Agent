@@ -420,7 +420,8 @@ def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
         encoding="utf-8",
     )
     (source / "models" / "eomt.py").write_text(
-        "import torch\nimport timm\nfrom PIL import Image\ndef run(): pass\n",
+        "import torch\nimport timm\nimport transformers\n"
+        "from PIL import Image\ndef run(): pass\n",
         encoding="utf-8",
     )
     (source / "requirements.txt").write_text(
@@ -451,10 +452,11 @@ def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
         check=True,
     )
     fixes = json.loads(completed.stdout)
-    assert len(fixes) == 2
+    assert len(fixes) == 3
     assert requirements.read_text(encoding="utf-8").splitlines() == [
         "mcp[cli]",
         "Pillow",
         "timm==1.0.15",
         "torch==2.7.0",
+        "transformers",
     ]

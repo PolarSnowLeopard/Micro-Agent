@@ -731,9 +731,7 @@ class MCPWrapper:
         if not declared_path.is_file() or not generated_path.is_file():
             return []
 
-        stdlib = set(getattr(sys, "stdlib_module_names", ())) | {
-            "__future__", "typing_extensions",
-        }
+        stdlib = set(getattr(sys, "stdlib_module_names", ())) | {"__future__"}
         external_imports: set[str] = set()
         visited: set[Path] = set()
         queue: list[Path] = [Path(server_py_path)]
@@ -809,6 +807,14 @@ class MCPWrapper:
             "biopython": "bio",
             "pymupdf": "fitz",
             "openslide-python": "openslide",
+            "python-dateutil": "dateutil",
+            "python-dotenv": "dotenv",
+            "beautifulsoup4": "bs4",
+            "setuptools": "pkg_resources",
+        }
+        distribution_for_import = {
+            import_name: distribution
+            for distribution, import_name in import_aliases.items()
         }
 
         def distribution_name(line: str) -> str | None:
@@ -839,6 +845,21 @@ class MCPWrapper:
             generated_lines.append(line)
             present.add(name)
             additions.append(f"requirements: add reachable repository dependency {line}")
+
+        satisfied_imports = {
+            import_aliases.get(name, name).replace("-", "_").lower()
+            for name in present
+        }
+        for import_name in sorted(external_imports - satisfied_imports):
+            distribution = distribution_for_import.get(import_name, import_name)
+            canonical = re.sub(r"[-_.]+", "-", distribution).lower()
+            if canonical in present:
+                continue
+            generated_lines.append(distribution)
+            present.add(canonical)
+            additions.append(
+                f"requirements: infer reachable import {import_name} → {distribution}"
+            )
 
         if additions:
             generated_path.write_text(
