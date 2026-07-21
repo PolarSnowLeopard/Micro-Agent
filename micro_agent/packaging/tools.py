@@ -752,6 +752,12 @@ def _contract_value_schema(name: str, value: Any) -> dict[str, Any]:
         return {"type": "number", "description": description}
     if isinstance(value, str):
         return {"type": "string", "description": description}
+    if value is None:
+        # ``inspect.Signature.apply_defaults`` records omitted optional values.
+        # When a verified public fixture contributes such a field that the
+        # planner did not model, publish the only value actually evidenced
+        # instead of leaving an unconstrained schema that rejects its smoke run.
+        return {"type": "null", "description": description}
     if isinstance(value, list):
         item_schemas = [
             _contract_value_schema(name, item)

@@ -1310,7 +1310,8 @@ async def test_runtime_grounded_null_widens_only_verified_property(
     project = _sample_project(tmp_path)
     (project / "main.py").write_text(
         "from core import predict\n\n"
-        "def main_process(value: float, activation: str | None = None) -> dict:\n"
+        "def main_process(value: float, activation: str | None = None, "
+        "equivalency_kwargs: dict | None = None) -> dict:\n"
         "    return {'score': predict(value), 'activation': activation}\n",
         encoding="utf-8",
     )
@@ -1319,7 +1320,8 @@ async def test_runtime_grounded_null_widens_only_verified_property(
     (contract_dir / "test_template_contract.py").write_text(
         "from main import main_process\n\n"
         "def test_predict_contract():\n"
-        "    assert main_process(0.5, activation=None)['score'] == 0.5\n",
+        "    assert main_process(0.5, activation=None, "
+        "equivalency_kwargs=None)['score'] == 0.5\n",
         encoding="utf-8",
     )
     ir = RepositoryAnalyzer().analyze(project)
@@ -1344,8 +1346,16 @@ async def test_runtime_grounded_null_widens_only_verified_property(
         symbol_required_parameters={"main.main_process": ["value"]},
         verified_contract_records=[
             {
-                "mainProcessInput": {"value": 0.5, "activation": None},
-                "toolSmokeInput": {"value": 0.5, "activation": None},
+                "mainProcessInput": {
+                    "value": 0.5,
+                    "activation": None,
+                    "equivalency_kwargs": None,
+                },
+                "toolSmokeInput": {
+                    "value": 0.5,
+                    "activation": None,
+                    "equivalency_kwargs": None,
+                },
                 "evidence": ["tests_ioeb/test_template_contract.py:4"],
             }
         ],
@@ -1362,11 +1372,15 @@ async def test_runtime_grounded_null_widens_only_verified_property(
         "string",
         "null",
     ]
+    assert grounded["inputSchema"]["properties"]["equivalency_kwargs"][
+        "type"
+    ] == "null"
     assert grounded["smokeTest"]["input"]["activation"] is None
+    assert grounded["smokeTest"]["input"]["equivalency_kwargs"] is None
 
     artifact = prepare_artifact(project, tmp_path / "artifact", store.plan)
     (artifact / "adapters.py").write_text(
-        "def predict_risk(value, activation=None):\n"
+        "def predict_risk(value, activation=None, equivalency_kwargs=None):\n"
         "    return {'score': value}\n",
         encoding="utf-8",
     )
@@ -1382,7 +1396,11 @@ async def test_runtime_grounded_null_widens_only_verified_property(
     generated = module.mcp._tool_manager.get_tool("predict_risk")
     assert generated is not None
     _, structured = await generated.run(
-        {"value": 0.5, "activation": None},
+        {
+            "value": 0.5,
+            "activation": None,
+            "equivalency_kwargs": None,
+        },
         convert_result=True,
     )
     assert structured == {"score": 0.5}
