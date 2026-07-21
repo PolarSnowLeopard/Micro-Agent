@@ -503,6 +503,9 @@ class SavePackagingPlan(Tool):
                 plan,
                 self.store.known_files or set(),
                 evidence_root=self.store.smoke_evidence_root,
+                runtime_grounded_tools=set(
+                    self.store.contract_smoke_grounded_tools or []
+                ),
             )
             if smoke_errors:
                 self.store.plan = None
@@ -1451,6 +1454,7 @@ def _independent_smoke_evidence_errors(
     known_files: set[str],
     *,
     evidence_root: Path | None = None,
+    runtime_grounded_tools: set[str] | None = None,
 ) -> list[str]:
     generated_files = {
         "main.py",
@@ -1458,6 +1462,7 @@ def _independent_smoke_evidence_errors(
         "template_adaptation.json",
     }
     independent_files = known_files - generated_files
+    runtime_grounded_tools = runtime_grounded_tools or set()
     errors: list[str] = []
     for tool in plan.tools:
         smoke = tool.get("smokeTest", {})
@@ -1509,6 +1514,13 @@ def _independent_smoke_evidence_errors(
             )
             continue
         if evidence_root is None:
+            continue
+        if tool.get("name") in runtime_grounded_tools:
+            # The exact JSON input was captured only after this cited contract
+            # test executed successfully in the offline, read-only container.
+            # Dynamically produced Base64/checkpoint values need not appear as
+            # source literals; runtime capture is stronger provenance than a
+            # textual substring while the evidence-file gate above still holds.
             continue
         corpus = _read_smoke_evidence_corpus(evidence_root, cited_files)
         suggestion_corpus = corpus + "\n" + _read_smoke_evidence_corpus(

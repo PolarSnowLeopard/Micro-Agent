@@ -1237,6 +1237,72 @@ async def test_plan_store_deterministically_grounds_verified_contract_smoke(
     assert "verifiedContractSmoke=predict_risk" in result.output
 
 
+async def test_runtime_grounded_dynamic_binary_smoke_needs_no_source_literal(
+    tmp_path,
+):
+    project = _sample_project(tmp_path)
+    (project / "main.py").write_text(
+        "from core import predict\n\n"
+        "def main_process(value: float, checkpoint_b64: str) -> dict:\n"
+        "    return {'score': predict(value), 'checkpoint': checkpoint_b64[:4]}\n",
+        encoding="utf-8",
+    )
+    contract_dir = project / "tests_ioeb"
+    contract_dir.mkdir()
+    (contract_dir / "test_template_contract.py").write_text(
+        "import base64\n"
+        "from main import main_process\n\n"
+        "def test_predict_contract():\n"
+        "    checkpoint = base64.b64encode(b'binary-checkpoint').decode('ascii')\n"
+        "    assert main_process(0.5, checkpoint)['score'] == 0.5\n",
+        encoding="utf-8",
+    )
+    ir = RepositoryAnalyzer().analyze(project)
+    raw = _plan(ir).to_dict()
+    raw["services"][0]["tools"] = [raw["services"][0]["tools"][0]]
+    tool = raw["services"][0]["tools"][0]
+    tool["sourceSymbols"] = ["main.main_process"]
+    tool["inputSchema"]["properties"]["checkpoint_b64"] = {
+        "type": "string",
+        "description": "Base64-encoded algorithm checkpoint bytes.",
+    }
+    tool["inputSchema"]["required"].append("checkpoint_b64")
+    checkpoint_b64 = "YmluYXJ5LWNoZWNrcG9pbnQ="
+    store = PlanStore(
+        path=tmp_path / "plan.json",
+        known_symbols=ir.known_symbols,
+        known_files={file.path for file in ir.files},
+        symbol_required_parameters={
+            "main.main_process": ["value", "checkpoint_b64"]
+        },
+        require_independent_smoke_evidence=True,
+        smoke_evidence_root=project,
+        verified_contract_records=[
+            {
+                "mainProcessInput": {
+                    "value": 0.5,
+                    "checkpoint_b64": checkpoint_b64,
+                },
+                "toolSmokeInput": {
+                    "value": 0.5,
+                    "checkpoint_b64": checkpoint_b64,
+                },
+                "evidence": ["tests_ioeb/test_template_contract.py:6"],
+            }
+        ],
+    )
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert not result.error
+    assert store.plan is not None
+    assert store.plan.tools[0]["smokeTest"]["input"]["checkpoint_b64"] == (
+        checkpoint_b64
+    )
+
+
 async def test_plan_store_never_regrounds_runtime_rejected_contract_smoke(
     tmp_path,
 ):
