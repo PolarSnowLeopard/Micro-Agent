@@ -29,6 +29,8 @@ Local integration changes are deliberately bounded:
    deterministic validation remains responsible for accepting those files.
 7. Batch and subprocess entry points both honor `LLM_REASONING_ENABLED`, so the
    production Qwen profile cannot silently fall back to provider-default thinking.
+8. The reliable package index, timeout, and retry policy is applied before the
+   paper build gate, rather than mutating an already-verified Dockerfile later.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.

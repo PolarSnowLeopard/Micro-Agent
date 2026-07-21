@@ -769,6 +769,17 @@ class MCPWrapper:
             Path(dockerfile_path).write_text("\n".join(fixed_lines), encoding="utf-8")
 
         content = Path(dockerfile_path).read_text(encoding="utf-8")
+        plain_pip_install = "RUN pip install --no-cache-dir -r /app/requirements.txt"
+        if plain_pip_install in content:
+            content = content.replace(
+                plain_pip_install,
+                "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
+                "RUN pip install --no-cache-dir --index-url \"${PIP_INDEX_URL}\" "
+                "--timeout 120 --retries 5 -r /app/requirements.txt",
+            )
+            Path(dockerfile_path).write_text(content, encoding="utf-8")
+            print("  🔧 Dockerfile 已在构建前启用可靠 PyPI 镜像、超时与重试")
+
         copy_pattern = re.findall(r'(?:COPY|ADD)\s+(\S+)', content, re.IGNORECASE)
         known_context = {".", "requirements.txt", "repo/", "repo", "server.py",
                          "/app/repo/", "/app/requirements.txt", "/app/server.py",
