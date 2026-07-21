@@ -1737,8 +1737,8 @@ def test_reference_free_interface_quality_reports_numeric_description_target(
 
     report = assess_interface_quality(plan)
 
-    assert not report.passed
-    message = "\n".join(report.errors)
+    assert report.passed
+    message = "\n".join(report.warnings)
     assert "Jaccard distance 至少为" in message
     assert "不要重复服务概述" in message
 

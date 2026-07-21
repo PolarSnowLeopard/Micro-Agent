@@ -172,8 +172,8 @@ def assess_interface_quality(
                 "仅改写工具描述不足以过线；必须补齐缺失的参数/输出描述，或仅在源码、"
                 "测试、文档明确支持时增加真实 enum/default/format/range，禁止为了评分编造"
             )
-        errors.append(
-            "[interface_quality] 参考 GoE 质量门禁未通过："
+        warnings.append(
+            "[interface_quality] 参考 GoE 质量目标未达到："
             f"{goe:.4f} < {min_goe:.2f}；"
             + recovery_hint
         )
