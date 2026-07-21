@@ -505,6 +505,50 @@ def test_vendor_cleanup_removes_only_the_sample_image():
     assert commands == ["docker rmi mcp-test:latest 2>/dev/null || true"]
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install geopandas",
+        "python3 -m pip install torch",
+        "sudo apt-get install -y g++",
+        "conda install scipy",
+        "uv pip install pandas",
+    ],
+)
+def test_vendor_bash_tool_rejects_host_package_installation(command):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys\n"
+                "from src.tools.bash import BashTool\n"
+                "class Sandbox:\n"
+                "    def exec(self, command):\n"
+                "        raise AssertionError('forbidden command reached sandbox')\n"
+                "result=BashTool(Sandbox()).execute(command=sys.argv[1])\n"
+                "print(json.dumps({'success':result.success,'error':result.error}))\n"
+            ),
+            command,
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    result = json.loads(completed.stdout.splitlines()[-1])
+    assert result["success"] is False
+    assert "Host package installation is forbidden" in result["error"]
+
+
 def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
     vendor = (
         Path(__file__).parents[1]

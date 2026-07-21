@@ -1,4 +1,6 @@
 """Bash 命令执行工具"""
+import re
+
 from src.tools.base import BaseTool, ToolResult
 from src.sandbox.local import LocalSandbox
 
@@ -7,7 +9,12 @@ class BashTool(BaseTool):
     """在本地沙箱中执行 bash 命令，对过长输出进行截断。"""
 
     name = "bash"
-    description = "Execute a bash command. Use this to run shell commands, read/write files, install packages, or execute scripts. Output is truncated for large results."
+    description = (
+        "Execute a bash command for repository inspection, file generation, or "
+        "diagnostic scripts. Host package installation is forbidden; declare "
+        "runtime packages in requirements.txt and validate them in Docker. "
+        "Output is truncated for large results."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -22,6 +29,20 @@ class BashTool(BaseTool):
     MAX_OUTPUT_CHARS = 5000
     HEAD_RATIO = 0.3
     TAIL_RATIO = 0.6
+    FORBIDDEN_HOST_INSTALL = re.compile(
+        r"""
+        \b(?:
+            (?:(?:python|python3)(?:\.\d+)?\s+-m\s+)?pip(?:3(?:\.\d+)?)?\s+install
+          | uv\s+(?:pip\s+install|add|sync)
+          | (?:conda|mamba|micromamba)\s+(?:install|create|update)
+          | apt(?:-get)?\s+(?:install|update|upgrade)
+          | apk\s+add
+          | (?:dnf|yum)\s+install
+          | poetry\s+add
+        )\b
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
 
     def __init__(self, sandbox: LocalSandbox):
         self.sandbox = sandbox
@@ -57,6 +78,15 @@ class BashTool(BaseTool):
             return ToolResult(
                 success=False, output="",
                 error="Empty command. You must provide a non-empty 'command' string argument.",
+            )
+        if self.FORBIDDEN_HOST_INSTALL.search(command):
+            return ToolResult(
+                success=False,
+                output="",
+                error=(
+                    "Host package installation is forbidden. Add dependencies to "
+                    "the generated requirements files and let Docker validate them."
+                ),
             )
         result = self.sandbox.exec(command)
 
