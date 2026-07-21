@@ -136,14 +136,11 @@ class MCPAgent(BaseAgent):
                     and self.completion_check
                     and not self.completion_check()
                 ):
-                    self.messages.append({
-                        "role": "user",
-                        "content": (
-                            self.completion_nudge
-                            + "\n探索预算已经用完。禁止继续读取、搜索、安装或验证；"
-                            "下一轮只能调用 bash 写入目标文件。"
-                        ),
-                    })
+                    if self.verbose:
+                        print(
+                            "\n  ⚠️ 探索预算已用完，转入确定性的结构化产物编译"
+                        )
+                    return ""
 
                 if self._consecutive_empty_calls >= 3:
                     self._consecutive_empty_calls = 0
