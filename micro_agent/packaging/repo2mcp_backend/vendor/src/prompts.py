@@ -571,21 +571,9 @@ GENERATION_SINGLE_CALL_PROMPT = MCP_REFERENCE + """
 根据下面的工具设计方案，一次性生成 MCP 服务的三个文件。直接输出文件内容，不要做任何探索或验证。
 
 ## 输出格式
-严格按以下格式输出三个文件，用分隔符标记：
-
-```server.py
-（server.py 的完整内容）
-```
-
-```Dockerfile
-（Dockerfile 的完整内容）
-```
-
-```requirements.txt
-（requirements.txt 的完整内容）
-```
-
-不要输出任何解释、前言或后语，只输出上述三个代码块。
+严格输出一个 JSON 对象，不要使用 Markdown，不要输出解释、前言或后语：
+`{"server.py":"完整 Python 源码", "Dockerfile":"完整 Dockerfile", "requirements.txt":"完整依赖文件"}`。
+三个 value 都必须是字符串；换行和引号必须使用合法 JSON 转义。不得省略任何一个 key。
 
 ## server.py 生成规则
 1. 开头添加 `import sys; sys.path.insert(0, '/app/repo')` 和 `import json`

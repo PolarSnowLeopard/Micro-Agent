@@ -328,7 +328,23 @@ class MCPWrapper:
                 f"工具设计方案:\n```json\n{tool_design_content}\n```\n\n"
                 f"请根据上述设计方案生成三个文件。"
             )
-            gen_response = llm.simple_chat(gen_prompt, system=GENERATION_SINGLE_CALL_PROMPT)
+            try:
+                gen_response = llm.simple_chat(
+                    gen_prompt,
+                    system=GENERATION_SINGLE_CALL_PROMPT,
+                    max_tokens=16384,
+                    response_format={"type": "json_object"},
+                )
+            except Exception as structured_error:
+                logger.warning(
+                    "Structured file generation unsupported; retrying as plain JSON: %s",
+                    structured_error,
+                )
+                gen_response = llm.simple_chat(
+                    gen_prompt,
+                    system=GENERATION_SINGLE_CALL_PROMPT,
+                    max_tokens=16384,
+                )
             self._parse_and_write_generated_files(gen_response, output_dir)
 
             required_files = ["server.py", "Dockerfile"]
@@ -1118,6 +1134,38 @@ class MCPWrapper:
         written = []
         if not response:
             return written
+
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", response):
+            try:
+                payload, _ = decoder.raw_decode(response[match.start():])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            aliases = {
+                "server.py": ("server.py", "server_py"),
+                "Dockerfile": ("Dockerfile", "dockerfile"),
+                "requirements.txt": ("requirements.txt", "requirements_txt"),
+            }
+            for actual_name, keys in aliases.items():
+                content = next(
+                    (
+                        payload[key]
+                        for key in keys
+                        if isinstance(payload.get(key), str) and payload[key].strip()
+                    ),
+                    None,
+                )
+                if content is None:
+                    continue
+                normalized = content.rstrip() + "\n"
+                target = os.path.join(output_dir, actual_name)
+                Path(target).write_text(normalized, encoding="utf-8")
+                written.append(actual_name)
+                print(f"  ✅ {actual_name} ({len(normalized)} chars, structured JSON)")
+            if written:
+                return written
 
         file_map = {
             "server.py": "server.py",

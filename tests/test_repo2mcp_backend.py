@@ -406,6 +406,47 @@ def test_vendor_extracts_nested_tool_design_from_text(tmp_path):
     assert parsed["tools"][0]["implementation"]["notes"]["nested"] is True
 
 
+def test_vendor_writes_generated_files_from_structured_json(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    payload = json.dumps(
+        {
+            "server.py": "from mcp.server.fastmcp import FastMCP\nmcp = FastMCP('x')\n@mcp.tool()\ndef run(): return 'ok'\n",
+            "Dockerfile": "FROM python:3.11-slim\n",
+            "requirements.txt": "mcp[cli]\n",
+        }
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; from src.wrapper import MCPWrapper; "
+                "print(json.dumps(MCPWrapper._parse_and_write_generated_files("
+                "sys.argv[1],sys.argv[2])))"
+            ),
+            "prefix\n" + payload + "\nsuffix",
+            str(output),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    written = json.loads(completed.stdout.splitlines()[-1])
+    assert written == ["server.py", "Dockerfile", "requirements.txt"]
+    assert "@mcp.tool()" in (output / "server.py").read_text(encoding="utf-8")
+    assert (output / "Dockerfile").read_text(encoding="utf-8").startswith("FROM ")
+
+
 def test_vendor_bounds_structured_compiler_evidence():
     vendor = (
         Path(__file__).parents[1]
