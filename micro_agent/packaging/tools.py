@@ -673,8 +673,24 @@ def _ground_plan_smoke_from_verified_contract(
                 candidates.append((record, smoke_input))
             if not candidates:
                 continue
+            current_smoke = tool.get("smokeTest")
+            current_input = (
+                current_smoke.get("input")
+                if isinstance(current_smoke, dict)
+                else None
+            )
+            preferred = (
+                [
+                    item
+                    for item in candidates
+                    if _canonical_smoke_input(item[1])
+                    == _canonical_smoke_input(current_input)
+                ]
+                if isinstance(current_input, dict)
+                else []
+            )
             selected, smoke_input = min(
-                candidates,
+                preferred or candidates,
                 key=lambda item: _canonical_smoke_input(item[1]),
             )
             for key, value in smoke_input.items():
@@ -866,16 +882,30 @@ def _project_contract_smoke_input(
         return {}
     schema = tool.get("inputSchema")
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    required = schema.get("required", []) if isinstance(schema, dict) else []
+    required_names = set(required) if isinstance(required, list) else set()
     public_names = set(properties) if isinstance(properties, dict) else set()
     if entry_required is None:
         public_names.update(smoke_input)
     else:
         public_names.update(entry_required)
-    return {
-        key: value
-        for key, value in smoke_input.items()
-        if key in public_names
-    }
+    projected: dict[str, Any] = {}
+    for key, value in smoke_input.items():
+        if key not in public_names:
+            continue
+        child = properties.get(key) if isinstance(properties, dict) else None
+        if (
+            value is None
+            and key not in required_names
+            and isinstance(child, dict)
+            and not _schema_accepts_null(child)
+        ):
+            # Contract capture applies defaults.  Omission is the valid public
+            # representation for an optional-but-non-null JSON property and
+            # reaches the same Python default without changing the protocol.
+            continue
+        projected[key] = value
+    return projected
 
 
 def _contract_input_was_rejected(

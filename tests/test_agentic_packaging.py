@@ -1303,7 +1303,7 @@ async def test_runtime_grounded_dynamic_binary_smoke_needs_no_source_literal(
     )
 
 
-async def test_runtime_grounded_null_widens_only_verified_property(
+async def test_runtime_grounded_optional_null_uses_protocol_omission(
     tmp_path,
     monkeypatch,
 ):
@@ -1368,12 +1368,9 @@ async def test_runtime_grounded_null_widens_only_verified_property(
     assert not result.error
     assert store.plan is not None
     grounded = store.plan.tools[0]
-    assert grounded["inputSchema"]["properties"]["activation"]["type"] == [
-        "string",
-        "null",
-    ]
+    assert grounded["inputSchema"]["properties"]["activation"]["type"] == "string"
     assert "equivalency_kwargs" not in grounded["inputSchema"]["properties"]
-    assert grounded["smokeTest"]["input"]["activation"] is None
+    assert "activation" not in grounded["smokeTest"]["input"]
     assert "equivalency_kwargs" not in grounded["smokeTest"]["input"]
 
     artifact = prepare_artifact(project, tmp_path / "artifact", store.plan)
@@ -1396,7 +1393,6 @@ async def test_runtime_grounded_null_widens_only_verified_property(
     _, structured = await generated.run(
         {
             "value": 0.5,
-            "activation": None,
         },
         convert_result=True,
     )
