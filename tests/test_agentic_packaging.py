@@ -1715,6 +1715,37 @@ def test_reference_free_interface_quality_gate_accepts_evidence_rich_contract(tm
     assert report.metrics["referenceFreeGoE"] >= 0.72
 
 
+def test_reference_free_interface_quality_reports_numeric_description_target(
+    tmp_path,
+):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    raw = _plan(ir).to_dict()
+    descriptions = {
+        "predict_risk": (
+            "Score one observation for immediate triage using the repository's "
+            "bounded single-record prediction path and return its normalized risk."
+        ),
+        "evaluate_risk": (
+            "Summarize a cohort for aggregate reporting by averaging a batch of "
+            "measurements through the repository's evaluation workflow."
+        ),
+    }
+    for tool in raw["services"][0]["tools"]:
+        tool["description"] = descriptions[tool["name"]]
+        for name, schema in tool["inputSchema"]["properties"].items():
+            schema["description"] = f"Documented {name} accepted by the source algorithm."
+        for name, schema in tool["outputSchema"]["properties"].items():
+            schema["description"] = f"Documented {name} returned by the source algorithm."
+    plan = PackagingPlan.validate(raw, known_symbols=ir.known_symbols)
+
+    report = assess_interface_quality(plan)
+
+    assert not report.passed
+    message = "\n".join(report.errors)
+    assert "Jaccard distance 至少为" in message
+    assert "不要重复服务概述" in message
+
+
 def test_reference_free_interface_quality_gate_rejects_required_defaults(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     raw = _plan(ir).to_dict()

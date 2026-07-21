@@ -153,10 +153,29 @@ def assess_interface_quality(
     errors.extend(service_boundary_errors)
 
     if goe < min_goe:
+        base_without_description_distance = (
+            0.40 * (tool_desc_coverage * 0.40 + tool_desc_informativeness * 0.30)
+            + 0.60 * acs
+        )
+        required_description_distance = (
+            min_goe - base_without_description_distance
+        ) / 0.12
+        if len(tools) > 1 and required_description_distance <= 1:
+            recovery_hint = (
+                "若没有可由源码证明的 enum/default/format/range 可补，保持参数约束不变，"
+                "将最相似两工具的 description 重写到 Jaccard distance 至少为 "
+                f"{max(required_description_distance, 0):.3f}；分别使用不同的领域动作词、"
+                "输入关系、适用场景和禁用场景，不要重复服务概述或互相罗列工具名"
+            )
+        else:
+            recovery_hint = (
+                "仅改写工具描述不足以过线；必须补齐缺失的参数/输出描述，或仅在源码、"
+                "测试、文档明确支持时增加真实 enum/default/format/range，禁止为了评分编造"
+            )
         errors.append(
             "[interface_quality] 参考 GoE 质量门禁未通过："
             f"{goe:.4f} < {min_goe:.2f}；"
-            "请补充参数描述、真实约束并提高工具描述区分度"
+            + recovery_hint
         )
     if parameter_count and constraint_richness < 0.30:
         warnings.append(
