@@ -832,3 +832,70 @@ def test_vendor_includes_imports_in_module_level_runtime_guards(tmp_path):
         "mcp[cli]",
         "torchvision==0.22.0",
     ]
+
+
+def test_vendor_supports_src_layout_local_packages(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    package = source / "src" / "mopadi"
+    package.mkdir(parents=True)
+    output.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "runtime.py").write_text(
+        "import numpy\ndef run(): return numpy.zeros(1)\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text("numpy==2.2.5\n", encoding="utf-8")
+    server = output / "server.py"
+    server.write_text("from mopadi.runtime import run\n", encoding="utf-8")
+    requirements = output / "requirements.txt"
+    requirements.write_text("mcp[cli]\nmopadi\n", encoding="utf-8")
+    dockerfile = output / "Dockerfile"
+    dockerfile.write_text(
+        "FROM python:3.11-slim\nWORKDIR /app\n"
+        "COPY requirements.txt /app/requirements.txt\n"
+        "RUN pip install --no-cache-dir -r /app/requirements.txt\n"
+        "COPY repo/ /app/repo/\nCOPY server.py /app/server.py\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; from src.wrapper import MCPWrapper; "
+                "fixes=MCPWrapper._merge_declared_runtime_dependencies("
+                "sys.argv[1],sys.argv[2],sys.argv[3]); "
+                "MCPWrapper._validate_and_fix_dockerfile(sys.argv[4],sys.argv[3]); "
+                "print(json.dumps(fixes))"
+            ),
+            str(server),
+            str(source),
+            str(output),
+            str(dockerfile),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    fixes = json.loads(completed.stdout.splitlines()[-1])
+    assert fixes == [
+        "requirements: remove repository-local module dependency mopadi",
+        "requirements: add reachable repository dependency numpy==2.2.5",
+    ]
+    assert requirements.read_text(encoding="utf-8").splitlines() == [
+        "mcp[cli]",
+        "numpy==2.2.5",
+    ]
+    assert "ENV PYTHONPATH=/app/repo:/app/repo/src" in dockerfile.read_text(
+        encoding="utf-8"
+    )

@@ -769,20 +769,26 @@ class MCPWrapper:
         optional_imports: set[str] = set()
         visited: set[Path] = set()
         queue: list[Path] = [Path(server_py_path)]
+        source_roots = [source_root]
+        src_layout_root = source_root / "src"
+        if src_layout_root.is_dir():
+            source_roots.append(src_layout_root)
         shallow_local_modules: dict[str, list[Path]] = {}
-        for candidate in source_root.glob("*/*.py"):
-            shallow_local_modules.setdefault(candidate.stem, []).append(candidate)
+        for root in source_roots:
+            for candidate in root.glob("*/*.py"):
+                shallow_local_modules.setdefault(candidate.stem, []).append(candidate)
 
         def local_module_file(module: str) -> Path | None:
             if not module:
                 return None
-            base = source_root.joinpath(*module.split("."))
-            py_file = base.with_suffix(".py")
-            if py_file.is_file():
-                return py_file
-            init_file = base / "__init__.py"
-            if init_file.is_file():
-                return init_file
+            for root in source_roots:
+                base = root.joinpath(*module.split("."))
+                py_file = base.with_suffix(".py")
+                if py_file.is_file():
+                    return py_file
+                init_file = base / "__init__.py"
+                if init_file.is_file():
+                    return init_file
             if "." not in module:
                 matches = shallow_local_modules.get(module, [])
                 if len(matches) == 1:
@@ -961,7 +967,8 @@ class MCPWrapper:
         ).splitlines()
         local_top_levels = {
             child.stem if child.is_file() else child.name
-            for child in source_root.iterdir()
+            for root in source_roots
+            for child in root.iterdir()
             if (child.is_file() and child.suffix == ".py") or child.is_dir()
         }
         filtered_lines: list[str] = []
@@ -1198,6 +1205,19 @@ class MCPWrapper:
                             break
             fixed_lines.append(line)
 
+        pythonpath_line = "ENV PYTHONPATH=/app/repo:/app/repo/src"
+        if pythonpath_line not in fixed_lines:
+            insert_at = next(
+                (
+                    index + 1
+                    for index, docker_line in enumerate(fixed_lines)
+                    if docker_line.strip().upper().startswith("WORKDIR ")
+                ),
+                1,
+            )
+            fixed_lines.insert(insert_at, pythonpath_line)
+            fixed = True
+
         if fixed:
             Path(dockerfile_path).write_text("\n".join(fixed_lines), encoding="utf-8")
 
@@ -1264,6 +1284,7 @@ class MCPWrapper:
             standard = (
                 f"FROM {base_image}\n"
                 f"WORKDIR /app\n"
+                f"ENV PYTHONPATH=/app/repo:/app/repo/src\n"
                 f"COPY requirements.txt requirements-cpu.txt /app/\n"
                 f"ARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu\n"
                 f"RUN if [ -s /app/requirements-cpu.txt ]; then "
