@@ -123,6 +123,7 @@ def test_simple_chat_forwards_structured_output_options(vendor_client, monkeypat
     config = vendor_client.LLMConfig(
         model="openrouter/qwen/qwen3.6-flash",
         api_key="test",
+        request_timeout_seconds=123,
     )
 
     vendor_client.LLMClient(config).simple_chat(
@@ -133,3 +134,4 @@ def test_simple_chat_forwards_structured_output_options(vendor_client, monkeypat
 
     assert captured["max_tokens"] == 8192
     assert captured["response_format"] == {"type": "json_object"}
+    assert captured["timeout"] == 123

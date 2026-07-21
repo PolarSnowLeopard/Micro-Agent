@@ -70,6 +70,7 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
             "max_tokens": max_tokens or self.config.max_tokens,
+            "timeout": self.config.request_timeout_seconds,
         }
         if self.config.api_key:
             kwargs["api_key"] = self.config.api_key

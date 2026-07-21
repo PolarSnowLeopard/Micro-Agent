@@ -38,6 +38,9 @@ class LLMConfig:
     retry_max_seconds: float = field(
         default_factory=lambda: float(os.getenv("LLM_RETRY_MAX_SECONDS", "60"))
     )
+    request_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "180"))
+    )
 
     def __post_init__(self):
         if self.reasoning_enabled is None:
