@@ -1242,12 +1242,16 @@ class MCPWrapper:
 
     @staticmethod
     def _cleanup_docker(image_tag: str):
-        for cmd in [
+        # Only remove the image produced by this run.  Global image/builder
+        # pruning discards reusable dependency layers, slows every subsequent
+        # benchmark sample, and can interfere with unrelated Docker workloads
+        # on a shared host.
+        subprocess.run(
             f"docker rmi {image_tag} 2>/dev/null || true",
-            "docker image prune -f 2>/dev/null || true",
-            "docker builder prune -f 2>/dev/null || true",
-        ]:
-            subprocess.run(cmd, shell=True, capture_output=True, timeout=60)
+            shell=True,
+            capture_output=True,
+            timeout=60,
+        )
         print("  🧹 Docker 清理完成")
 
     @staticmethod

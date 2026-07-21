@@ -476,6 +476,35 @@ def test_vendor_bounds_structured_compiler_evidence():
     assert (starts, ends) == ("True", "True")
 
 
+def test_vendor_cleanup_removes_only_the_sample_image():
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; import src.wrapper as wrapper; calls=[]; "
+                "wrapper.subprocess.run=lambda command,**kwargs: calls.append(command); "
+                "wrapper.MCPWrapper._cleanup_docker('mcp-test:latest'); "
+                "print(json.dumps(calls))"
+            ),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    commands = json.loads(completed.stdout.splitlines()[-1])
+    assert commands == ["docker rmi mcp-test:latest 2>/dev/null || true"]
+
+
 def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
     vendor = (
         Path(__file__).parents[1]
