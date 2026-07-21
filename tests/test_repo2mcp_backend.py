@@ -762,7 +762,10 @@ def test_vendor_includes_imports_in_module_level_runtime_guards(tmp_path):
     server = output / "server.py"
     server.write_text("from main import RuntimeCfg\n", encoding="utf-8")
     requirements = output / "requirements.txt"
-    requirements.write_text("mcp[cli]\nmodels\n", encoding="utf-8")
+    requirements.write_text(
+        "mcp[cli]\nmodels\nlocal-helper\noptional-accel\n",
+        encoding="utf-8",
+    )
     completed = subprocess.run(
         [
             sys.executable,
@@ -785,6 +788,8 @@ def test_vendor_includes_imports_in_module_level_runtime_guards(tmp_path):
     fixes = json.loads(completed.stdout)
     assert fixes == [
         "requirements: remove repository-local module dependency models",
+        "requirements: remove repository-local module dependency local-helper",
+        "requirements: remove optional fallback import dependency optional-accel",
         "requirements: add reachable repository dependency torchvision==0.22.0"
     ]
     assert requirements.read_text(encoding="utf-8").splitlines() == [

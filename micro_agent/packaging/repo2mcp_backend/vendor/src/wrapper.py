@@ -749,6 +749,7 @@ class MCPWrapper:
 
         stdlib = set(getattr(sys, "stdlib_module_names", ())) | {"__future__"}
         external_imports: set[str] = set()
+        optional_imports: set[str] = set()
         visited: set[Path] = set()
         queue: list[Path] = [Path(server_py_path)]
         shallow_local_modules: dict[str, list[Path]] = {}
@@ -838,7 +839,18 @@ class MCPWrapper:
                 elif isinstance(statement, (ast.With, ast.AsyncWith)):
                     nested_bodies.append(statement.body)
                 elif isinstance(statement, ast.Try):
-                    if not has_import_fallback(statement):
+                    if has_import_fallback(statement):
+                        for optional in statement.body:
+                            if isinstance(optional, ast.Import):
+                                optional_imports.update(
+                                    alias.name.split(".", 1)[0].lower()
+                                    for alias in optional.names
+                                )
+                            elif isinstance(optional, ast.ImportFrom) and optional.module:
+                                optional_imports.add(
+                                    optional.module.split(".", 1)[0].lower()
+                                )
+                    else:
                         nested_bodies.append(statement.body)
                     nested_bodies.extend([statement.orelse, statement.finalbody])
                     nested_bodies.extend(handler.body for handler in statement.handlers)
@@ -940,9 +952,26 @@ class MCPWrapper:
             import_name = (
                 import_aliases.get(name, name).replace("-", "_") if name else None
             )
-            if import_name and import_name in local_top_levels:
+            is_repository_local = bool(
+                import_name
+                and (
+                    import_name in local_top_levels
+                    or local_module_file(import_name) is not None
+                )
+            )
+            is_optional_fallback = bool(
+                import_name
+                and import_name in optional_imports
+                and import_name not in external_imports
+            )
+            if is_repository_local or is_optional_fallback:
+                reason = (
+                    "repository-local module"
+                    if is_repository_local
+                    else "optional fallback import"
+                )
                 additions.append(
-                    f"requirements: remove repository-local module dependency {line.strip()}"
+                    f"requirements: remove {reason} dependency {line.strip()}"
                 )
                 continue
             filtered_lines.append(line)
