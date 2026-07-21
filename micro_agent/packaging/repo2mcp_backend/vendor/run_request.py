@@ -9,6 +9,7 @@ cannot collide with Micro-Agent's modules.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,9 +25,10 @@ def main() -> int:
     result_path = Path(sys.argv[2]).resolve()
     request = json.loads(request_path.read_text(encoding="utf-8"))
 
+    api_key = os.environ.pop("REPO2MCP_API_KEY", None)
     llm = LLMConfig(
         model=request["model"],
-        api_key=request.get("api_key"),
+        api_key=api_key,
         temperature=float(request.get("temperature", 0)),
         max_tokens=int(request.get("max_tokens", 8192)),
         reasoning_enabled=request.get("reasoning_enabled", False),

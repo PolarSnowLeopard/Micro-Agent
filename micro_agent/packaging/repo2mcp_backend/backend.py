@@ -40,6 +40,7 @@ class Repo2MCPBackendConfig:
     """Runtime knobs kept compatible with the v8 experiment defaults."""
 
     model: str
+    api_key: str | None = None
     temperature: float = 0.0
     max_tokens: int = 8192
     reasoning_enabled: bool = False
@@ -53,6 +54,7 @@ class Repo2MCPBackendConfig:
     def from_llm_config(cls, config: LLMConfig) -> "Repo2MCPBackendConfig":
         return cls(
             model=config.model,
+            api_key=config.api_key,
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             reasoning_enabled=(
@@ -160,8 +162,20 @@ class Repo2MCPBackend:
             json.dumps(request, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        env = os.environ.copy()
+        allowed_env = {
+            "PATH",
+            "HOME",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "DOCKER_HOST",
+        }
+        env = {key: value for key, value in os.environ.items() if key in allowed_env}
         env["PYTHONPATH"] = str(self.vendor_root)
+        if self.config.api_key:
+            env["REPO2MCP_API_KEY"] = self.config.api_key
         return Repo2MCPRun(
             command=(
                 sys.executable,

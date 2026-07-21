@@ -41,6 +41,8 @@ Local integration changes are deliberately bounded:
     loading/initialization pipeline steps; tool count is never a target itself.
 13. Each backend run owns a process group so cancellation also terminates Agent,
     shell, and Docker-build descendants instead of leaking work on the server.
+14. The subprocess receives an environment allowlist; its API key is consumed
+    into the LLM client and removed before Agent-accessible shell sessions start.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.

@@ -96,6 +96,7 @@ def test_prepare_run_stages_upload_without_git_or_secrets(tmp_path):
         Repo2MCPBackendConfig.from_llm_config(
             LLMConfig(
                 model="openrouter/qwen/qwen3.6-flash",
+                api_key="test-secret-not-persisted",
                 max_tokens=8192,
                 reasoning_enabled=False,
             )
@@ -119,6 +120,9 @@ def test_prepare_run_stages_upload_without_git_or_secrets(tmp_path):
     assert request["model"] == "openrouter/qwen/qwen3.6-flash"
     assert request["reasoning_enabled"] is False
     assert "api_key" not in request
+    assert run.env["REPO2MCP_API_KEY"] == "test-secret-not-persisted"
+    assert "LLM_API_KEY" not in run.env
+    assert "OPENROUTER_API_KEY" not in run.env
 
 
 def test_finalize_artifact_adds_platform_contract_and_repo(tmp_path):
