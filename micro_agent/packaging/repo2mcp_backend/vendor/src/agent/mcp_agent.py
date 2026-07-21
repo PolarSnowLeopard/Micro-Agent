@@ -108,6 +108,17 @@ class MCPAgent(BaseAgent):
         nudge_count = 0
 
         for step in range(self.max_steps):
+            if (
+                self.force_completion_after is not None
+                and step >= self.force_completion_after
+                and self.completion_check
+                and not self.completion_check()
+            ):
+                if self.verbose:
+                    print(
+                        "\n  ⚠️ 探索预算已用完，转入确定性的结构化产物编译"
+                    )
+                return ""
             logger.debug(f"Step {step + 1}/{self.max_steps}")
 
             self._compress_old_turns()
