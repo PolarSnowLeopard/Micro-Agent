@@ -227,7 +227,7 @@ def test_vendor_normalizes_import_names_before_docker_build(tmp_path):
     requirements = output / "requirements.txt"
     requirements.write_text(
         (
-            "mcp[cli]\nPIL>=8\ncv2\nsklearn\nopenslide\nPillow>=8\n"
+            "mcp[cli]\nPIL>=8\ncv2\nsklearn\nopenslide\ncomposer\nstreaming\nPillow>=8\n"
             "torch>=2\ntorchvision\n"
         ),
         encoding="utf-8",
@@ -249,13 +249,15 @@ def test_vendor_normalizes_import_names_before_docker_build(tmp_path):
         check=True,
     )
     fixes = json.loads(completed.stdout)
-    assert len(fixes) == 6
+    assert len(fixes) == 8
     assert requirements.read_text(encoding="utf-8").splitlines() == [
         "mcp[cli]",
         "Pillow>=8",
         "opencv-python-headless",
         "scikit-learn",
         "openslide-python",
+        "mosaicml",
+        "mosaicml-streaming",
     ]
     assert (output / "requirements-cpu.txt").read_text(
         encoding="utf-8"
@@ -673,12 +675,13 @@ def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
         encoding="utf-8",
     )
     (source / "models" / "eomt.py").write_text(
-        "import torch\nimport timm\nimport transformers\n"
+        "import torch\nimport timm\nimport transformers\nimport composer\nimport streaming\n"
         "from PIL import Image\ndef run():\n    import optional_solver\n",
         encoding="utf-8",
     )
     (source / "requirements.txt").write_text(
-        "timm==1.0.15\ntorch==2.7.0\nPillow==11.1.0\npytest\n",
+        "timm==1.0.15\ntorch==2.7.0\nPillow==11.1.0\n"
+        "mosaicml==0.22.0\nmosaicml-streaming==0.7.6\npytest\n",
         encoding="utf-8",
     )
     server = output / "server.py"
@@ -705,12 +708,14 @@ def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
         check=True,
     )
     fixes = json.loads(completed.stdout)
-    assert len(fixes) == 3
+    assert len(fixes) == 5
     assert requirements.read_text(encoding="utf-8").splitlines() == [
         "mcp[cli]",
         "Pillow",
         "timm==1.0.15",
         "torch==2.7.0",
+        "mosaicml==0.22.0",
+        "mosaicml-streaming==0.7.6",
         "transformers",
     ]
 

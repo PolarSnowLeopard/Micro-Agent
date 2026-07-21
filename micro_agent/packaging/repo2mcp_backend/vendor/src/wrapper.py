@@ -689,6 +689,8 @@ class MCPWrapper:
             "bio": "biopython",
             "fitz": "PyMuPDF",
             "openslide": "openslide-python",
+            "composer": "mosaicml",
+            "streaming": "mosaicml-streaming",
         }
         fixes: list[str] = []
         normalized: list[str] = []
@@ -925,6 +927,8 @@ class MCPWrapper:
             "python-dotenv": "dotenv",
             "beautifulsoup4": "bs4",
             "setuptools": "pkg_resources",
+            "mosaicml": "composer",
+            "mosaicml-streaming": "streaming",
         }
         distribution_for_import = {
             import_name: distribution
