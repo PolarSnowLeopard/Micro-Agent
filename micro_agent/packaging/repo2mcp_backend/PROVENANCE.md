@@ -1,0 +1,30 @@
+# Repo2MCP v8 provenance
+
+The `vendor/` directory is a source snapshot of the Repo2MCP implementation
+used for the AMQ-Bench v8 experiments on the project VPN server.
+
+- Source directory: `/home/lighthouse/github/Repo2MCP`
+- Git commit: `24263ba` (`v3: DARP + BAGE context management for large repos`)
+- Snapshot date: 2026-07-21
+- Experiment evidence: `/mnt/vdb500/work/repo2mcp_v8_full.log` (24/30
+  successful constructions with GPT-5.4)
+
+The experiment directory contained uncommitted refinements.  This snapshot
+therefore records the actual files used by the experiment instead of pretending
+that commit `24263ba` alone represents v8.  No `.env`, logs, generated output,
+workspace, Git metadata, or credentials are included.
+
+Local integration changes are deliberately bounded:
+
+1. `vendor/run_request.py` provides a JSON subprocess boundary.
+2. `MCPWrapper.run(..., stop_after_analysis=True)` permits the existing frontend
+   analysis phase to stop after producing `tool_design.json`.
+3. `LLMConfig.reasoning_enabled` forwards the platform's explicit non-thinking
+   setting to LiteLLM/OpenRouter.
+4. `tool_design_override` reuses the short-lived result of the frontend analysis
+   request instead of paying for the same semantic analysis twice.
+5. A bounded completion nudge and one-shot JSON compiler prevent smaller
+   production models from spending every analysis step on import exploration.
+
+All application-specific staging, sanitisation, frontend graph conversion, and
+deployment metadata live outside `vendor/`.

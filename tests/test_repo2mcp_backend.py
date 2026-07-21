@@ -1,0 +1,179 @@
+"""Contract tests for the isolated Repo2MCP v8 backend bridge."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from fastapi import HTTPException
+
+from api.routes.agent import _mcp_packaging_engine
+from micro_agent.core.config import LLMConfig
+from micro_agent.packaging.repo2mcp_backend import (
+    Repo2MCPBackend,
+    Repo2MCPBackendConfig,
+    tool_design_to_frontend_graph,
+)
+
+
+def _tool_design() -> dict:
+    return {
+        "tools": [
+            {
+                "name": "predict_risk",
+                "description": "Predict risk from a validated customer record.",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "type": "dict",
+                        "required": True,
+                        "description": "Customer fields",
+                    },
+                    {
+                        "name": "threshold",
+                        "type": "float",
+                        "required": False,
+                        "default": 0.5,
+                    },
+                ],
+                "returns": {"type": "dict", "description": "Risk result"},
+                "implementation": {
+                    "source_file": "model.py",
+                    "function_or_class": "predict",
+                    "verified_import": "from model import predict",
+                    "notes": "Validate and normalize the record before inference.",
+                },
+            },
+            {
+                "name": "explain_risk",
+                "description": "Explain an existing model risk prediction.",
+                "parameters": [
+                    {"name": "features", "type": "list", "required": True}
+                ],
+                "returns": {"type": "list"},
+                "implementation": {
+                    "source_file": "explain.py",
+                    "function_or_class": "explain",
+                },
+            },
+        ],
+        "dependencies": ["numpy"],
+    }
+
+
+def test_tool_design_to_frontend_graph_preserves_all_agent_tools():
+    graph = tool_design_to_frontend_graph(_tool_design())
+
+    assert graph["meta"] == {
+        "schemaVersion": "ioeb.repo2mcp-tool-design/v8",
+        "engine": "repo2mcp-v8",
+        "serviceCount": 1,
+        "toolCount": 2,
+        "analysisSummary": "Repo2MCP v8 Agent 从仓库中抽象出 2 个 MCP 工具。",
+    }
+    assert [node["label"] for node in graph["nodes"]] == [
+        "predict_risk",
+        "explain_risk",
+    ]
+    assert graph["nodes"][0]["input"] == "customer: object, threshold?: number"
+    assert graph["nodes"][0]["output"] == "object"
+    assert graph["nodes"][1]["output"] == "array"
+
+
+def test_prepare_run_stages_upload_without_git_or_secrets(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "main.py").write_text("def predict(value): return value\n", encoding="utf-8")
+    (project / ".env").write_text("SECRET=do-not-copy\n", encoding="utf-8")
+    (project / ".git").mkdir()
+    (project / ".git" / "config").write_text("private\n", encoding="utf-8")
+
+    backend = Repo2MCPBackend(
+        Repo2MCPBackendConfig.from_llm_config(
+            LLMConfig(
+                model="openrouter/qwen/qwen3.6-flash",
+                max_tokens=8192,
+                reasoning_enabled=False,
+            )
+        )
+    )
+    run = backend.prepare_run(
+        project_dir=project,
+        job_root=tmp_path / "job",
+        sample_id="../../unsafe sample",
+        wrap_intent="封装预测和解释能力",
+        analysis_only=True,
+    )
+
+    request = json.loads(run.request_path.read_text(encoding="utf-8"))
+    staged = run.workspace_base / run.sample_id / "source"
+    assert run.sample_id == "unsafe-sample"
+    assert (staged / "main.py").is_file()
+    assert (staged / ".git").is_dir()
+    assert not (staged / ".git" / "config").exists()
+    assert not (staged / ".env").exists()
+    assert request["model"] == "openrouter/qwen/qwen3.6-flash"
+    assert request["reasoning_enabled"] is False
+    assert "api_key" not in request
+
+
+def test_finalize_artifact_adds_platform_contract_and_repo(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "algorithm.py").write_text("def predict(value): return value\n", encoding="utf-8")
+    backend = Repo2MCPBackend(
+        Repo2MCPBackendConfig(model="openrouter/qwen/qwen3.6-flash")
+    )
+    run = backend.prepare_run(
+        project_dir=project,
+        job_root=tmp_path / "job",
+        sample_id="example",
+        wrap_intent="封装预测能力",
+        tool_design=_tool_design(),
+    )
+    request = json.loads(run.request_path.read_text(encoding="utf-8"))
+    assert request["tool_design"] == _tool_design()
+    paper_output = run.paper_output_dir / run.sample_id
+    paper_output.mkdir(parents=True)
+    (paper_output / "server.py").write_text("# generated\n", encoding="utf-8")
+    (paper_output / "Dockerfile").write_text(
+        "FROM python:3.11-slim\n"
+        "COPY requirements.txt /app/requirements.txt\n"
+        "RUN pip install --no-cache-dir -r /app/requirements.txt\n"
+        "COPY repo/ /app/repo/\n",
+        encoding="utf-8",
+    )
+    (paper_output / "requirements.txt").write_text("mcp\n", encoding="utf-8")
+    design_path = run.workspace_base / run.sample_id / "tool_design.json"
+    design_path.write_text(json.dumps(_tool_design()), encoding="utf-8")
+
+    artifact = backend.finalize_artifact(
+        run,
+        {"success": True, "usage": {"calls": 4, "total_tokens": 100}},
+    )
+
+    assert (artifact / "repo" / "algorithm.py").is_file()
+    assert (artifact / "docker-compose.yml").is_file()
+    assert (artifact / "function.json").is_file()
+    assert (artifact / "tool_design.json").is_file()
+    assert (artifact / "ioeb-service.json").is_file()
+    metadata = json.loads((artifact / "ioeb-service.json").read_text(encoding="utf-8"))
+    assert metadata["engine"] == "agentic"
+    assert metadata["generator"] == "repo2mcp-v8"
+    marker = json.loads((artifact / ".ioeb-ready").read_text(encoding="utf-8"))
+    assert marker["engine"] == "repo2mcp-v8"
+    assert marker["toolCount"] == 2
+    dockerfile = (artifact / "Dockerfile").read_text(encoding="utf-8")
+    assert "pypi.tuna.tsinghua.edu.cn" in dockerfile
+    assert "--timeout 120 --retries 5" in dockerfile
+
+
+def test_packaging_engine_is_explicitly_opt_in(monkeypatch):
+    monkeypatch.delenv("IOEB_MCP_PACKAGING_ENGINE", raising=False)
+    assert _mcp_packaging_engine() == "agentic"
+    monkeypatch.setenv("IOEB_MCP_PACKAGING_ENGINE", "repo2mcp")
+    assert _mcp_packaging_engine() == "repo2mcp-v8"
+    monkeypatch.setenv("IOEB_MCP_PACKAGING_ENGINE", "unknown")
+    with pytest.raises(HTTPException):
+        _mcp_packaging_engine()

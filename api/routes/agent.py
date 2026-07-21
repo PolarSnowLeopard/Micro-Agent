@@ -59,6 +59,11 @@ from micro_agent.packaging.workflow import (
     AgenticPackagingWorkflow,
     analysis_cache,
 )
+from micro_agent.packaging.repo2mcp_backend.workflow import (
+    Repo2MCPAnalysisWorkflow,
+    Repo2MCPPackagingWorkflow,
+    tool_design_cache,
+)
 from micro_agent.meta_app import PublishedMetaAppError, load_published_artifact
 from micro_agent.simulation.artifact_runtime import run_artifact
 from micro_agent.task.base import get_task, list_tasks, render_prompt
@@ -83,7 +88,20 @@ async def code_analysis(file: UploadFile = File(...)):
     project_dir = resolve_project_dir(saved, job_root / "input")
     ir = RepositoryAnalyzer().analyze(project_dir)
     graph_path = job_root / "function.json"
-    workflow = AgenticAnalysisWorkflow(project_dir=project_dir, ir=ir, graph_path=graph_path)
+    engine = _mcp_packaging_engine()
+    if engine == "repo2mcp-v8":
+        workflow = Repo2MCPAnalysisWorkflow(
+            project_dir=project_dir,
+            graph_path=graph_path,
+            repository_fingerprint=ir.fingerprint,
+            llm_config=config.get_llm("reasoning"),
+        )
+    else:
+        workflow = AgenticAnalysisWorkflow(
+            project_dir=project_dir,
+            ir=ir,
+            graph_path=graph_path,
+        )
     ctx = await task_manager.submit(workflow, file.filename or "uploaded repository")
 
     return await sse_response(
@@ -91,7 +109,7 @@ async def code_analysis(file: UploadFile = File(...)):
         output_files=[{"name": "function", "file": str(graph_path)}],
         cleanup=partial(cleanup_paths, job_root),
         components_meta={
-            "engine": "agentic",
+            "engine": engine,
             "phase": "semantic_planning",
             "repository_fingerprint": ir.fingerprint,
             "files_scanned": len(ir.files),
@@ -115,14 +133,33 @@ async def service_packaging(
     project_dir = resolve_project_dir(saved, job_root / "input")
     ir = RepositoryAnalyzer().analyze(project_dir)
     output_dir = job_root / "artifact"
-    cached_plan = analysis_cache.get(ir.fingerprint)
     response_session_id = session_id or uuid.uuid4().hex
-    workflow = AgenticPackagingWorkflow(
-        project_dir=project_dir,
-        ir=ir,
-        artifact_dir=output_dir,
-        plan=cached_plan,
+    engine = _mcp_packaging_engine()
+    cached_design = (
+        tool_design_cache.get(ir.fingerprint)
+        if engine == "repo2mcp-v8"
+        else None
     )
+    cached_plan = (
+        analysis_cache.get(ir.fingerprint)
+        if engine == "agentic"
+        else None
+    )
+    if engine == "repo2mcp-v8":
+        workflow = Repo2MCPPackagingWorkflow(
+            project_dir=project_dir,
+            artifact_dir=output_dir,
+            repository_fingerprint=ir.fingerprint,
+            llm_config=config.get_llm("reasoning"),
+            tool_design=cached_design,
+        )
+    else:
+        workflow = AgenticPackagingWorkflow(
+            project_dir=project_dir,
+            ir=ir,
+            artifact_dir=output_dir,
+            plan=cached_plan,
+        )
     ctx = await task_manager.submit(workflow, file.filename or "uploaded repository")
 
     return await sse_response(
@@ -132,17 +169,56 @@ async def service_packaging(
         cleanup=partial(cleanup_paths, job_root),
         session_id=response_session_id,
         components_meta={
-            "engine": "agentic",
+            "engine": engine,
             "phase": "implementation_and_verification",
             "llm_profile": "reasoning",
             "llm_model": config.get_llm("reasoning").model,
             "repository_fingerprint": ir.fingerprint,
-            "analysis_cache_hit": cached_plan is not None,
+            "analysis_cache_hit": (
+                cached_design is not None
+                if engine == "repo2mcp-v8"
+                else cached_plan is not None
+            ),
             "session_id": response_session_id,
-            "max_repair_attempts": workflow.max_repairs,
-            "host_bash_enabled": False,
+            "max_repair_attempts": (
+                workflow.backend.config.max_fix_retries
+                if engine == "repo2mcp-v8"
+                else workflow.max_repairs
+            ),
+            "host_bash_enabled": engine == "repo2mcp-v8",
+            "runtime_verification": (
+                "repo2mcp-docker"
+                if engine == "repo2mcp-v8"
+                else "static"
+            ),
+            "functional_verification_required": engine == "repo2mcp-v8",
         },
     )
+
+
+def _mcp_packaging_engine() -> str:
+    """Select an implementation without changing the frontend protocol.
+
+    Repo2MCP v8 remains opt-in until its host Bash execution is replaced by a
+    production isolation boundary.  The VPN benchmark/dev worker can enable it
+    explicitly with ``IOEB_MCP_PACKAGING_ENGINE=repo2mcp-v8``.
+    """
+    value = os.getenv("IOEB_MCP_PACKAGING_ENGINE", "agentic").strip().lower()
+    aliases = {
+        "agentic": "agentic",
+        "legacy": "agentic",
+        "repo2mcp": "repo2mcp-v8",
+        "repo2mcp-v8": "repo2mcp-v8",
+    }
+    try:
+        return aliases[value]
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "IOEB_MCP_PACKAGING_ENGINE 必须是 agentic 或 repo2mcp-v8"
+            ),
+        ) from exc
 
 
 # ============================================================
