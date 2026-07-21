@@ -1943,6 +1943,29 @@ async def test_save_plan_json_canonicalizes_only_nonsemantic_fields(tmp_path):
     assert isinstance(store.plan.tools[0]["smokeTest"]["evidence"], list)
 
 
+async def test_save_plan_json_recovers_verified_contract_smoke_input_alias(tmp_path):
+    ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
+    store = PlanStore(tmp_path / "plan.json", ir.known_symbols)
+    raw = _plan(ir).to_dict()
+    expected_inputs = []
+    for item in raw["services"][0]["tools"]:
+        smoke = item["smokeTest"]
+        expected_inputs.append(smoke.pop("input"))
+        smoke["toolSmokeInput"] = expected_inputs[-1]
+
+    result = await SavePackagingPlanJson(store).execute(
+        content=json.dumps(raw, ensure_ascii=False)
+    )
+
+    assert not result.error
+    assert store.plan is not None
+    assert [tool["smokeTest"]["input"] for tool in store.plan.tools] == expected_inputs
+    assert all(
+        "toolSmokeInput" not in tool["smokeTest"]
+        for tool in store.plan.tools
+    )
+
+
 async def test_save_plan_json_does_not_hide_missing_smoke_contract(tmp_path):
     ir = RepositoryAnalyzer().analyze(_sample_project(tmp_path))
     store = PlanStore(tmp_path / "plan.json", ir.known_symbols)

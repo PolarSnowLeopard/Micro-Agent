@@ -1422,8 +1422,20 @@ def _canonicalize_nonsemantic_shape(raw: dict[str, Any]) -> None:
                     f"Validate the public JSON inputs, call {symbols}, and serialize its result."
                 )
             smoke = tool.get("smokeTest")
-            if isinstance(smoke, dict) and isinstance(smoke.get("evidence"), str):
-                smoke["evidence"] = [smoke["evidence"]]
+            if isinstance(smoke, dict):
+                legacy_smoke_input = smoke.pop("toolSmokeInput", None)
+                if (
+                    not isinstance(smoke.get("input"), dict)
+                    and isinstance(legacy_smoke_input, dict)
+                ):
+                    # The verified contract context deliberately calls this field
+                    # ``toolSmokeInput``. Some providers copy that evidence label
+                    # into the plan instead of the public ``smokeTest.input``
+                    # schema. Renaming the same object is a shape repair only; the
+                    # normal contract-grounding and provenance gates still run.
+                    smoke["input"] = legacy_smoke_input
+                if isinstance(smoke.get("evidence"), str):
+                    smoke["evidence"] = [smoke["evidence"]]
 
     if nested_exclusions:
         root_exclusions = raw.get("excludedSymbols", [])

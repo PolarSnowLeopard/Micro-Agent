@@ -890,6 +890,16 @@ async def _run_planner(
                 )
                 return
             if result.error:
+                yield AgentEvent(
+                    type="think",
+                    step=step_offset + agent.max_steps,
+                    data={
+                        "thought": (
+                            "[规划文本恢复校验] 已恢复模型返回的 JSON，但仍未通过同一质量门禁：\n"
+                            + result.error
+                        )
+                    },
+                )
                 break
         step_offset += attempt_step_span
         yield AgentEvent(
