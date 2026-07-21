@@ -562,3 +562,71 @@ def test_vendor_adds_only_reachable_declared_runtime_dependencies(tmp_path):
         "torch==2.7.0",
         "transformers",
     ]
+
+
+def test_vendor_includes_imports_in_module_level_runtime_guards(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    (source / "models").mkdir(parents=True)
+    output.mkdir()
+    (source / "main.py").write_text(
+        "from models import RuntimeCfg\n",
+        encoding="utf-8",
+    )
+    (source / "models" / "__init__.py").write_text(
+        "try:\n"
+        "    from .runtime import Runtime\n"
+        "    RuntimeCfg = Runtime\n"
+        "except ImportError:\n"
+        "    RuntimeCfg = None\n",
+        encoding="utf-8",
+    )
+    (source / "models" / "runtime.py").write_text(
+        "import torchvision\n"
+        "class Runtime:\n"
+        "    def run(self):\n"
+        "        import optional_solver\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text(
+        "torchvision==0.22.0\noptional-solver\n",
+        encoding="utf-8",
+    )
+    server = output / "server.py"
+    server.write_text("from main import RuntimeCfg\n", encoding="utf-8")
+    requirements = output / "requirements.txt"
+    requirements.write_text("mcp[cli]\n", encoding="utf-8")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; from src.wrapper import MCPWrapper; "
+                "print(json.dumps(MCPWrapper._merge_declared_runtime_dependencies("
+                "sys.argv[1],sys.argv[2],sys.argv[3])))"
+            ),
+            str(server),
+            str(source),
+            str(output),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    fixes = json.loads(completed.stdout)
+    assert fixes == [
+        "requirements: add reachable repository dependency torchvision==0.22.0"
+    ]
+    assert requirements.read_text(encoding="utf-8").splitlines() == [
+        "mcp[cli]",
+        "torchvision==0.22.0",
+    ]

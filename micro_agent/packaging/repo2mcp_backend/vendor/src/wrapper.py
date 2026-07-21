@@ -764,6 +764,31 @@ class MCPWrapper:
                 return init_file
             return None
 
+        def import_time_statements(body: list[ast.stmt]):
+            """Yield statements executed while a module is imported.
+
+            Imports guarded by module-level ``try``/``if`` blocks still run at
+            startup and can be required to define the module's public API.  Do
+            not descend into function or class bodies because those imports are
+            deferred until the selected capability is invoked.
+            """
+            for statement in body:
+                yield statement
+                nested_bodies: list[list[ast.stmt]] = []
+                if isinstance(statement, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+                    nested_bodies.extend((statement.body, statement.orelse))
+                elif isinstance(statement, (ast.With, ast.AsyncWith)):
+                    nested_bodies.append(statement.body)
+                elif isinstance(statement, ast.Try):
+                    nested_bodies.extend(
+                        [statement.body, statement.orelse, statement.finalbody]
+                    )
+                    nested_bodies.extend(handler.body for handler in statement.handlers)
+                elif isinstance(statement, ast.Match):
+                    nested_bodies.extend(case.body for case in statement.cases)
+                for nested in nested_bodies:
+                    yield from import_time_statements(nested)
+
         while queue and len(visited) < max_local_modules:
             current = queue.pop(0)
             resolved = current.resolve()
@@ -786,10 +811,10 @@ class MCPWrapper:
             except ValueError:
                 package_parts = []
 
-            # Import-time health only depends on module-level imports.  Walking
-            # function bodies would pull in optional solver/visualization extras
-            # that are never touched by the selected MCP tools at startup.
-            for node in tree.body:
+            # Import-time health depends on direct module imports and imports in
+            # module-level control flow. Walking function/class bodies would pull
+            # in deferred optional solver/visualization extras unnecessarily.
+            for node in import_time_statements(tree.body):
                 candidates: list[str] = []
                 if isinstance(node, ast.Import):
                     candidates.extend(alias.name for alias in node.names)
