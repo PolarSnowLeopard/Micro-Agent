@@ -644,22 +644,39 @@ def _ground_plan_smoke_from_verified_contract(
             required = schema.get("required", []) if isinstance(schema, dict) else []
             if not isinstance(properties, dict) or not isinstance(required, list):
                 continue
-            candidates: list[dict[str, Any]] = []
+            entry_required = (
+                set(
+                    store.symbol_required_parameters.get(
+                        "main.main_process",
+                        [],
+                    )
+                )
+                if store.symbol_required_parameters is not None
+                else None
+            )
+            candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for record in _contract_branch_records(tool, records):
-                smoke_input = record["toolSmokeInput"]
+                smoke_input = _project_contract_smoke_input(
+                    tool,
+                    record,
+                    entry_required,
+                )
                 if (
                     not set(required).issubset(smoke_input)
-                    or _contract_record_was_rejected(name, record, rejected)
+                    or _contract_input_was_rejected(
+                        name,
+                        smoke_input,
+                        rejected,
+                    )
                 ):
                     continue
-                candidates.append(record)
+                candidates.append((record, smoke_input))
             if not candidates:
                 continue
-            selected = min(
+            selected, smoke_input = min(
                 candidates,
-                key=lambda item: _canonical_smoke_input(item["toolSmokeInput"]),
+                key=lambda item: _canonical_smoke_input(item[1]),
             )
-            smoke_input = selected["toolSmokeInput"]
             for key, value in smoke_input.items():
                 if key in properties:
                     if value is None:
@@ -674,14 +691,8 @@ def _ground_plan_smoke_from_verified_contract(
                         ensure_ascii=False,
                     )
                 )
-            entry_required = set(
-                (store.symbol_required_parameters or {}).get(
-                    "main.main_process",
-                    [],
-                )
-            )
             for key in smoke_input:
-                if key in entry_required and key not in required:
+                if entry_required is not None and key in entry_required and key not in required:
                     required.append(key)
             tool["smokeTest"] = {
                 "enabled": True,
@@ -836,12 +847,43 @@ def _contract_branch_records(
     return matched
 
 
-def _contract_record_was_rejected(
-    tool_name: str,
+def _project_contract_smoke_input(
+    tool: dict[str, Any],
     record: dict[str, Any],
+    entry_required: set[str] | None,
+) -> dict[str, Any]:
+    """Remove captured defaults that are intentionally internal to a Tool.
+
+    Contract capture applies function defaults before serializing a successful
+    call.  Those values prove the internal invocation, but they are not public
+    arguments when the reviewed Tool schema omits them and the source function
+    does not require them.  Dispatch values fixed by ``adapterStrategy`` are the
+    common case; re-exposing them would recreate the dispatcher envelope.
+    """
+
+    smoke_input = record.get("toolSmokeInput")
+    if not isinstance(smoke_input, dict):
+        return {}
+    schema = tool.get("inputSchema")
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    public_names = set(properties) if isinstance(properties, dict) else set()
+    if entry_required is None:
+        public_names.update(smoke_input)
+    else:
+        public_names.update(entry_required)
+    return {
+        key: value
+        for key, value in smoke_input.items()
+        if key in public_names
+    }
+
+
+def _contract_input_was_rejected(
+    tool_name: str,
+    smoke_input: dict[str, Any],
     rejected: dict[str, set[str]],
 ) -> bool:
-    return _canonical_smoke_input(record["toolSmokeInput"]) in rejected.get(
+    return _canonical_smoke_input(smoke_input) in rejected.get(
         tool_name,
         set(),
     )
@@ -870,10 +912,31 @@ def _verified_contract_alignment_errors(
                 "运行时已验证分支，或仍公开了应由 Tool 固定的分派参数"
             )
             continue
-        available = [
-            record
+        entry_required = (
+            set(
+                store.symbol_required_parameters.get(
+                    "main.main_process",
+                    [],
+                )
+            )
+            if store.symbol_required_parameters is not None
+            else None
+        )
+        projected = [
+            (
+                record,
+                _project_contract_smoke_input(
+                    tool,
+                    record,
+                    entry_required,
+                ),
+            )
             for record in branch_records
-            if not _contract_record_was_rejected(name, record, rejected)
+        ]
+        available = [
+            item
+            for item in projected
+            if not _contract_input_was_rejected(name, item[1], rejected)
         ]
         if not available:
             # Runtime evidence has superseded these fixtures. The bounded smoke
@@ -883,19 +946,19 @@ def _verified_contract_alignment_errors(
         properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
         required = schema.get("required", []) if isinstance(schema, dict) else []
         fitting = [
-            record
-            for record in available
+            item
+            for item in available
             if isinstance(properties, dict)
             and isinstance(required, list)
-            and set(record["toolSmokeInput"]).issubset(properties)
-            and set(required).issubset(record["toolSmokeInput"])
+            and set(item[1]).issubset(properties)
+            and set(required).issubset(item[1])
         ]
         if not fitting:
             fixture_keys = sorted(
                 {
                     key
-                    for record in available
-                    for key in record["toolSmokeInput"]
+                    for _, smoke_candidate in available
+                    for key in smoke_candidate
                 }
             )
             errors.append(
@@ -908,8 +971,8 @@ def _verified_contract_alignment_errors(
         smoke = tool.get("smokeTest", {})
         smoke_input = smoke.get("input") if isinstance(smoke, dict) else None
         expected = {
-            _canonical_smoke_input(record["toolSmokeInput"])
-            for record in fitting
+            _canonical_smoke_input(smoke_candidate)
+            for _, smoke_candidate in fitting
         }
         if (
             not smoke.get("enabled")

@@ -1372,11 +1372,9 @@ async def test_runtime_grounded_null_widens_only_verified_property(
         "string",
         "null",
     ]
-    assert grounded["inputSchema"]["properties"]["equivalency_kwargs"][
-        "type"
-    ] == "null"
+    assert "equivalency_kwargs" not in grounded["inputSchema"]["properties"]
     assert grounded["smokeTest"]["input"]["activation"] is None
-    assert grounded["smokeTest"]["input"]["equivalency_kwargs"] is None
+    assert "equivalency_kwargs" not in grounded["smokeTest"]["input"]
 
     artifact = prepare_artifact(project, tmp_path / "artifact", store.plan)
     (artifact / "adapters.py").write_text(
@@ -1399,7 +1397,6 @@ async def test_runtime_grounded_null_widens_only_verified_property(
         {
             "value": 0.5,
             "activation": None,
-            "equivalency_kwargs": None,
         },
         convert_result=True,
     )

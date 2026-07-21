@@ -64,6 +64,9 @@ PLANNER_SYSTEM_PROMPT = """你是 IOEB 的 MCP 服务架构 Agent。你的职责
 4. 每个工具必须给出明确 JSON Schema、源码符号、证据、适配/重构策略和依赖关系。禁止把复杂输入一律降级成 JSON 字符串。
    Tool description 是给跨语言 Agent 使用的协议文本：必须包含至少 12 个英文词（可中英双语），
    说明能力、适用时机以及它与同服务其他 Tool 的区别；不能只写“执行预测”“处理数据”。
+   同一 service 有多个 Tool 时，每个 description 应使用三段彼此不同的内容：独有领域动作、
+   正向选择条件、负向禁用条件。不要重复 service 概述，不要靠罗列其他 Tool 名称说明区别；
+   当校验反馈 Jaccard distance 目标时，必须按该数值重写词汇而不是只增补相同套话。
    inputSchema 每个 property 都必须有基于源码语义的 description；enum/default/format/minimum/maximum
    只能在源码、测试或文档有依据时填写。outputSchema 必须有整体 description，或为每个稳定顶层字段
    写 description，明确单位、结构和空值语义；禁止为提高评分编造约束或返回字段。
