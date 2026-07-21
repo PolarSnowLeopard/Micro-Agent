@@ -27,6 +27,8 @@ Local integration changes are deliberately bounded:
    production models from spending every analysis step on import exploration.
 6. Agents return immediately after their required output files exist; later
    deterministic validation remains responsible for accepting those files.
+7. Batch and subprocess entry points both honor `LLM_REASONING_ENABLED`, so the
+   production Qwen profile cannot silently fall back to provider-default thinking.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.

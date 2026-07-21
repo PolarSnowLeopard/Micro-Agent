@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -177,3 +179,29 @@ def test_packaging_engine_is_explicitly_opt_in(monkeypatch):
     monkeypatch.setenv("IOEB_MCP_PACKAGING_ENGINE", "unknown")
     with pytest.raises(HTTPException):
         _mcp_packaging_engine()
+
+
+def test_vendor_batch_config_honors_disabled_reasoning(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from config import LLMConfig; "
+                "print(LLMConfig(model='openrouter/qwen/qwen3.6-flash').reasoning_enabled)"
+            ),
+        ],
+        cwd=vendor,
+        env={"PATH": str(Path(sys.executable).parent), "LLM_REASONING_ENABLED": "false"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert completed.stdout.strip() == "False"

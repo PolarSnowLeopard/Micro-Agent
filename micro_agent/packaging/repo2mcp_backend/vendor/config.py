@@ -31,6 +31,14 @@ class LLMConfig:
     reasoning_enabled: Optional[bool] = None
 
     def __post_init__(self):
+        if self.reasoning_enabled is None:
+            raw_reasoning = os.getenv("LLM_REASONING_ENABLED")
+            if raw_reasoning:
+                normalized = raw_reasoning.strip().lower()
+                if normalized in {"1", "true", "yes", "on"}:
+                    self.reasoning_enabled = True
+                elif normalized in {"0", "false", "no", "off"}:
+                    self.reasoning_enabled = False
         if self.model.startswith("openrouter/"):
             if self.api_key is None:
                 self.api_key = os.getenv("OPENROUTER_API_KEY")
