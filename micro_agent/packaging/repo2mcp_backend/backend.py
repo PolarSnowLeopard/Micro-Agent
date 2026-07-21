@@ -385,7 +385,21 @@ def _json_type(value: Any) -> str:
 def _harden_dockerfile(path: Path) -> None:
     if not path.is_file():
         return
+    cpu_requirements = path.parent / "requirements-cpu.txt"
+    cpu_requirements.touch(exist_ok=True)
     text = path.read_text(encoding="utf-8", errors="replace")
+    cpu_copy = "COPY requirements.txt requirements-cpu.txt /app/"
+    text = text.replace("COPY requirements.txt /app/requirements.txt", cpu_copy)
+    if "PYTORCH_CPU_INDEX_URL" not in text:
+        text = text.replace(
+            cpu_copy,
+            cpu_copy
+            + "\nARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu"
+            + "\nRUN if [ -s /app/requirements-cpu.txt ]; then "
+            + "pip install --no-cache-dir --index-url "
+            + "\"${PYTORCH_CPU_INDEX_URL}\" --timeout 120 --retries 5 "
+            + "-r /app/requirements-cpu.txt; fi",
+        )
     original = "RUN pip install --no-cache-dir -r /app/requirements.txt"
     replacement = (
         "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"

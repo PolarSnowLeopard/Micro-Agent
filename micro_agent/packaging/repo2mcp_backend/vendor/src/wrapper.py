@@ -510,7 +510,12 @@ class MCPWrapper:
             os.makedirs(final_output, exist_ok=True)
 
             collected = []
-            for fname in ["server.py", "Dockerfile", "requirements.txt"]:
+            for fname in [
+                "server.py",
+                "Dockerfile",
+                "requirements.txt",
+                "requirements-cpu.txt",
+            ]:
                 src = os.path.join(output_dir, fname)
                 if os.path.exists(src):
                     shutil.copy2(src, os.path.join(final_output, fname))
@@ -634,6 +639,7 @@ class MCPWrapper:
         }
         fixes: list[str] = []
         normalized: list[str] = []
+        cpu_requirements: list[str] = []
         seen: set[str] = set()
         for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = raw_line.strip()
@@ -653,9 +659,17 @@ class MCPWrapper:
             if key in seen:
                 continue
             seen.add(key)
-            normalized.append(line)
+            if key in {"torch", "torchvision", "torchaudio"}:
+                cpu_requirements.append(line)
+                fixes.append(f"requirements: {line} → requirements-cpu.txt")
+            else:
+                normalized.append(line)
         path.write_text(
             "\n".join(normalized) + ("\n" if normalized else ""),
+            encoding="utf-8",
+        )
+        (Path(output_dir) / "requirements-cpu.txt").write_text(
+            "\n".join(cpu_requirements) + ("\n" if cpu_requirements else ""),
             encoding="utf-8",
         )
         return fixes
@@ -817,6 +831,21 @@ class MCPWrapper:
             Path(dockerfile_path).write_text("\n".join(fixed_lines), encoding="utf-8")
 
         content = Path(dockerfile_path).read_text(encoding="utf-8")
+        cpu_copy = "COPY requirements.txt requirements-cpu.txt /app/"
+        content = content.replace(
+            "COPY requirements.txt /app/requirements.txt",
+            cpu_copy,
+        )
+        if "PYTORCH_CPU_INDEX_URL" not in content:
+            content = content.replace(
+                cpu_copy,
+                cpu_copy
+                + "\nARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu"
+                + "\nRUN if [ -s /app/requirements-cpu.txt ]; then "
+                + "pip install --no-cache-dir --index-url "
+                + "\"${PYTORCH_CPU_INDEX_URL}\" --timeout 120 --retries 5 "
+                + "-r /app/requirements-cpu.txt; fi",
+            )
         plain_pip_install = "RUN pip install --no-cache-dir -r /app/requirements.txt"
         if plain_pip_install in content:
             content = content.replace(
@@ -827,9 +856,11 @@ class MCPWrapper:
             )
             Path(dockerfile_path).write_text(content, encoding="utf-8")
             print("  🔧 Dockerfile 已在构建前启用可靠 PyPI 镜像、超时与重试")
+        else:
+            Path(dockerfile_path).write_text(content, encoding="utf-8")
 
         copy_pattern = re.findall(r'(?:COPY|ADD)\s+(\S+)', content, re.IGNORECASE)
-        known_context = {".", "requirements.txt", "repo/", "repo", "server.py",
+        known_context = {".", "requirements.txt", "requirements-cpu.txt", "repo/", "repo", "server.py",
                          "/app/repo/", "/app/requirements.txt", "/app/server.py",
                          "--from=", "--chown="}
         bad_copies = []
@@ -862,8 +893,14 @@ class MCPWrapper:
             standard = (
                 f"FROM {base_image}\n"
                 f"WORKDIR /app\n"
-                f"COPY requirements.txt /app/requirements.txt\n"
-                f"RUN pip install --no-cache-dir -r /app/requirements.txt\n"
+                f"COPY requirements.txt requirements-cpu.txt /app/\n"
+                f"ARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu\n"
+                f"RUN if [ -s /app/requirements-cpu.txt ]; then "
+                f"pip install --no-cache-dir --index-url \"${{PYTORCH_CPU_INDEX_URL}}\" "
+                f"--timeout 120 --retries 5 -r /app/requirements-cpu.txt; fi\n"
+                f"ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple\n"
+                f"RUN pip install --no-cache-dir --index-url \"${{PIP_INDEX_URL}}\" "
+                f"--timeout 120 --retries 5 -r /app/requirements.txt\n"
                 f"{repo_reqs_line}"
                 f"COPY repo/ /app/repo/\n"
                 f"COPY server.py /app/server.py\n"

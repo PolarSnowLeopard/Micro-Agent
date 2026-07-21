@@ -160,6 +160,7 @@ def test_finalize_artifact_adds_platform_contract_and_repo(tmp_path):
     assert (artifact / "docker-compose.yml").is_file()
     assert (artifact / "function.json").is_file()
     assert (artifact / "tool_design.json").is_file()
+    assert (artifact / "requirements-cpu.txt").is_file()
     assert (artifact / "ioeb-service.json").is_file()
     metadata = json.loads((artifact / "ioeb-service.json").read_text(encoding="utf-8"))
     assert metadata["engine"] == "agentic"
@@ -169,6 +170,7 @@ def test_finalize_artifact_adds_platform_contract_and_repo(tmp_path):
     assert marker["toolCount"] == 2
     dockerfile = (artifact / "Dockerfile").read_text(encoding="utf-8")
     assert "pypi.tuna.tsinghua.edu.cn" in dockerfile
+    assert "download.pytorch.org/whl/cpu" in dockerfile
     assert "--timeout 120 --retries 5" in dockerfile
 
 
@@ -220,7 +222,10 @@ def test_vendor_normalizes_import_names_before_docker_build(tmp_path):
     output.mkdir()
     requirements = output / "requirements.txt"
     requirements.write_text(
-        "mcp[cli]\nPIL>=8\ncv2\nsklearn\nopenslide\nPillow>=8\n",
+        (
+            "mcp[cli]\nPIL>=8\ncv2\nsklearn\nopenslide\nPillow>=8\n"
+            "torch>=2\ntorchvision\n"
+        ),
         encoding="utf-8",
     )
     completed = subprocess.run(
@@ -240,7 +245,7 @@ def test_vendor_normalizes_import_names_before_docker_build(tmp_path):
         check=True,
     )
     fixes = json.loads(completed.stdout)
-    assert len(fixes) == 4
+    assert len(fixes) == 6
     assert requirements.read_text(encoding="utf-8").splitlines() == [
         "mcp[cli]",
         "Pillow>=8",
@@ -248,3 +253,6 @@ def test_vendor_normalizes_import_names_before_docker_build(tmp_path):
         "scikit-learn",
         "openslide-python",
     ]
+    assert (output / "requirements-cpu.txt").read_text(
+        encoding="utf-8"
+    ).splitlines() == ["torch>=2", "torchvision"]

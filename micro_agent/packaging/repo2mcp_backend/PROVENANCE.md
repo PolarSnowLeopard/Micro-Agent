@@ -33,6 +33,8 @@ Local integration changes are deliberately bounded:
    paper build gate, rather than mutating an already-verified Dockerfile later.
 9. Common Python import names are normalized to their installable distribution
    names before Docker build, avoiding predictable repair-agent loops.
+10. Torch-family dependencies are installed from the official CPU wheel index
+    before ordinary requirements, preventing accidental CUDA downloads.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.
