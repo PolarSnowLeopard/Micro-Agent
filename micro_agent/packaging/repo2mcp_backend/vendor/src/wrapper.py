@@ -344,6 +344,10 @@ class MCPWrapper:
                 if missing:
                     return self._fail("generation", f"缺少必要文件: {missing}")
 
+            dependency_fixes = self._normalize_generated_requirements(output_dir)
+            for fix_msg in dependency_fixes:
+                print(f"  🔧 {fix_msg}")
+
             server_py_path = os.path.join(output_dir, "server.py")
             tool_count = self._count_mcp_tools(server_py_path)
             if tool_count == 0:
@@ -611,6 +615,50 @@ class MCPWrapper:
             return count
         except Exception:
             return 0
+
+    @staticmethod
+    def _normalize_generated_requirements(output_dir: str) -> list[str]:
+        """Normalize common import names before paying for a failed Docker build."""
+        path = Path(output_dir) / "requirements.txt"
+        if not path.is_file():
+            return []
+        aliases = {
+            "pil": "Pillow",
+            "cv2": "opencv-python-headless",
+            "sklearn": "scikit-learn",
+            "yaml": "PyYAML",
+            "skimage": "scikit-image",
+            "bio": "biopython",
+            "fitz": "PyMuPDF",
+            "openslide": "openslide-python",
+        }
+        fixes: list[str] = []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = re.match(r"^([A-Za-z0-9_.-]+)(.*)$", line)
+            if not match:
+                continue
+            name, suffix = match.groups()
+            replacement = aliases.get(name.lower())
+            if replacement:
+                fixed = replacement + suffix
+                fixes.append(f"requirements: {line} → {fixed}")
+                line = fixed
+                name = replacement
+            key = re.sub(r"[-_.]+", "-", name).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(line)
+        path.write_text(
+            "\n".join(normalized) + ("\n" if normalized else ""),
+            encoding="utf-8",
+        )
+        return fixes
 
     @staticmethod
     def _get_tool_functions(server_py_path: str) -> list:

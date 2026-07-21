@@ -31,6 +31,8 @@ Local integration changes are deliberately bounded:
    production Qwen profile cannot silently fall back to provider-default thinking.
 8. The reliable package index, timeout, and retry policy is applied before the
    paper build gate, rather than mutating an already-verified Dockerfile later.
+9. Common Python import names are normalized to their installable distribution
+   names before Docker build, avoiding predictable repair-agent loops.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -205,3 +206,45 @@ def test_vendor_batch_config_honors_disabled_reasoning(tmp_path):
         check=True,
     )
     assert completed.stdout.strip() == "False"
+
+
+def test_vendor_normalizes_import_names_before_docker_build(tmp_path):
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    requirements = output / "requirements.txt"
+    requirements.write_text(
+        "mcp[cli]\nPIL>=8\ncv2\nsklearn\nopenslide\nPillow>=8\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; from src.wrapper import MCPWrapper; "
+                "print(json.dumps(MCPWrapper._normalize_generated_requirements(sys.argv[1])))"
+            ),
+            str(output),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    fixes = json.loads(completed.stdout)
+    assert len(fixes) == 4
+    assert requirements.read_text(encoding="utf-8").splitlines() == [
+        "mcp[cli]",
+        "Pillow>=8",
+        "opencv-python-headless",
+        "scikit-learn",
+        "openslide-python",
+    ]
