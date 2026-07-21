@@ -435,6 +435,37 @@ def test_vendor_stops_empty_analysis_at_evidence_budget():
     assert completed.stdout.splitlines()[-2:] == ["''", "1"]
 
 
+def test_vendor_stops_after_repeated_empty_model_responses():
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from src.agent.mcp_agent import MCPAgent; "
+                "from src.llm.client import LLMResponse; "
+                "from src.tools.base import ToolRegistry; "
+                "Fake=type('Fake',(),{'calls':0,'chat':lambda s,**k: "
+                "(setattr(s,'calls',s.calls+1) or LLMResponse(None,[],'stop'))}); "
+                "llm=Fake(); a=MCPAgent(llm=llm,tools=ToolRegistry(),max_steps=10,verbose=False); "
+                "print(repr(a.run('task'))); print(llm.calls)"
+            ),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert completed.stdout.splitlines()[-2:] == ["''", "2"]
+
+
 def test_vendor_extracts_nested_tool_design_from_text(tmp_path):
     vendor = (
         Path(__file__).parents[1]

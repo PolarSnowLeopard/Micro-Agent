@@ -265,11 +265,20 @@ class MCPWrapper:
                     f"写入路径: {tool_design_path}\n"
                     f"**重要：必须用 bash 写入文件，不要只在回复中描述！**\n"
                 )
+                retry_tools = ToolRegistry()
+                retry_tools.register(BashTool(sandbox))
                 retry_agent = MCPAgent(
-                    llm=llm, tools=tools,
+                    llm=llm, tools=retry_tools,
                     system_prompt=analysis_system,
                     max_steps=self.analysis_steps,
                     verbose=self._agent_verbose,
+                    completion_check=lambda: os.path.isfile(tool_design_path),
+                    completion_nudge=(
+                        f"不要继续解释；立即用 bash heredoc 将最终 JSON 写入 "
+                        f"{tool_design_path}。"
+                    ),
+                    force_completion_after=4,
+                    compact_initial_task_after=1,
                 )
                 retry_result = retry_agent.run(retry_task)
                 if not os.path.isfile(tool_design_path):
@@ -294,6 +303,12 @@ class MCPWrapper:
                     system_prompt=analysis_system,
                     max_steps=self.analysis_steps,
                     verbose=self._agent_verbose,
+                    completion_check=lambda: os.path.isfile(tool_design_path),
+                    completion_nudge=(
+                        f"立即修正并用 bash heredoc 覆盖 {tool_design_path}。"
+                    ),
+                    force_completion_after=6,
+                    compact_initial_task_after=1,
                 )
                 retry_result = retry_agent.run(retry_task)
                 if not os.path.isfile(tool_design_path):

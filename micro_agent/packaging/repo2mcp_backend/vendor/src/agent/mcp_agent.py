@@ -106,6 +106,7 @@ class MCPAgent(BaseAgent):
             print(f"{'─'*60}")
 
         nudge_count = 0
+        consecutive_empty_responses = 0
 
         for step in range(self.max_steps):
             if (
@@ -133,6 +134,7 @@ class MCPAgent(BaseAgent):
                 return f"LLM 调用失败: {e}"
 
             if response.has_tool_calls:
+                consecutive_empty_responses = 0
                 self._handle_tool_calls(response, step)
                 self._compact_initial_task(step + 1)
 
@@ -167,6 +169,7 @@ class MCPAgent(BaseAgent):
                     })
             else:
                 if response.content:
+                    consecutive_empty_responses = 0
                     self.messages.append({
                         "role": "assistant",
                         "content": response.content
@@ -199,7 +202,11 @@ class MCPAgent(BaseAgent):
                         print(f"\n✅ Agent 完成 (step {step + 1}): {preview}...")
                     return response.content
 
+                consecutive_empty_responses += 1
                 logger.warning(f"Empty response at step {step + 1}")
+                if consecutive_empty_responses >= 2:
+                    logger.warning("Stopping agent after two consecutive empty responses")
+                    return ""
 
         # 达到最大步数
         if self.verbose:
