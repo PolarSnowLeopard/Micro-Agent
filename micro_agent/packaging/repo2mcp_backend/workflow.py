@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -59,7 +61,10 @@ class _Repo2MCPWorkflowBase:
 
     def cancel(self) -> None:
         if self._process is not None and self._process.returncode is None:
-            self._process.terminate()
+            try:
+                os.killpg(self._process.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                self._process.terminate()
 
 
 class Repo2MCPAnalysisWorkflow(_Repo2MCPWorkflowBase):
@@ -227,6 +232,7 @@ async def _execute_process(
         env=run.env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     assert workflow._process.stdout is not None
     step = 1

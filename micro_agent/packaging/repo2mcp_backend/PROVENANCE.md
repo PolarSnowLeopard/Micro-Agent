@@ -39,6 +39,8 @@ Local integration changes are deliberately bounded:
     imports are deferred to the dependency-complete Docker build.
 12. Tool-design prompts distinguish independent user capabilities from internal
     loading/initialization pipeline steps; tool count is never a target itself.
+13. Each backend run owns a process group so cancellation also terminates Agent,
+    shell, and Docker-build descendants instead of leaking work on the server.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.
