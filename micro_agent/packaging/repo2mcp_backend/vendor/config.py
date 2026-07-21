@@ -29,6 +29,15 @@ class LLMConfig:
     temperature: float = 0
     max_tokens: int = 4096
     reasoning_enabled: Optional[bool] = None
+    max_retries: int = field(
+        default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "5"))
+    )
+    retry_base_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LLM_RETRY_BASE_SECONDS", "2"))
+    )
+    retry_max_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LLM_RETRY_MAX_SECONDS", "60"))
+    )
 
     def __post_init__(self):
         if self.reasoning_enabled is None:

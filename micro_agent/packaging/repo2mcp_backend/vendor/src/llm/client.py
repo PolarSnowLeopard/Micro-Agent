@@ -1,6 +1,7 @@
 """LLM 客户端 - 基于 LiteLLM"""
 import json
 import re
+import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
@@ -81,17 +82,56 @@ class LLMClient:
 
         logger.debug(f"LLM request: model={self.config.model}, messages={len(messages)}")
 
-        try:
-            response = completion(**kwargs)
-            parsed = self._parse_response(response)
-            self.total_prompt_tokens += parsed.prompt_tokens
-            self.total_completion_tokens += parsed.completion_tokens
-            self.total_cost += parsed.cost
-            self.call_count += 1
-            return parsed
-        except Exception as e:
-            logger.error(f"LLM request failed: {e}")
-            raise
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                response = completion(**kwargs)
+                parsed = self._parse_response(response)
+                self.total_prompt_tokens += parsed.prompt_tokens
+                self.total_completion_tokens += parsed.completion_tokens
+                self.total_cost += parsed.cost
+                self.call_count += 1
+                return parsed
+            except Exception as e:
+                if attempt >= self.config.max_retries or not self._is_retryable(e):
+                    logger.error(f"LLM request failed: {e}")
+                    raise
+                delay = min(
+                    self.config.retry_base_seconds * (2 ** attempt),
+                    self.config.retry_max_seconds,
+                )
+                logger.warning(
+                    "Transient LLM failure (%s/%s): %s; retrying in %.1fs",
+                    attempt + 1,
+                    self.config.max_retries,
+                    e,
+                    delay,
+                )
+                time.sleep(delay)
+
+        raise RuntimeError("unreachable LLM retry state")
+
+    @staticmethod
+    def _is_retryable(error: Exception) -> bool:
+        """Return whether a provider failure is safe to retry unchanged."""
+        status_code = getattr(error, "status_code", None)
+        if status_code == 429 or (isinstance(status_code, int) and status_code >= 500):
+            return True
+
+        name = type(error).__name__.lower()
+        message = str(error).lower()
+        transient_markers = (
+            "ratelimit",
+            "rate limit",
+            "temporarily rate-limited",
+            "timeout",
+            "timed out",
+            "connection",
+            "service unavailable",
+            "internal server error",
+            "bad gateway",
+            "gateway timeout",
+        )
+        return any(marker in name or marker in message for marker in transient_markers)
 
     def _parse_response(self, response) -> LLMResponse:
         choice = response.choices[0]
