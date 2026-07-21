@@ -456,6 +456,16 @@ class MCPWrapper:
                     max_steps=self.fix_steps, verbose=self._agent_verbose,
                 )
                 fix_import_agent.run(fix_import_task)
+                dependency_fixes = self._merge_declared_runtime_dependencies(
+                    server_py_path=server_py_path,
+                    source_dir=source_dir,
+                    output_dir=output_dir,
+                )
+                dependency_fixes.extend(
+                    self._normalize_generated_requirements(output_dir)
+                )
+                for fix_msg in dependency_fixes:
+                    print(f"  🔧 {fix_msg}")
 
             # --- Stage 2.7: server.py 质量校验与自动修复 ---
             quality_fixes = self._check_and_fix_server_quality(server_py_path)
