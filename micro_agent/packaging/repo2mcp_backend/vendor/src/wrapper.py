@@ -1079,6 +1079,8 @@ class MCPWrapper:
             for name in present
         }
         for import_name in sorted(external_imports - satisfied_imports):
+            if local_module_file(import_name) is not None:
+                continue
             distribution = distribution_for_import.get(import_name, import_name)
             canonical = re.sub(r"[-_.]+", "-", distribution).lower()
             if canonical in present:
