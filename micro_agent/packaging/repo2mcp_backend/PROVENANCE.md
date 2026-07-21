@@ -43,6 +43,9 @@ Local integration changes are deliberately bounded:
     shell, and Docker-build descendants instead of leaking work on the server.
 14. The subprocess receives an environment allowlist; its API key is consumed
     into the LLM client and removed before Agent-accessible shell sessions start.
+15. The full DARP/BAGE summary is available for the first evidence-selection
+    turn, then compacted so later tool rounds do not resend tens of thousands of
+    already-consumed tokens.
 
 All application-specific staging, sanitisation, frontend graph conversion, and
 deployment metadata live outside `vendor/`.

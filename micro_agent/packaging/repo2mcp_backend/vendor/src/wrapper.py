@@ -204,6 +204,7 @@ class MCPWrapper:
                     f"请立即执行，不要再用文字描述。"
                 ),
                 force_completion_after=6,
+                compact_initial_task_after=1,
             )
             analysis_task = (
                 f"封装意图:\n{wrap_intent}\n\n"

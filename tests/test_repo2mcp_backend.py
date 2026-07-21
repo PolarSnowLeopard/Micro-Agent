@@ -301,3 +301,37 @@ def test_vendor_import_precheck_defers_external_packages(tmp_path):
     assert json.loads(completed.stdout) == [
         "from local_pkg.missing import absent → FAIL"
     ]
+
+
+def test_vendor_compacts_initial_darp_context_after_first_turn():
+    vendor = (
+        Path(__file__).parents[1]
+        / "micro_agent"
+        / "packaging"
+        / "repo2mcp_backend"
+        / "vendor"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from src.agent.mcp_agent import MCPAgent; "
+                "from src.tools.base import ToolRegistry; "
+                "a=MCPAgent(llm=None,tools=ToolRegistry(),compact_initial_task_after=1); "
+                "a.messages.append({'role':'user','content':'HEAD'+('x'*20000)+'TAIL'}); "
+                "a._compact_initial_task(1); "
+                "print(len(a.messages[1]['content'])); "
+                "print('DARP/BAGE' in a.messages[1]['content']); "
+                "print(a.messages[1]['content'].endswith('TAIL'))"
+            ),
+        ],
+        cwd=vendor,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    lines = completed.stdout.splitlines()
+    assert int(lines[0]) < 9_000
+    assert lines[1:] == ["True", "True"]

@@ -44,6 +44,7 @@ class MCPAgent(BaseAgent):
         tool_output_limit: int = DEFAULT_TOOL_OUTPUT_LIMIT,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         force_completion_after: Optional[int] = None,
+        compact_initial_task_after: Optional[int] = None,
     ):
         super().__init__(llm=llm, tools=tools, system_prompt=system_prompt)
         self.max_steps = max_steps
@@ -56,6 +57,8 @@ class MCPAgent(BaseAgent):
         self.tool_output_limit = tool_output_limit
         self.context_window = context_window
         self.force_completion_after = force_completion_after
+        self.compact_initial_task_after = compact_initial_task_after
+        self._initial_task_compacted = False
         self.messages: List[Dict] = [{"role": "system", "content": self.system_prompt}]
         self._consecutive_empty_calls = 0
 
@@ -120,6 +123,7 @@ class MCPAgent(BaseAgent):
 
             if response.has_tool_calls:
                 self._handle_tool_calls(response, step)
+                self._compact_initial_task(step + 1)
 
                 if self.completion_check and self.completion_check():
                     if self.verbose:
@@ -181,6 +185,28 @@ class MCPAgent(BaseAgent):
         if self.verbose:
             print(f"\n⚠️ 达到最大步数 ({self.max_steps})")
         return self._get_final_response()
+
+    def _compact_initial_task(self, completed_steps: int) -> None:
+        """Drop the repeated DARP body after the Agent has selected evidence."""
+        if (
+            self._initial_task_compacted
+            or self.compact_initial_task_after is None
+            or completed_steps < self.compact_initial_task_after
+            or len(self.messages) < 2
+        ):
+            return
+        message = self.messages[1]
+        content = message.get("content", "") if message.get("role") == "user" else ""
+        if len(content) <= 12_000:
+            return
+        omitted = len(content) - 8_000
+        message["content"] = (
+            content[:6_000]
+            + f"\n\n[初始 DARP/BAGE 摘要已在首轮审阅，压缩 {omitted} 字符；"
+            "后续以已选择文件和 code_explorer 证据为准。]\n\n"
+            + content[-2_000:]
+        )
+        self._initial_task_compacted = True
 
     def _handle_tool_calls(self, response: LLMResponse, step: int):
         """处理工具调用"""
