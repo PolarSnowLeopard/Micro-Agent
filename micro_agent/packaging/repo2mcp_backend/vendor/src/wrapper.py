@@ -1015,6 +1015,8 @@ class MCPWrapper:
             if not name or name in present:
                 continue
             import_name = import_aliases.get(name, name).replace("-", "_")
+            if local_module_file(import_name) is not None:
+                continue
             if import_name.lower() not in external_imports:
                 continue
             generated_lines.append(line)

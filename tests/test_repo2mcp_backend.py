@@ -852,7 +852,10 @@ def test_vendor_supports_src_layout_local_packages(tmp_path):
         "import numpy\ndef run(): return numpy.zeros(1)\n",
         encoding="utf-8",
     )
-    (source / "requirements.txt").write_text("numpy==2.2.5\n", encoding="utf-8")
+    (source / "requirements.txt").write_text(
+        "mopadi>=0.1\nnumpy==2.2.5\n",
+        encoding="utf-8",
+    )
     server = output / "server.py"
     server.write_text("from mopadi.runtime import run\n", encoding="utf-8")
     requirements = output / "requirements.txt"
