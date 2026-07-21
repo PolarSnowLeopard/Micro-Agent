@@ -125,8 +125,8 @@ def assess_interface_quality(
         )
 
     if len(tools) > 1 and tool_desc_distinguishability < 0.40:
-        errors.append(
-            "[interface_quality] 工具描述过于相似，Agent 难以选择；"
+        warnings.append(
+            "[interface_quality] 工具描述区分度低于质量目标，可能增加 Agent 误选概率；"
             f"最小 Jaccard distance={tool_desc_distinguishability:.3f}"
         )
 
