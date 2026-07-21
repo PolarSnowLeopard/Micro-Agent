@@ -161,6 +161,18 @@ class MCPAgent(BaseAgent):
                         "content": response.content
                     })
 
+                    if (
+                        self.force_completion_after is not None
+                        and step + 1 >= self.force_completion_after
+                        and self.completion_check
+                        and not self.completion_check()
+                    ):
+                        if self.verbose:
+                            print(
+                                "\n  ⚠️ 探索预算已用完，转入确定性的结构化产物编译"
+                            )
+                        return ""
+
                     if self.completion_check and nudge_count < MAX_NUDGES and not self.completion_check():
                         nudge_count += 1
                         if self.verbose:
