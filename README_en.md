@@ -79,13 +79,11 @@ cp .env.example .env
 Edit `.env` and fill in your API key:
 
 ```bash
-LLM_MODEL=openrouter/qwen/qwen3.6-flash
+LLM_MODEL=deepseek/deepseek-chat
 LLM_API_KEY=sk-xxx
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_REASONING_ENABLED=false
 ```
 
-> Any [litellm-compatible model format](https://docs.litellm.ai/docs/providers) is supported, e.g. `openai/gpt-4o`, `ollama/qwen2.5`, `openrouter/qwen/qwen3.6-flash`, etc.
+> Any [litellm-compatible model format](https://docs.litellm.ai/docs/providers) is supported, e.g. `openai/gpt-4o`, `ollama/qwen2.5`, `openrouter/qwen/qwen3-coder-flash`, etc.
 
 ### Launch
 

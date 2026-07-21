@@ -102,17 +102,10 @@ class TaskManager:
 
     async def _execute(self, ctx: TaskContext, request: str) -> None:
         try:
-            terminal_error = False
             async for event in ctx._agent.run(request):
                 await ctx.add_event(event)
-                if event.type == "error":
-                    terminal_error = True
-                elif event.type == "done":
-                    # Workflows may recover from an intermediate Agent error. A
-                    # later done event is therefore the authoritative outcome.
-                    terminal_error = False
             if ctx.status == "running":
-                ctx.status = "failed" if terminal_error else "completed"
+                ctx.status = "completed"
         except asyncio.CancelledError:
             if not self._has_cancelled_event(ctx):
                 await ctx.add_event(

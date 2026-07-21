@@ -32,7 +32,6 @@ class LLM:
         self.max_tokens = cfg.max_tokens
         self.timeout = cfg.timeout
         self.num_retries = cfg.num_retries
-        self.reasoning_enabled = cfg.reasoning_enabled
         self.api_key = cfg.api_key
         self.base_url = cfg.base_url
 
@@ -57,8 +56,6 @@ class LLM:
             params["api_key"] = self.api_key
         if self.base_url:
             params["api_base"] = self.base_url
-        if self.reasoning_enabled is not None:
-            params["reasoning"] = {"enabled": self.reasoning_enabled}
         if tools:
             params["tools"] = tools
             params["tool_choice"] = tool_choice
