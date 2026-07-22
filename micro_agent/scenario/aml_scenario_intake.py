@@ -141,6 +141,28 @@ def _infer_category_from_text(text: str) -> str | None:
     if not t:
         return None
 
+    digit_map = {
+        "1": "classification",
+        "2": "detection",
+        "3": "regression",
+        "4": "clustering",
+        "5": "generation",
+        "6": "recommendation",
+        "①": "classification",
+        "②": "detection",
+        "③": "regression",
+        "④": "clustering",
+        "⑤": "generation",
+        "⑥": "recommendation",
+    }
+    if t in digit_map:
+        return digit_map[t]
+    # 对话历史里单独一行的 1-6 / ①-⑥（取最后一次）
+    for line in reversed(t.splitlines()):
+        key = line.strip()
+        if key in digit_map:
+            return digit_map[key]
+
     # 选项编号/口语结果形态（优先）
     choice_map = [
         (r"(①|1\s*[\.、:：)]|打个结论|打个标签|打个风险|下个结论|给.*标签|是否通过|风险等级|风险结论)", "classification"),
@@ -176,6 +198,11 @@ def _has_category_confirm_signal(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
+    # 单独回复 1-6 / ①-⑥（整句或其中一行）也视为已选结果形态
+    if re.fullmatch(r"[1-6]", t) or re.fullmatch(r"[①②③④⑤⑥]", t):
+        return True
+    if re.search(r"(?m)^[1-6]$", t) or re.search(r"(?m)^[①②③④⑤⑥]$", t):
+        return True
     # 明确选择①-⑥或同义业务结果描述
     if re.search(r"[①②③④⑤⑥]", t):
         return True
