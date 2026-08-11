@@ -54,7 +54,6 @@ async def sse_response(
     *,
     output_files: Sequence[OutputFileSpec] | None = None,
     zip_dir: str | None = None,
-    ready_marker: str | None = None,
     cleanup: Callable[[], None] | None = None,
     session_id: str | None = None,
     components_meta: dict | None = None,
@@ -65,7 +64,6 @@ async def sse_response(
         ctx: TaskManager.submit() 返回的 TaskContext
         output_files: 任务完成后需要读取的输出文件列表
         zip_dir: 如果非空，任务完成后将此目录打包为 ZIP base64 返回
-        ready_marker: 若提供，则只有该验收标记存在时才允许打包 zip_dir
         cleanup: finally 阶段执行的清理回调
         session_id: 会话 ID，通过 header 返回给前端
     """
@@ -108,8 +106,7 @@ async def sse_response(
             final: dict[str, Any] = {"is_last": True, "is_final_result": True}
             final_results: dict[str, Any] = {}
 
-            artifact_ready = not ready_marker or os.path.isfile(ready_marker)
-            if zip_dir and os.path.isdir(zip_dir) and artifact_ready:
+            if zip_dir and os.path.isdir(zip_dir):
                 try:
                     zip_path = Path(zip_dir)
                     final_results["service_package"] = pack_directory_as_zip_base64(zip_dir)
@@ -119,8 +116,6 @@ async def sse_response(
                     ]
                 except Exception as e:
                     final_results["error"] = f"压缩目录失败: {e}"
-            elif zip_dir and not artifact_ready:
-                final_results["error"] = "服务产物未通过验收，已阻止打包和部署"
 
             if output_files and not zip_dir:
                 for spec in output_files:

@@ -79,13 +79,11 @@ cp .env.example .env
 编辑 `.env`，填入 API Key：
 
 ```bash
-LLM_MODEL=openrouter/qwen/qwen3.6-flash
+LLM_MODEL=deepseek/deepseek-chat
 LLM_API_KEY=sk-xxx
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_REASONING_ENABLED=false
 ```
 
-> 支持任何 [litellm 兼容的模型格式](https://docs.litellm.ai/docs/providers)，如 `openai/gpt-4o`、`ollama/qwen2.5`、`openrouter/qwen/qwen3.6-flash` 等。
+> 支持任何 [litellm 兼容的模型格式](https://docs.litellm.ai/docs/providers)，如 `openai/gpt-4o`、`ollama/qwen2.5`、`openrouter/qwen/qwen3-coder-flash` 等。
 
 ### 启动
 
