@@ -103,14 +103,23 @@ class EmbeddingRetriever(Retriever):
     async def _embed_batch(self, texts: list[str]) -> Optional[np.ndarray]:
         import litellm
         try:
-            params: dict[str, Any] = {"model": self.model, "input": texts}
-            if self.api_key:
-                params["api_key"] = self.api_key
-            if self.base_url:
-                params["api_base"] = self.base_url
-            resp = await litellm.aembedding(**params)
-            vecs = [item["embedding"] for item in resp.data]
-            return np.array(vecs, dtype=np.float32)
+            # 通义千问API限制批量大小不超过10
+            batch_size = 10
+            all_vecs = []
+
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                params: dict[str, Any] = {"model": self.model, "input": batch}
+                if self.api_key:
+                    params["api_key"] = self.api_key
+                if self.base_url:
+                    params["api_base"] = self.base_url
+
+                resp = await litellm.aembedding(**params)
+                batch_vecs = [item["embedding"] for item in resp.data]
+                all_vecs.extend(batch_vecs)
+
+            return np.array(all_vecs, dtype=np.float32)
         except Exception as e:
             logger.error(f"Embedding 调用失败 [{self.model}]: {e}")
             return None

@@ -2,25 +2,31 @@
 # 用法: config.get_llm("fast") / build_agent(..., llm_profile="fast")
 
 [llm.default]
-model = "openrouter/qwen/qwen3-coder-flash"
+model = "openai/qwen3-coder-flash"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 temperature = 0.0
 max_tokens = 8192
 timeout = 60
 num_retries = 3
+reasoning_enabled = false
 
 [llm.fast]
-model = "openrouter/qwen/qwen3-coder-flash"
+model = "openai/qwen3-coder-flash"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 temperature = 0.0
 max_tokens = 4096
 timeout = 30
 num_retries = 2
+reasoning_enabled = false
 
 [llm.reasoning]
-model = "openrouter/qwen/qwen3-coder-flash"
+model = "openai/qwen3-coder-flash"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 temperature = 0.0
 max_tokens = 16384
 timeout = 120
 num_retries = 3
+reasoning_enabled = false
 
 [agent]
 max_steps = 30
@@ -31,7 +37,7 @@ duplicate_threshold = 2
 storage_dir = "data/memory"
 
 [rag]
-embedding_model = "openrouter/openai/text-embedding-3-small"
+embedding_model = "openai/text-embedding-v3"
 chunk_size = 500
 
 [skills]
