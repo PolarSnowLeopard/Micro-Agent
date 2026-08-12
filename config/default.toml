@@ -20,8 +20,8 @@ num_retries = 2
 reasoning_enabled = false
 
 [llm.reasoning]
-model = "openai/qwen3-coder-flash"
-base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "openrouter/qwen/qwen3.6-flash"
+base_url = "https://openrouter.ai/api/v1"
 temperature = 0.0
 max_tokens = 16384
 timeout = 120
