@@ -61,7 +61,7 @@ def normalize_scenario_parsed(
         acceptance = []
     acceptance_criteria = [str(c).strip() for c in acceptance if str(c).strip()]
 
-    resolved_domain = str(raw.get("domain") or domain or "").strip() or "generic"
+    resolved_domain = str(domain or raw.get("domain") or "").strip() or "generic"
     description = str(raw.get("description") or "").strip() or goal
 
     source_raw = raw.get("source")
