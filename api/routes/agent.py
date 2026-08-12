@@ -229,10 +229,10 @@ async def service_evaluation(
 @router.post("/scenario_intake")
 async def scenario_intake(
     message: str = Form(...),
-    domain: str = Form(default="generic"),
+    domain: str = Form(...),
     session_id: Optional[str] = Form(default=None),
 ):
-    from micro_agent.scenario import run_scenario_intake_turn
+    from micro_agent.scenario import ScenarioDomainError, run_scenario_intake_turn
 
     try:
         result = await run_scenario_intake_turn(
@@ -241,6 +241,9 @@ async def scenario_intake(
             session_id=session_id or None,
         )
         return {"success": True, **result}
+    except ScenarioDomainError as e:
+        logger.error(f"scenario_intake 领域参数错误: {e}")
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         logger.error(f"scenario_intake 失败: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
