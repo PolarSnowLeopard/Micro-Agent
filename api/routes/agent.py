@@ -5,7 +5,9 @@
   POST /api/agent/service_packaging          文件上传 → 服务封装（含 ZIP 回传 + 会话记忆）
   POST /api/agent/mcp_test                   表单 → MCP 测试
   POST /api/agent/service_evaluation         表单+文件 → 服务评测
+  POST /api/agent/service_upgrade_advice     表单 → 成果升级建议
   POST /api/agent/scenario_intake               表单 → 想定场景追问（grill-me）
+  POST /api/agent/aml_scenario_intake           表单 → 算法想定对话填表
   POST /api/agent/mcp_service_recommendation 表单 → MCP 服务推荐
   POST /api/agent/meta_app_validation        表单+文件 → 元应用数据验证
   POST /api/agent/aml_report                 文件/URL → AML 报告生成
@@ -223,6 +225,54 @@ async def service_evaluation(
 
 
 # ============================================================
+#  端点：成果升级建议
+# ============================================================
+
+@router.post("/service_upgrade_advice")
+async def service_upgrade_advice(
+    service_name: str = Form(...),
+    service_type: str = Form(default=""),
+    domain: str = Form(default=""),
+    industry: str = Form(default=""),
+    scenario: str = Form(default=""),
+    technology: str = Form(default=""),
+    status: str = Form(default=""),
+    number: str = Form(default="0"),
+    norm_summary: str = Form(default=""),
+    source_summary: str = Form(default=""),
+    code_snippet: str = Form(default=""),
+):
+    prompt = render_prompt(
+        "service_upgrade_advice.md.j2",
+        service_name=service_name,
+        service_type=service_type,
+        domain=domain,
+        industry=industry,
+        scenario=scenario,
+        technology=technology,
+        status=status,
+        number=number,
+        norm_summary=norm_summary or "暂无评测数据",
+        source_summary=source_summary or "暂无描述",
+        code_snippet=code_snippet or "",
+        workspace=WORKSPACE,
+    )
+    agent, _ = await build_agent(
+        name="service_upgrade_advice",
+        system_prompt=get_task("service_upgrade_advice").system_prompt,
+    )
+    ctx = await task_manager.submit(agent, prompt)
+
+    return await sse_response(
+        ctx,
+        output_files=[{
+            "name": "upgrade_advice_result",
+            "file": f"{WORKSPACE}/temp/upgrade_advice_result.json",
+        }],
+    )
+
+
+# ============================================================
 #  端点：想定场景追问（grill-me，一次一问）
 # ============================================================
 
@@ -246,6 +296,40 @@ async def scenario_intake(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         logger.error(f"scenario_intake 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ============================================================
+#  端点：算法想定对话填表（自然语言 → formDraft）
+# ============================================================
+
+@router.post("/aml_scenario_intake")
+async def aml_scenario_intake(
+    message: str = Form(...),
+    domain: str = Form(default="generic"),
+    session_id: Optional[str] = Form(default=None),
+    partial_form: str = Form(default=""),
+    dictionary_snapshot: str = Form(default=""),
+    followup_count: str = Form(default="0"),
+):
+    from micro_agent.scenario import run_aml_scenario_intake_turn
+
+    try:
+        try:
+            followup_n = int(followup_count or "0")
+        except (TypeError, ValueError):
+            followup_n = 0
+        result = await run_aml_scenario_intake_turn(
+            message=message,
+            domain=domain,
+            session_id=session_id or None,
+            partial_form=partial_form or None,
+            dictionary_snapshot=dictionary_snapshot or None,
+            followup_count=followup_n,
+        )
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"aml_scenario_intake 失败: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

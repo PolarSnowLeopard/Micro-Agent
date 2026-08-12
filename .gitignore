@@ -7,9 +7,11 @@ build/
 *.egg
 
 # 环境
+venv/
 .env
 .venv/
 env/
+config/config.toml
 
 # IDE
 .vscode/
@@ -40,3 +42,5 @@ demo/
 workspace/data/
 workspace/data/simulation_builds/
 workspace/data/meta_app_experiments/
+
+venv/

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import shutil
 import zipfile
 from datetime import datetime
@@ -15,10 +16,59 @@ from fastapi import HTTPException, UploadFile
 from loguru import logger
 
 
+# ── Filename sanitisation ────────────────────────────────────────────────
+# 多端点（/code_analysis、/service_packaging、/aml_auto_generate 等）会把
+# multipart 上传的 filename 头直接拼到工作区路径里。攻击者可以构造
+# filename = '../../etc/cron.d/x' 之类的路径元素来逃逸 dest_dir：当工作区
+# 里恰好存在同名首段目录时（长时间运行的服务里很常见），写入会落到工作区
+# 外部；在 Windows 上 ``\\`` 是路径分隔符，攻击直接成功；即便不能逃逸，
+# 未清洗的文件名也会污染工作区并破坏后续 cleanup 逻辑。统一在保存前提取
+# basename 并替换危险字符。
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_filename(name: Optional[str], default: str = "upload") -> str:
+    """从用户提供的文件名中提取一个安全 basename。
+
+    - 去掉路径分隔符（``/`` 与 ``\\``），只保留 ``os.path.basename``/``Path.name``
+    - 把 ``..``、空字符串、全为点号的名字（``.``、``...`` 等）替换成默认值
+    - 把除 ``A-Za-z0-9._-`` 之外的字符替换成 ``_``，避免 shell/命令注入隐患
+    - 限制总长度，防止过长文件名 DoS 或破坏文件系统
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return default
+
+    # 同时切掉 Windows 风格分隔符——Path.name 在 POSIX 上不会拆 ``\\``。
+    raw = raw.replace("\\", "/")
+    base = os.path.basename(raw)
+
+    # ``..``、``.`` 等仅由点号组成的名字视为非法。
+    if not base or set(base) <= {"."}:
+        return default
+
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("_", base)
+
+    # 再次防御：替换后仍可能退化成 ``.``/``..``。
+    if not cleaned or set(cleaned) <= {"."}:
+        return default
+
+    # 文件系统多数对单个组件限制 255 字节，预留 ts/前缀空间。
+    return cleaned[:200]
+
+
 async def save_upload(upload: UploadFile, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = dest_dir / f"{ts}_{upload.filename or 'upload'}"
+    safe_name = _safe_filename(upload.filename)
+    dest = dest_dir / f"{ts}_{safe_name}"
+
+    # 兜底校验：确保最终路径仍在 dest_dir 内，防止未来逻辑改动引入回归。
+    resolved_dest = dest.resolve()
+    resolved_root = dest_dir.resolve()
+    if not resolved_dest.is_relative_to(resolved_root):
+        raise HTTPException(400, "非法的上传文件名")
+
     content = await upload.read()
     dest.write_bytes(content)
     logger.info(f"文件已保存: {dest} ({len(content)} bytes)")
@@ -40,7 +90,10 @@ async def download_from_url(url: str, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     parsed = urlparse(url)
-    filename = os.path.basename(parsed.path) or f"download_{ts}.zip"
+    raw_name = os.path.basename(parsed.path) or f"download_{ts}.zip"
+    # 同样清洗远程响应里推断出的文件名，避免「URL path = ../../x」之类的攻击
+    # 经由同一个 dest_dir 拼接落到工作区外（与 save_upload 风险对称）。
+    filename = _safe_filename(raw_name, default=f"download_{ts}.zip")
     dest = dest_dir / f"{ts}_{filename}"
 
     async with httpx.AsyncClient(timeout=120) as client:

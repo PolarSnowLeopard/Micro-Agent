@@ -1,0 +1,34 @@
+请针对以下平台用户成果，生成结构化的升级建议报告。
+
+成果名称：{{ service_name }}
+资源类型：{{ service_type }}
+垂直领域：{{ domain }}
+行业：{{ industry }}
+场景：{{ scenario }}
+技术类型：{{ technology }}
+当前状态：{{ status }}
+调用次数：{{ number }}
+技术指标摘要：{{ norm_summary }}
+资源描述：{{ source_summary }}
+{% if code_snippet %}
+相关源码摘要（前若干行）：
+```
+{{ code_snippet }}
+```
+{% endif %}
+
+请分析该成果在当前垂域中的相对领先情况，并给出可执行的升级路径。最终将结果写入 `{{ workspace }}/temp/upgrade_advice_result.json`，文件内容必须是合法 JSON，格式严格如下（字段名不可更改）：
+
+{
+  "leadingAnalysis": "领先情况分析：与同类资源相比的优势、短板与所处阶段",
+  "autoUpgradeSuggestion": "自动升级建议：可通过平台 Agent、自动化脚本或配置调整完成的改进项",
+  "manualUpdateSuggestion": "人工更新建议：需要开发者或运营人员手动介入的改进项与优先级"
+}
+
+要求：
+1. 三段内容各自独立成段，每段 2-5 句话，面向普通业务用户可读
+2. 自动升级建议应具体可落地（如补充评测、优化 API、重新部署、扩展 MCP 工具等）
+3. 人工更新建议应区分优先级（高/中/低）并说明原因
+4. 只写入 JSON 文件，不要输出 markdown 代码块
+
+完成后使用 terminate 工具结束任务。
