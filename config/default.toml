@@ -37,7 +37,7 @@ duplicate_threshold = 2
 storage_dir = "data/memory"
 
 [rag]
-embedding_model = "openai/text-embedding-v3"
+embedding_model = "openrouter/openai/text-embedding-3-small"
 chunk_size = 500
 
 [skills]
