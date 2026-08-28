@@ -228,3 +228,145 @@ Micro-Agent/
 ## 许可
 
 [MIT](LICENSE)
+## FAQ
+
+### 什么是 Micro-Agent？
+
+Micro-Agent 是一个**面向垂域专业 Agent 服务交付的轻量级框架**。如果你需要为特定行业快速构建一个专业 Agent 并以 API 服务形式交付，Micro-Agent 是最短路径。
+
+核心特点：轻量（核心 <3K 行）、开箱即用 API 服务、垂域知识注入（Skills）、内置 RAG、MCP 集成、多 LLM Profile 配置。
+
+### Micro-Agent 与其他框架对比？
+
+| 能力 | Micro-Agent | LangGraph | AutoGen | OpenClaw |
+|:-----|:---:|:---:|:---:|:---:|
+| 开箱即用 API 服务 | ✅ | ✅ | ❌ | ✅ |
+| 垂域知识注入 (Skills) | ✅ | ❌ | ❌ | ✅ |
+| 内置 RAG 检索增强 | ✅ | 生态 | 扩展 | ✅ |
+| MCP 集成 | ✅ | ✅ | ✅ | ✅ |
+| 流式 SSE 输出 | ✅ | ✅ | 需自建 | ✅ |
+| 多 LLM Profile 配置 | ✅ | ❌ | ❌ | ❌ |
+| 轻量（核心 <3K 行） | ✅ | ❌ | ❌ | ✅ |
+
+**定位差异：**
+- Micro-Agent → 垂域专业 Agent 服务交付
+- LangGraph → 复杂多步工作流编排
+- AutoGen → 多角色智能体协作
+- OpenClaw → 个人自主 AI 助手
+
+### Micro-Agent 架构组件？
+
+**核心组件：**
+
+1. **LLM Layer** — 通过 litellm 统一接口，一套代码切换任意模型
+2. **Agent Core** — ReAct 执行引擎（Think → Act → Observe 循环）
+3. **Memory** — 会话记忆系统，支持短期记忆、文件持久化、跨会话恢复
+4. **Skills** — 将领域规范注入 Agent 的 system prompt
+5. **RAG** — 从领域知识库检索相关文档
+6. **MCP / Tools** — 连接外部工具和数据源
+
+### 支持哪些 LLM providers？
+
+通过 **litellm** 统一接口，支持任意模型：
+
+| 类型 | 示例 |
+|:-----|:-----|
+| OpenAI | `openai/gpt-4o`, `openai/gpt-4o-mini` |
+| DeepSeek | `deepseek/deepseek-chat` |
+| Anthropic | `claude-3-5-sonnet-20241022` |
+| Google | `gemini/gemini-1.5-pro` |
+| Ollama | `ollama/qwen2.5`, `ollama/llama3.2` |
+| OpenRouter | `openrouter/qwen/qwen3-coder-flash` |
+
+配置格式：`LLM_MODEL=provider/model-id`
+
+### 如何快速开始？
+
+**环境要求：** Python ≥ 3.11，任意 LLM API Key
+
+```bash
+# 安装
+git clone https://github.com/fdueblab/Micro-Agent.git
+cd Micro-Agent
+pip install -e ".[dev]"
+
+# 配置
+cp .env.example .env
+# 编辑 .env: LLM_MODEL=deepseek/deepseek-chat, LLM_API_KEY=sk-xxx
+
+# 启动 API 服务
+uvicorn api.app:app --host 0.0.0.0 --port 8010 --reload
+
+# Docker 部署
+docker-compose up -d
+```
+
+访问 `http://localhost:8010/docs` 查看 API 文档。
+
+### 如何定义垂域任务？
+
+**只需三步：**
+
+1. **编写 Prompt 模板** (`task/templates/code_review.md.j2`)
+2. **注册任务** (`task/builtin.py` → `register_task(TaskConfig(...))`)
+3. **调用 API** (`curl -X POST http://localhost:8010/api/tasks ...`)
+
+详见 README "定义垂域任务" 章节。
+
+### 什么是多 LLM Profile？
+
+为不同场景配置不同模型策略：
+
+```toml
+# config/config.toml
+[llm.default]
+model = "deepseek/deepseek-chat"
+temperature = 0.0
+max_tokens = 8192
+
+[llm.fast]
+model = "deepseek/deepseek-chat"
+max_tokens = 4096
+timeout = 30
+
+[llm.reasoning]
+model = "openai/o1-mini"
+max_tokens = 16384
+timeout = 120
+```
+
+任务中通过 `llm_profile="reasoning"` 指定。
+
+### 内置示例任务有哪些？
+
+| 任务 | 说明 | 垂域组件 |
+|:-----|:-----|:---------|
+| 代码分析 | 上传代码 → 自动分析函数结构 | Tools |
+| 服务封装 | 上传代码 → 自动生成 Docker + MCP 服务 | Skills + RAG + Memory |
+| 算法模型生成 | 描述需求 → 生成算法模型代码 | Skills + RAG + Memory |
+| MCP 服务测试 | 连接 MCP → 自动发现并测试工具 | MCP |
+| 服务评测 | 上传数据 → 自动执行评测并输出报告 | Tools |
+| AML 模型评测 | 上传数据 → 多指标安全评测 | MCP + Tools |
+
+### 如何扩展 Micro-Agent？
+
+| 组件 | 接口 | 内置实现 | 可扩展方向 |
+|:-----|:-----|:---------|:-----------|
+| 模型 | litellm | OpenAI, DeepSeek, Claude | Ollama, vLLM, 任意 OpenAI 兼容 |
+| 工具 | `Tool` ABC | Bash, MCP, Terminate | 自定义工具 |
+| 记忆 | `MemoryProvider` | ShortTermMemory, FileMemory | Redis, 向量数据库 |
+| 检索 | `Retriever` | EmbeddingRetriever | FAISS, ChromaDB, Milvus |
+| 技能 | `Skill` + `SkillRegistry` | SKILL.md 目录发现 | 远程技能市场 |
+
+### 使用什么许可证？
+
+**MIT License** — 完全开源，可自由使用、修改、分发。
+
+### 如何获取帮助？
+
+- **文档** — README.md（中文/英文双语）
+- **示例** — 内置 6 个真实场景任务
+- **Issues** — GitHub Issues
+- **API 文档** — `http://localhost:8010/docs`
+
+---
